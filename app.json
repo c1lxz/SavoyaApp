@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "Savoya",
+    "slug": "savoya",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": false
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0B1D16"
+      }
+    }
+  }
+}
