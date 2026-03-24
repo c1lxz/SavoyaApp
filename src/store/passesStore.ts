@@ -8,47 +8,81 @@ type PassesStore = {
   loadState: RequestState;
   createState: RequestState;
   cancelState: RequestState;
-  error: string | null;
-  loadMyPasses: () => Promise<void>;
+  passesLastLoadedAt: number | null;
+  passesCacheTtlMs: number;
+  loadError: string | null;
+  createError: string | null;
+  cancelError: string | null;
+  loadMyPasses: (options?: { force?: boolean }) => Promise<void>;
   createPass: (payload: CreatePassPayload) => Promise<boolean>;
+  // Roadmap: wire cancelPass to UI action in MyPasses list.
   cancelPass: (id: string) => Promise<void>;
 };
 
-export const usePassesStore = create<PassesStore>((set) => ({
+export const usePassesStore = create<PassesStore>((set, get) => ({
   passes: [],
   loadState: 'idle',
   createState: 'idle',
   cancelState: 'idle',
-  error: null,
-  async loadMyPasses() {
-    set({ loadState: 'loading', error: null });
+  passesLastLoadedAt: null,
+  passesCacheTtlMs: 45_000,
+  loadError: null,
+  createError: null,
+  cancelError: null,
+  async loadMyPasses(options) {
+    const force = options?.force ?? false;
+    const { passesLastLoadedAt, passesCacheTtlMs } = get();
+    const hasFreshCache =
+      !force &&
+      passesLastLoadedAt !== null &&
+      Date.now() - passesLastLoadedAt < passesCacheTtlMs;
+
+    if (hasFreshCache) {
+      set((state) => ({
+        loadState: state.loadState === 'idle' ? 'success' : state.loadState,
+        loadError: null,
+      }));
+      return;
+    }
+
+    set({ loadState: 'loading', loadError: null });
     try {
       const passes = await mockPassService.getMyPasses();
-      set({ passes, loadState: 'success' });
+      set({ passes, loadState: 'success', passesLastLoadedAt: Date.now(), loadError: null });
     } catch {
-      set({ loadState: 'error', error: 'Ошибка сети' });
+      set({ loadState: 'error', loadError: 'Ошибка загрузки пропусков' });
     }
   },
   async createPass(payload) {
-    set({ createState: 'loading', error: null });
+    set({ createState: 'loading', createError: null });
     try {
-      await mockPassService.createPass(payload);
-      const passes = await mockPassService.getMyPasses();
-      set({ passes, createState: 'success' });
+      const createdPass = await mockPassService.createPass(payload);
+      set((state) => ({
+        passes: [createdPass, ...state.passes.filter((item) => item.id !== createdPass.id)],
+        createState: 'success',
+        loadState: state.loadState === 'idle' ? 'success' : state.loadState,
+        passesLastLoadedAt: Date.now(),
+        createError: null,
+      }));
       return true;
     } catch {
-      set({ createState: 'error', error: 'Не удалось создать пропуск' });
+      set({ createState: 'error', createError: 'Не удалось создать пропуск' });
       return false;
     }
   },
   async cancelPass(id) {
-    set({ cancelState: 'loading', error: null });
+    set({ cancelState: 'loading', cancelError: null });
     try {
       await mockPassService.cancelPass(id);
-      const passes = await mockPassService.getMyPasses();
-      set({ passes, cancelState: 'success' });
+      set((state) => ({
+        passes: state.passes.filter((item) => item.id !== id),
+        cancelState: 'success',
+        loadState: state.loadState === 'idle' ? 'success' : state.loadState,
+        passesLastLoadedAt: Date.now(),
+        cancelError: null,
+      }));
     } catch {
-      set({ cancelState: 'error', error: 'Не удалось отменить пропуск' });
+      set({ cancelState: 'error', cancelError: 'Не удалось отменить пропуск' });
     }
   },
 }));

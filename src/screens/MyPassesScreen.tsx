@@ -1,5 +1,5 @@
-﻿import React, { useCallback } from 'react';
-import { FlatList, StyleSheet } from 'react-native';
+﻿import React, { useCallback, useMemo } from 'react';
+import { FlatList, StyleSheet, Text } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -12,11 +12,19 @@ import { ScreenHeader } from '@/components/ScreenHeader';
 import { RootStackParamList } from '@/navigation/types';
 import { usePassesStore } from '@/store/passesStore';
 import { theme } from '@/theme';
+import { PassItem } from '@/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'MyPasses'>;
 
 export const MyPassesScreen = ({ navigation }: Props) => {
-  const { passes, loadMyPasses, loadState } = usePassesStore();
+  const passes = usePassesStore((state) => state.passes);
+  const loadMyPasses = usePassesStore((state) => state.loadMyPasses);
+  const loadState = usePassesStore((state) => state.loadState);
+  const loadError = usePassesStore((state) => state.loadError);
+
+  const keyExtractor = useCallback((item: PassItem) => item.id, []);
+  const renderItem = useCallback(({ item }: { item: PassItem }) => <PassCard item={item} />, []);
+  const emptyState = useMemo(() => <EmptyState text="Нет активных пропусков" />, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -31,13 +39,18 @@ export const MyPassesScreen = ({ navigation }: Props) => {
 
         <FlatList
           data={passes}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <PassCard item={item} />}
+          keyExtractor={keyExtractor}
+          renderItem={renderItem}
+          initialNumToRender={8}
+          maxToRenderPerBatch={8}
+          windowSize={7}
+          removeClippedSubviews
           contentContainerStyle={styles.listContent}
-          ListEmptyComponent={<EmptyState text="Нет активных пропусков" />}
+          ListEmptyComponent={emptyState}
         />
 
         <LoadingOverlay visible={loadState === 'loading'} />
+        {loadError ? <Text style={styles.error}>{loadError}</Text> : null}
       </SafeAreaView>
     </AppBackground>
   );
@@ -50,5 +63,10 @@ const styles = StyleSheet.create({
   listContent: {
     paddingBottom: theme.spacing.xl,
   },
+  error: {
+    color: theme.colors.danger,
+    fontSize: 16,
+    textAlign: 'center',
+    marginTop: 10,
+  },
 });
-

@@ -10,7 +10,9 @@ type AuthStore = {
   restoreState: RequestState;
   error: string | null;
   login: (login: string, password: string) => Promise<boolean>;
+  // Roadmap: wire logout to UI entrypoint.
   logout: () => Promise<void>;
+  // Roadmap: call restoreSession during app bootstrap.
   restoreSession: () => Promise<void>;
 };
 

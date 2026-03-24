@@ -6,11 +6,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppBackground } from '@/components/AppBackground';
 import { AppButton } from '@/components/AppButton';
 import { RootStackParamList } from '@/navigation/types';
-import { theme } from '@/theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
-const LOGO_IMAGE = require('../../assets/home-logo-fit.png');
+const LOGO_IMAGE = require('../../assets/home-logo-reference.png');
 
 export const HomeScreen = ({ navigation }: Props) => {
   return (
@@ -34,24 +33,28 @@ export const HomeScreen = ({ navigation }: Props) => {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    justifyContent: 'center',
-    paddingTop: 12,
-    paddingBottom: 16,
+    justifyContent: 'flex-start',
+    paddingTop: 0,
+    paddingBottom: 8,
   },
   logoBlock: {
     alignItems: 'center',
-    marginBottom: 30,
-    minHeight: 164,
+    marginTop: -10,
+    marginBottom: 6,
+    minHeight: 112,
     justifyContent: 'center',
   },
   logoImage: {
-    width: '86%',
-    maxWidth: 350,
-    aspectRatio: 1296 / 760,
+    width: '56%',
+    maxWidth: 240,
+    aspectRatio: 711 / 586,
   },
   actions: {
-    gap: 14,
-    paddingHorizontal: 2,
+    flex: 1,
+    justifyContent: 'flex-end',
+    gap: 16,
+    paddingHorizontal: 4,
   },
 });
+
 

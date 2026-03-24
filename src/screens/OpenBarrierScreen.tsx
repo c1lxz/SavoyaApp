@@ -1,11 +1,10 @@
-﻿import React, { useEffect } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+﻿import React, { memo, useEffect } from 'react';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppBackground } from '@/components/AppBackground';
-import { AppButton } from '@/components/AppButton';
 import { ScreenHeader } from '@/components/ScreenHeader';
 import { RootStackParamList } from '@/navigation/types';
 import { useGateStore } from '@/store/gateStore';
@@ -14,12 +13,43 @@ import { formatDateTime } from '@/utils/date';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'OpenBarrier'>;
 
+type BarrierButtonProps = {
+  title: string;
+  onPress: () => void;
+  disabled: boolean;
+  iconSource: number;
+};
+
+const ENTRY_ICON = require('../../assets/barrier-entry.png');
+const EXIT_ICON = require('../../assets/barrier-exit.png');
+
+const BarrierActionButton = memo(({ title, onPress, disabled, iconSource }: BarrierButtonProps) => (
+  <Pressable
+    onPress={onPress}
+    disabled={disabled}
+    style={[styles.barrierButton, disabled && styles.barrierButtonDisabled]}
+  >
+    <View style={styles.barrierRow}>
+      <Image source={iconSource} style={styles.barrierIcon} resizeMode="contain" />
+      <Text style={styles.barrierLabel}>{title}</Text>
+    </View>
+  </Pressable>
+));
+BarrierActionButton.displayName = 'BarrierActionButton';
+
 export const OpenBarrierScreen = ({ navigation }: Props) => {
-  const { gateState, result, error, openEntry, openExit, resetGateState } = useGateStore();
+  const gateState = useGateStore((state) => state.gateState);
+  const result = useGateStore((state) => state.result);
+  const error = useGateStore((state) => state.error);
+  const openEntry = useGateStore((state) => state.openEntry);
+  const openExit = useGateStore((state) => state.openExit);
+  const resetGateState = useGateStore((state) => state.resetGateState);
 
   useEffect(() => {
     resetGateState();
   }, [resetGateState]);
+
+  const isLoading = gateState === 'loading';
 
   return (
     <AppBackground>
@@ -27,20 +57,8 @@ export const OpenBarrierScreen = ({ navigation }: Props) => {
         <ScreenHeader title="Открыть шлагбаум" onBack={() => navigation.goBack()} />
 
         <View style={styles.actions}>
-          <AppButton
-            title="Въезд"
-            onPress={openEntry}
-            loading={gateState === 'loading'}
-            variant="card"
-            leftIcon={<MaterialCommunityIcons name="gate-open" size={22} color={theme.colors.textPrimary} />}
-          />
-          <AppButton
-            title="Выезд"
-            onPress={openExit}
-            loading={gateState === 'loading'}
-            variant="card"
-            leftIcon={<MaterialCommunityIcons name="gate-arrow-right" size={22} color={theme.colors.textPrimary} />}
-          />
+          <BarrierActionButton title="Въезд" onPress={openEntry} disabled={isLoading} iconSource={ENTRY_ICON} />
+          <BarrierActionButton title="Выезд" onPress={openExit} disabled={isLoading} iconSource={EXIT_ICON} />
         </View>
 
         <View style={styles.feedback}>
@@ -70,8 +88,35 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   actions: {
-    marginTop: 32,
-    gap: theme.spacing.lg,
+    marginTop: 24,
+    gap: 16,
+  },
+  barrierButton: {
+    minHeight: 90,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.card,
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+  },
+  barrierButtonDisabled: {
+    opacity: 0.8,
+  },
+  barrierRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 18,
+  },
+  barrierIcon: {
+    width: 58,
+    height: 40,
+  },
+  barrierLabel: {
+    color: theme.colors.textPrimary,
+    fontSize: 19,
+    fontWeight: '600',
   },
   feedback: {
     marginTop: theme.spacing.xl,
@@ -103,4 +148,3 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
 });
-

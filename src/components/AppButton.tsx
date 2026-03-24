@@ -12,7 +12,7 @@ type AppButtonProps = {
   leftIcon?: React.ReactNode;
 };
 
-export const AppButton = ({
+const AppButtonComponent = ({
   title,
   onPress,
   disabled = false,
@@ -27,7 +27,9 @@ export const AppButton = ({
       disabled={disabled || loading}
     >
       <View style={styles.content}>
-        {loading ? <ActivityIndicator color={theme.colors.textPrimary} /> : (
+        {loading ? (
+          <ActivityIndicator color={theme.colors.textPrimary} />
+        ) : (
           <View style={styles.row}>
             {leftIcon ? <View style={styles.iconWrap}>{leftIcon}</View> : null}
             <Text style={styles.label}>{title}</Text>
@@ -37,6 +39,9 @@ export const AppButton = ({
     </Pressable>
   );
 };
+
+export const AppButton = React.memo(AppButtonComponent);
+AppButton.displayName = 'AppButton';
 
 const styles = StyleSheet.create({
   button: {
@@ -77,4 +82,3 @@ const styles = StyleSheet.create({
     opacity: 0.75,
   },
 });
-

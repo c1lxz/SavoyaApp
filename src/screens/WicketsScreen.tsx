@@ -1,11 +1,10 @@
-﻿import React, { useEffect } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+﻿import React, { memo, useEffect } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppBackground } from '@/components/AppBackground';
-import { AppButton } from '@/components/AppButton';
 import { ScreenHeader } from '@/components/ScreenHeader';
 import { RootStackParamList } from '@/navigation/types';
 import { useGateStore } from '@/store/gateStore';
@@ -14,21 +13,40 @@ import { formatDateTime } from '@/utils/date';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Wickets'>;
 
+type WicketButtonProps = {
+  title: string;
+  onPress: () => void;
+  disabled: boolean;
+  icon: React.ReactNode;
+};
+
+const WicketActionButton = memo(({ title, onPress, disabled, icon }: WicketButtonProps) => (
+  <Pressable onPress={onPress} disabled={disabled} style={[styles.wicketButton, disabled && styles.wicketButtonDisabled]}>
+    <View style={styles.wicketRow}>
+      <View style={styles.wicketIconWrap}>{icon}</View>
+      <Text style={styles.wicketLabel} numberOfLines={2}>
+        {title}
+      </Text>
+    </View>
+  </Pressable>
+));
+WicketActionButton.displayName = 'WicketActionButton';
+
 export const WicketsScreen = ({ navigation }: Props) => {
-  const {
-    gateState,
-    result,
-    error,
-    openWicketNorth,
-    openWicketLake,
-    openWicketAdmin,
-    openWicketForest,
-    resetGateState,
-  } = useGateStore();
+  const gateState = useGateStore((state) => state.gateState);
+  const result = useGateStore((state) => state.result);
+  const error = useGateStore((state) => state.error);
+  const openWicketNorth = useGateStore((state) => state.openWicketNorth);
+  const openWicketLake = useGateStore((state) => state.openWicketLake);
+  const openWicketAdmin = useGateStore((state) => state.openWicketAdmin);
+  const openWicketForest = useGateStore((state) => state.openWicketForest);
+  const resetGateState = useGateStore((state) => state.resetGateState);
 
   useEffect(() => {
     resetGateState();
   }, [resetGateState]);
+
+  const isLoading = gateState === 'loading';
 
   return (
     <AppBackground>
@@ -36,33 +54,29 @@ export const WicketsScreen = ({ navigation }: Props) => {
         <ScreenHeader title="Калитки" onBack={() => navigation.goBack()} />
 
         <View style={styles.actions}>
-          <AppButton
+          <WicketActionButton
             title="Калитка Северная (СНТ Пальмира)"
             onPress={openWicketNorth}
-            loading={gateState === 'loading'}
-            variant="card"
-            leftIcon={<MaterialCommunityIcons name="compass-outline" size={22} color={theme.colors.textPrimary} />}
+            disabled={isLoading}
+            icon={<MaterialCommunityIcons name="compass-outline" size={26} color={theme.colors.textPrimary} />}
           />
-          <AppButton
+          <WicketActionButton
             title="Калитка Озеро (СНТ Вартемяки)"
             onPress={openWicketLake}
-            loading={gateState === 'loading'}
-            variant="card"
-            leftIcon={<MaterialCommunityIcons name="waves" size={22} color={theme.colors.textPrimary} />}
+            disabled={isLoading}
+            icon={<MaterialCommunityIcons name="waves" size={26} color={theme.colors.textPrimary} />}
           />
-          <AppButton
+          <WicketActionButton
             title="Калитка у администрации"
             onPress={openWicketAdmin}
-            variant="card"
-            loading={gateState === 'loading'}
-            leftIcon={<MaterialCommunityIcons name="office-building-marker-outline" size={22} color={theme.colors.textPrimary} />}
+            disabled={isLoading}
+            icon={<MaterialCommunityIcons name="office-building-marker-outline" size={26} color={theme.colors.textPrimary} />}
           />
-          <AppButton
+          <WicketActionButton
             title="Калитка Лес"
             onPress={openWicketForest}
-            variant="card"
-            loading={gateState === 'loading'}
-            leftIcon={<MaterialCommunityIcons name="tree-outline" size={22} color={theme.colors.textPrimary} />}
+            disabled={isLoading}
+            icon={<MaterialCommunityIcons name="tree-outline" size={26} color={theme.colors.textPrimary} />}
           />
         </View>
 
@@ -93,20 +107,50 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   actions: {
-    marginTop: 32,
-    gap: theme.spacing.lg,
+    marginTop: 16,
+    gap: 10,
+  },
+  wicketButton: {
+    minHeight: 90,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.card,
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+  },
+  wicketButtonDisabled: {
+    opacity: 0.8,
+  },
+  wicketRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  wicketIconWrap: {
+    width: 30,
+    alignItems: 'center',
+  },
+  wicketLabel: {
+    flex: 1,
+    color: theme.colors.textPrimary,
+    fontSize: 19,
+    fontWeight: '600',
+    lineHeight: 24,
   },
   feedback: {
-    marginTop: theme.spacing.xl,
-    minHeight: 80,
+    marginTop: 14,
+    minHeight: 70,
   },
   feedbackCard: {
     borderWidth: 1,
     borderColor: theme.colors.border,
     borderRadius: theme.radius.md,
     backgroundColor: theme.colors.card,
-    padding: theme.spacing.md,
-    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 6,
   },
   feedbackRow: {
     flexDirection: 'row',
@@ -115,15 +159,15 @@ const styles = StyleSheet.create({
   },
   feedbackText: {
     color: theme.colors.textPrimary,
-    fontSize: 18,
+    fontSize: 16,
+    flex: 1,
   },
   feedbackMeta: {
     color: theme.colors.textMuted,
-    fontSize: 14,
+    fontSize: 13,
   },
   feedbackError: {
     color: theme.colors.danger,
     fontSize: 16,
   },
 });
-

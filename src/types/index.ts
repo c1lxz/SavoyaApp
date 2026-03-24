@@ -1,10 +1,5 @@
 ﻿export type RequestState = 'idle' | 'loading' | 'success' | 'error';
 
-export type AppError = {
-  message: string;
-  code?: string;
-};
-
 export type User = {
   id: string;
   login: string;
@@ -45,4 +40,3 @@ export type GateActionResult = {
   message: string;
   timestamp: string;
 };
-

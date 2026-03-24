@@ -11,7 +11,7 @@ type PassCardProps = {
   item: PassItem;
 };
 
-export const PassCard = ({ item }: PassCardProps) => {
+const PassCardComponent = ({ item }: PassCardProps) => {
   return (
     <View style={styles.card}>
       <View style={styles.row}>
@@ -28,6 +28,9 @@ export const PassCard = ({ item }: PassCardProps) => {
     </View>
   );
 };
+
+export const PassCard = React.memo(PassCardComponent);
+PassCard.displayName = 'PassCard';
 
 const styles = StyleSheet.create({
   card: {
@@ -62,4 +65,3 @@ const styles = StyleSheet.create({
     minHeight: 110,
   },
 });
-

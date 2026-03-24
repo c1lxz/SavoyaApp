@@ -15,7 +15,9 @@ import { RootStackParamList } from '@/navigation/types';
 type Props = NativeStackScreenProps<RootStackParamList, 'Auth'>;
 
 export const AuthScreen = ({ navigation }: Props) => {
-  const { login, loginState, error } = useAuthStore();
+  const login = useAuthStore((state) => state.login);
+  const loginState = useAuthStore((state) => state.loginState);
+  const error = useAuthStore((state) => state.error);
 
   const [loginValue, setLoginValue] = useState('demo');
   const [password, setPassword] = useState('demo123');
@@ -91,4 +93,3 @@ const styles = StyleSheet.create({
     marginTop: -4,
   },
 });
-
