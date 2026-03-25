@@ -38,5 +38,5 @@ export type GateActionResult = {
   success: boolean;
   action: GateAction;
   message: string;
-  timestamp: string;
+  timestamp: number;
 };

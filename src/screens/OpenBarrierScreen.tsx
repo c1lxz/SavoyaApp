@@ -9,7 +9,6 @@ import { ScreenHeader } from '@/components/ScreenHeader';
 import { RootStackParamList } from '@/navigation/types';
 import { useGateStore } from '@/store/gateStore';
 import { theme } from '@/theme';
-import { formatDateTime } from '@/utils/date';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'OpenBarrier'>;
 
@@ -72,7 +71,6 @@ export const OpenBarrierScreen = ({ navigation }: Props) => {
                 />
                 <Text style={[styles.feedbackText, !result.success && styles.feedbackError]}>{result.message}</Text>
               </View>
-              <Text style={styles.feedbackMeta}>{`Время: ${formatDateTime(result.timestamp)}`}</Text>
             </View>
           ) : null}
 
@@ -138,10 +136,6 @@ const styles = StyleSheet.create({
   feedbackText: {
     color: theme.colors.textPrimary,
     fontSize: 18,
-  },
-  feedbackMeta: {
-    color: theme.colors.textMuted,
-    fontSize: 14,
   },
   feedbackError: {
     color: theme.colors.danger,

@@ -9,7 +9,6 @@ import { ScreenHeader } from '@/components/ScreenHeader';
 import { RootStackParamList } from '@/navigation/types';
 import { useGateStore } from '@/store/gateStore';
 import { theme } from '@/theme';
-import { formatDateTime } from '@/utils/date';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Wickets'>;
 
@@ -91,7 +90,6 @@ export const WicketsScreen = ({ navigation }: Props) => {
                 />
                 <Text style={[styles.feedbackText, !result.success && styles.feedbackError]}>{result.message}</Text>
               </View>
-              <Text style={styles.feedbackMeta}>{`Время: ${formatDateTime(result.timestamp)}`}</Text>
             </View>
           ) : null}
 
@@ -148,8 +146,9 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border,
     borderRadius: theme.radius.md,
     backgroundColor: theme.colors.card,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    minHeight: 86,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     gap: 6,
   },
   feedbackRow: {
@@ -159,12 +158,8 @@ const styles = StyleSheet.create({
   },
   feedbackText: {
     color: theme.colors.textPrimary,
-    fontSize: 16,
+    fontSize: 18,
     flex: 1,
-  },
-  feedbackMeta: {
-    color: theme.colors.textMuted,
-    fontSize: 13,
   },
   feedbackError: {
     color: theme.colors.danger,

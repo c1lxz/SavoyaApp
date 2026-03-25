@@ -31,7 +31,7 @@ export const mockGateService: GateService = {
       success,
       action: type,
       message: success ? messageByAction[type] : 'Не удалось выполнить команду открытия',
-      timestamp: new Date().toISOString(),
+      timestamp: Date.now(),
     };
   },
 };

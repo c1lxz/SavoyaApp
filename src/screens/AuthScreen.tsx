@@ -33,7 +33,7 @@ export const AuthScreen = ({ navigation }: Props) => {
   return (
     <AppBackground>
       <SafeAreaView style={styles.safeArea}>
-        <ScreenHeader title="Регистрация" />
+        <ScreenHeader title="Вход" />
 
         <Text style={styles.description}>Введите ваш логин и пароль, которые вы получили от администратора.</Text>
 
@@ -64,7 +64,7 @@ export const AuthScreen = ({ navigation }: Props) => {
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
-          <AppButton title="Зарегистрироваться" onPress={onSubmit} loading={loginState === 'loading'} />
+          <AppButton title="Войти" onPress={onSubmit} loading={loginState === 'loading'} />
         </View>
       </SafeAreaView>
     </AppBackground>
