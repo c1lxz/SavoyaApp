@@ -1,0 +1,14 @@
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.mypy_cache
+**/.idea
+**/.expo
+**/node_modules
+frontend/_expo
+frontend/index.html
+frontend/metadata.json
+backend/backend_test.db

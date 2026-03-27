@@ -1,4 +1,6 @@
 ﻿import { CreatePassPayload, PassItem, PassStatus } from '@/types';
+import { apiPassService } from '@/services/api/apiPassService';
+import { USE_REAL_API } from '@/services/api/config';
 
 export interface PassService {
   createPass(payload: CreatePassPayload): Promise<PassItem>;
@@ -22,8 +24,10 @@ const resolveStatus = (pass: Omit<PassItem, 'status'>): PassStatus => {
 
 export const mockPassService: PassService = {
   async createPass(payload) {
-    // TODO: POST /passes
-    // TODO: backend should calculate status, not frontend
+    if (USE_REAL_API) {
+      return apiPassService.createPass(payload);
+    }
+
     const draft = {
       id: Date.now().toString(36),
       carNumber: payload.carNumber.toUpperCase(),
@@ -43,18 +47,24 @@ export const mockPassService: PassService = {
     return item;
   },
   async getMyPasses() {
-    // TODO: GET /passes/my
+    if (USE_REAL_API) {
+      return apiPassService.getMyPasses();
+    }
+
     return [...store].map((item) => {
       const { status: _status, ...rest } = item;
       return { ...rest, status: resolveStatus(rest) };
     });
   },
   async cancelPass(id: string) {
-    // TODO: DELETE /passes/{id}
+    if (USE_REAL_API) {
+      await apiPassService.cancelPass(id);
+      return;
+    }
+
     const index = store.findIndex((item) => item.id === id);
     if (index >= 0) {
       store.splice(index, 1);
     }
   },
 };
-

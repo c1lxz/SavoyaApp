@@ -18,14 +18,19 @@ type GateStore = {
 
 const openByType = async (type: GateAction, set: (partial: Partial<GateStore>) => void) => {
   set({ gateState: 'loading', result: null, error: null });
-  const result = await mockGateService.openAction(type);
+  try {
+    const result = await mockGateService.openAction(type);
 
-  if (result.success) {
-    set({ gateState: 'success', result, error: null });
-    return;
+    if (result.success) {
+      set({ gateState: 'success', result, error: null });
+      return;
+    }
+
+    set({ gateState: 'error', result, error: result.message });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Ошибка сети';
+    set({ gateState: 'error', result: null, error: message });
   }
-
-  set({ gateState: 'error', result, error: result.message });
 };
 
 export const useGateStore = create<GateStore>((set) => ({

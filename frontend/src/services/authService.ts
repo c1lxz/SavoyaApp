@@ -1,4 +1,6 @@
 ﻿import { AuthResult, User } from '@/types';
+import { apiAuthService } from '@/services/api/apiAuthService';
+import { USE_REAL_API } from '@/services/api/config';
 
 export interface AuthService {
   login(login: string, password: string): Promise<AuthResult>;
@@ -23,9 +25,10 @@ const sleep = (minMs: number, maxMs: number) =>
 
 export const mockAuthService: AuthService = {
   async login(login: string, password: string) {
-    // TODO: replace mock login with POST /auth/login
-    // TODO: store JWT token
-    // TODO: handle refresh token
+    if (USE_REAL_API) {
+      return apiAuthService.login(login, password);
+    }
+
     await sleep(500, 1000);
 
     if (login === 'demo' && password === 'demo123') {
@@ -36,10 +39,16 @@ export const mockAuthService: AuthService = {
     return { success: false, error: 'Неверный логин или пароль' };
   },
   async logout() {
+    if (USE_REAL_API) {
+      await apiAuthService.logout();
+      return;
+    }
     currentUser = null;
   },
   async getCurrentUser() {
+    if (USE_REAL_API) {
+      return apiAuthService.getCurrentUser();
+    }
     return currentUser;
   },
 };
-

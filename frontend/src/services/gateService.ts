@@ -1,4 +1,6 @@
 ﻿import { GateAction, GateActionResult } from '@/types';
+import { apiGateService } from '@/services/api/apiGateService';
+import { USE_REAL_API } from '@/services/api/config';
 
 export interface GateService {
   openAction(type: GateAction): Promise<GateActionResult>;
@@ -12,9 +14,10 @@ const sleep = (minMs: number, maxMs: number) =>
 
 export const mockGateService: GateService = {
   async openAction(type) {
-    // TODO: POST /gates/open-action
-    // TODO: pass action type or gate_id
-    // TODO: handle real errors (timeout, denied, etc)
+    if (USE_REAL_API) {
+      return apiGateService.openAction(type);
+    }
+
     await sleep(500, 1200);
 
     const success = Math.random() <= 0.9;
@@ -35,4 +38,3 @@ export const mockGateService: GateService = {
     };
   },
 };
-
