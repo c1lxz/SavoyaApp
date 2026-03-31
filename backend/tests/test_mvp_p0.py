@@ -107,3 +107,24 @@ def test_cancel_permanent_request_deactivates_gate_key(client):
         gate_client.remove_key = original_remove_key
 
     assert removed_key_ids == [100501]
+
+
+def test_courier_request_forces_ttl_mode(client):
+    headers, _ = _create_user_and_login(client)
+    response = client.post(
+        "/api/requests/",
+        headers=headers,
+        json={
+            "key_type": "VehicleNumber",
+            "key_value": f"C{uuid4().hex[:6]}",
+            "access_point_ids": [1, 2],
+            "is_permanent": True,
+            "is_courier": True,
+            "hours": 3,
+            "plot_number": "25",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["is_permanent"] is False
+    assert body["expires_at"] is not None

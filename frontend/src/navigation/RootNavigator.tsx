@@ -8,6 +8,7 @@ import { CreatePassScreen } from '@/screens/CreatePassScreen';
 import { HomeScreen } from '@/screens/HomeScreen';
 import { MyPassesScreen } from '@/screens/MyPassesScreen';
 import { OpenBarrierScreen } from '@/screens/OpenBarrierScreen';
+import { ProfileSetupScreen } from '@/screens/ProfileSetupScreen';
 import { WicketsScreen } from '@/screens/WicketsScreen';
 import { useAuthStore } from '@/store/authStore';
 import { theme } from '@/theme';
@@ -17,6 +18,7 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export const RootNavigator = () => {
   const user = useAuthStore((state) => state.user);
+  const requiresProfileCompletion = useAuthStore((state) => state.requiresProfileCompletion);
   const restoreState = useAuthStore((state) => state.restoreState);
   const restoreSession = useAuthStore((state) => state.restoreSession);
 
@@ -35,17 +37,21 @@ export const RootNavigator = () => {
   return (
     <NavigationContainer>
       <Stack.Navigator
-        initialRouteName={user ? 'Home' : 'Auth'}
+        initialRouteName={user ? (requiresProfileCompletion ? 'ProfileSetup' : 'Home') : 'Auth'}
         screenOptions={{ headerShown: false, animation: 'fade' }}
       >
         {user ? (
-          <>
-            <Stack.Screen name="Home" component={HomeScreen} />
-            <Stack.Screen name="CreatePass" component={CreatePassScreen} />
-            <Stack.Screen name="OpenBarrier" component={OpenBarrierScreen} />
-            <Stack.Screen name="Wickets" component={WicketsScreen} />
-            <Stack.Screen name="MyPasses" component={MyPassesScreen} />
-          </>
+          requiresProfileCompletion ? (
+            <Stack.Screen name="ProfileSetup" component={ProfileSetupScreen} />
+          ) : (
+            <>
+              <Stack.Screen name="Home" component={HomeScreen} />
+              <Stack.Screen name="CreatePass" component={CreatePassScreen} />
+              <Stack.Screen name="OpenBarrier" component={OpenBarrierScreen} />
+              <Stack.Screen name="Wickets" component={WicketsScreen} />
+              <Stack.Screen name="MyPasses" component={MyPassesScreen} />
+            </>
+          )
         ) : (
           <Stack.Screen name="Auth" component={AuthScreen} />
         )}

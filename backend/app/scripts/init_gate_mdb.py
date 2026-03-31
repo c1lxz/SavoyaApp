@@ -106,6 +106,24 @@ def ensure_schema(path: Path) -> None:
             )
             cursor.execute("CREATE UNIQUE INDEX idx_perm_user_access ON AccessPermissions (user_id, access_point_id)")
 
+        if not table_exists(cursor, "WiegandCredentials"):
+            cursor.execute(
+                """
+                CREATE TABLE WiegandCredentials (
+                    id AUTOINCREMENT PRIMARY KEY,
+                    key_id INTEGER,
+                    user_id INTEGER,
+                    access_point_id INTEGER,
+                    bit_length INTEGER,
+                    facility_code INTEGER,
+                    card_number INTEGER,
+                    wiegand_payload TEXT(16),
+                    created_at DATETIME
+                )
+                """
+            )
+            cursor.execute("CREATE UNIQUE INDEX idx_wiegand_key_access ON WiegandCredentials (key_id, access_point_id)")
+
         for point_id, name in DEFAULT_ACCESS_POINTS:
             cursor.execute("SELECT id FROM AccessPoints WHERE id = ?", (point_id,))
             if cursor.fetchone() is None:

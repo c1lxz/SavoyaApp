@@ -7,6 +7,7 @@ type LoginResponse = {
   user?: User;
   error?: string;
   access_token?: string;
+  requiresProfileCompletion?: boolean;
 };
 
 let currentUser: User | null = null;
@@ -27,6 +28,7 @@ export const apiAuthService = {
       success: result.success,
       user: result.user,
       error: result.error,
+      requiresProfileCompletion: result.requiresProfileCompletion,
     };
   },
   async logout(): Promise<void> {
@@ -34,6 +36,19 @@ export const apiAuthService = {
     currentUser = null;
   },
   async getCurrentUser(): Promise<User | null> {
-    return currentUser;
+    if (!currentUser) {
+      return null;
+    }
+    const actual = await apiRequest<User>('/user/me');
+    currentUser = actual;
+    return actual;
+  },
+  async updateProfile(fullName: string, plotNumber?: string): Promise<User> {
+    const updated = await apiRequest<User>('/user/profile', {
+      method: 'PUT',
+      body: { fullName, plotNumber },
+    });
+    currentUser = updated;
+    return updated;
   },
 };

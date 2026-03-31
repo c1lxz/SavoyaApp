@@ -6,6 +6,7 @@ export interface AuthService {
   login(login: string, password: string): Promise<AuthResult>;
   logout(): Promise<void>;
   getCurrentUser(): Promise<User | null>;
+  updateProfile(fullName: string, plotNumber?: string): Promise<User>;
 }
 
 const DEMO_USER: User = {
@@ -50,5 +51,18 @@ export const mockAuthService: AuthService = {
       return apiAuthService.getCurrentUser();
     }
     return currentUser;
+  },
+  async updateProfile(fullName: string, plotNumber?: string) {
+    if (USE_REAL_API) {
+      return apiAuthService.updateProfile(fullName, plotNumber);
+    }
+
+    const next: User = {
+      ...(currentUser ?? DEMO_USER),
+      fullName: fullName.trim(),
+      plotNumber: (plotNumber ?? (currentUser?.plotNumber ?? DEMO_USER.plotNumber)).trim(),
+    };
+    currentUser = next;
+    return next;
   },
 };

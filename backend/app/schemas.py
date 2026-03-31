@@ -43,6 +43,7 @@ class CreateRequestRequest(BaseModel):
     key_value: str
     access_point_ids: list[int] = Field(min_length=1)
     is_permanent: bool = False
+    is_courier: bool = False
     hours: int | None = Field(default=None, ge=1, le=24 * 365)
     plot_number: str | None = None
 
@@ -76,6 +77,12 @@ class CompatAuthResult(BaseModel):
     user: CompatUser | None = None
     error: str | None = None
     access_token: str | None = None
+    requiresProfileCompletion: bool = False
+
+
+class CompatUpdateProfilePayload(BaseModel):
+    fullName: str = Field(min_length=2, max_length=120)
+    plotNumber: str | None = Field(default=None, max_length=20)
 
 
 class CompatCreatePassPayload(BaseModel):

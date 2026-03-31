@@ -10,6 +10,7 @@ import { AppButton } from '@/components/AppButton';
 import { AppInput } from '@/components/AppInput';
 import { ScreenHeader } from '@/components/ScreenHeader';
 import { RootStackParamList } from '@/navigation/types';
+import { useAuthStore } from '@/store/authStore';
 import { usePassesStore } from '@/store/passesStore';
 import { theme } from '@/theme';
 import { formatDate, toIsoDate } from '@/utils/date';
@@ -17,12 +18,16 @@ import { formatDate, toIsoDate } from '@/utils/date';
 type Props = NativeStackScreenProps<RootStackParamList, 'CreatePass'>;
 
 export const CreatePassScreen = ({ navigation }: Props) => {
+  const user = useAuthStore((state) => state.user);
+  const updateProfile = useAuthStore((state) => state.updateProfile);
+  const profileState = useAuthStore((state) => state.profileState);
   const createPass = usePassesStore((state) => state.createPass);
   const createState = usePassesStore((state) => state.createState);
   const createError = usePassesStore((state) => state.createError);
 
+  const [fullName, setFullName] = useState(user?.fullName ?? '');
   const [carNumber, setCarNumber] = useState('');
-  const [plotNumber, setPlotNumber] = useState('');
+  const [plotNumber, setPlotNumber] = useState(user?.plotNumber ?? '');
   const [isPermanent, setIsPermanent] = useState(false);
   const [expiresAt, setExpiresAt] = useState(new Date());
   const [dateInput, setDateInput] = useState(formatDate(new Date().toISOString()));
@@ -85,9 +90,15 @@ export const CreatePassScreen = ({ navigation }: Props) => {
   };
 
   const onCreate = async () => {
+    const normalizedFullName = fullName.trim();
     const normalizedCarNumber = carNumber.trim().toUpperCase();
     const normalizedPlotNumber = plotNumber.trim();
     const parsedDate = parseRuDate(dateInput);
+
+    if (!normalizedFullName || normalizedFullName.length < 2) {
+      setFormError('Введите ФИО');
+      return;
+    }
 
     if (!normalizedCarNumber) {
       setFormError('Введите номер автомобиля');
@@ -116,6 +127,14 @@ export const CreatePassScreen = ({ navigation }: Props) => {
 
     setFormError(null);
 
+    if (user && (normalizedFullName !== user.fullName || normalizedPlotNumber !== user.plotNumber)) {
+      const saved = await updateProfile(normalizedFullName, normalizedPlotNumber);
+      if (!saved) {
+        setFormError('Не удалось сохранить ФИО');
+        return;
+      }
+    }
+
     const success = await createPass({
       carNumber: normalizedCarNumber,
       plotNumber: normalizedPlotNumber,
@@ -134,6 +153,15 @@ export const CreatePassScreen = ({ navigation }: Props) => {
         <ScreenHeader title="Создание пропуска" onBack={() => navigation.goBack()} />
 
         <View style={styles.form}>
+          <AppInput
+            label="ФИО"
+            icon="account"
+            value={fullName}
+            onChangeText={setFullName}
+            autoCapitalize="words"
+            placeholder="Иванов Иван Иванович"
+          />
+
           <AppInput
             label="Номер автомобиля"
             icon="car"
@@ -172,7 +200,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
           {formError ? <Text style={styles.error}>{formError}</Text> : null}
           {createError ? <Text style={styles.error}>{createError}</Text> : null}
 
-          <AppButton title="Создать пропуск" onPress={onCreate} loading={createState === 'loading'} />
+          <AppButton title="Создать пропуск" onPress={onCreate} loading={createState === 'loading' || profileState === 'loading'} />
         </View>
 
         {showPicker ? (

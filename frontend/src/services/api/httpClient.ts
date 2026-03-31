@@ -2,7 +2,7 @@
 import { getAccessToken } from '@/services/api/tokenStore';
 
 type RequestOptions = {
-  method?: 'GET' | 'POST' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
 };
 

@@ -3,10 +3,11 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pyodbc
 
 try:
@@ -20,6 +21,7 @@ if load_dotenv is not None:
 _PROJECT_ROOT = Path(__file__).resolve().parent
 _DEFAULT_MDB_PATH = _PROJECT_ROOT / "config.mdb"
 ALLOWED_KEY_TYPES = {"Phone", "VehicleNumber"}
+WIEGAND_BITS = 26
 
 
 @dataclass
@@ -54,6 +56,33 @@ def _transaction_cursor():
     finally:
         cursor.close()
         conn.close()
+
+
+def _table_exists(cursor: pyodbc.Cursor, name: str) -> bool:
+    row = cursor.tables(table=name, tableType="TABLE").fetchone()
+    return row is not None
+
+
+def _ensure_wiegand_schema(cursor: pyodbc.Cursor) -> None:
+    if _table_exists(cursor, "WiegandCredentials"):
+        return
+
+    cursor.execute(
+        """
+        CREATE TABLE WiegandCredentials (
+            id AUTOINCREMENT PRIMARY KEY,
+            key_id INTEGER,
+            user_id INTEGER,
+            access_point_id INTEGER,
+            bit_length INTEGER,
+            facility_code INTEGER,
+            card_number INTEGER,
+            wiegand_payload TEXT(16),
+            created_at DATETIME
+        )
+        """
+    )
+    cursor.execute("CREATE UNIQUE INDEX idx_wiegand_key_access ON WiegandCredentials (key_id, access_point_id)")
 
 
 def _validate_key_type(key_type: str) -> str:
@@ -96,6 +125,12 @@ def _validate_access_point_ids(access_point_ids: list[int]) -> list[int]:
             normalized.append(point_id)
 
     return normalized
+
+
+def _to_naive_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _create_user(cursor: pyodbc.Cursor, name: str, is_visitor: bool) -> int:
@@ -157,7 +192,6 @@ def _add_missing_access_permissions(
 def _find_existing_active_key(
     cursor: pyodbc.Cursor, key_type: str, normalized_key_value: str
 ) -> tuple[int, int, datetime | None] | None:
-    # Fast path: for normalized data this query is index-friendly and avoids full scans.
     cursor.execute(
         """
         SELECT id, user_id, valid_to
@@ -170,8 +204,6 @@ def _find_existing_active_key(
     if direct_match is not None:
         return int(direct_match.id), int(direct_match.user_id), direct_match.valid_to
 
-    # Fallback for legacy non-normalized records. This path is slower but executed only
-    # when direct lookup misses; found records are normalized in-place for next requests.
     cursor.execute(
         """
         SELECT id, user_id, valid_to, key_value
@@ -190,21 +222,147 @@ def _find_existing_active_key(
     return None
 
 
+def _parity_bit_even(value: int) -> int:
+    return bin(value).count("1") % 2
+
+
+def _parity_bit_odd(value: int) -> int:
+    return 1 - (bin(value).count("1") % 2)
+
+
+def _encode_wiegand26(facility_code: int, card_number: int) -> str:
+    if not (0 <= facility_code <= 255):
+        raise ValueError("facility_code must be in [0, 255]")
+    if not (0 <= card_number <= 65535):
+        raise ValueError("card_number must be in [0, 65535]")
+
+    data24 = (facility_code << 16) | card_number
+    high12 = (data24 >> 12) & 0xFFF
+    low12 = data24 & 0xFFF
+
+    parity_even = _parity_bit_even(high12)
+    parity_odd = _parity_bit_odd(low12)
+
+    frame26 = (parity_even << 25) | (data24 << 1) | parity_odd
+    return f"{frame26:07X}"
+
+
+def _next_wiegand_values(key_id: int, user_id: int, access_point_id: int, probe: int = 0) -> tuple[int, int]:
+    facility_code = ((user_id * 17 + access_point_id * 31 + key_id + probe) % 255) + 1
+    card_number = ((key_id * 131 + user_id * 19 + access_point_id * 997 + probe) % 65535) + 1
+    return facility_code, card_number
+
+
+def _find_wiegand_for_key(cursor: pyodbc.Cursor, key_id: int, access_point_id: int) -> dict[str, Any] | None:
+    cursor.execute(
+        """
+        SELECT id, bit_length, facility_code, card_number, wiegand_payload
+        FROM WiegandCredentials
+        WHERE key_id = ? AND access_point_id = ?
+        """,
+        (key_id, access_point_id),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return None
+
+    return {
+        "id": int(row.id),
+        "bit_length": int(row.bit_length),
+        "facility_code": int(row.facility_code),
+        "card_number": int(row.card_number),
+        "wiegand_payload": str(row.wiegand_payload),
+    }
+
+
+def _wiegand_pair_in_use(cursor: pyodbc.Cursor, facility_code: int, card_number: int, exclude_id: int | None = None) -> bool:
+    if exclude_id is None:
+        cursor.execute(
+            """
+            SELECT TOP 1 id
+            FROM WiegandCredentials
+            WHERE facility_code = ? AND card_number = ?
+            """,
+            (facility_code, card_number),
+        )
+    else:
+        cursor.execute(
+            """
+            SELECT TOP 1 id
+            FROM WiegandCredentials
+            WHERE facility_code = ? AND card_number = ? AND id <> ?
+            """,
+            (facility_code, card_number, exclude_id),
+        )
+    return cursor.fetchone() is not None
+
+
+def _create_wiegand_credential(cursor: pyodbc.Cursor, key_id: int, user_id: int, access_point_id: int) -> dict[str, Any]:
+    probe = 0
+    while probe < 2048:
+        facility_code, card_number = _next_wiegand_values(key_id=key_id, user_id=user_id, access_point_id=access_point_id, probe=probe)
+        if not _wiegand_pair_in_use(cursor, facility_code, card_number):
+            payload = _encode_wiegand26(facility_code, card_number)
+            cursor.execute(
+                """
+                INSERT INTO WiegandCredentials
+                (key_id, user_id, access_point_id, bit_length, facility_code, card_number, wiegand_payload, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (key_id, user_id, access_point_id, WIEGAND_BITS, facility_code, card_number, payload, datetime.now()),
+            )
+            return {
+                "bit_length": WIEGAND_BITS,
+                "facility_code": facility_code,
+                "card_number": card_number,
+                "wiegand_payload": payload,
+            }
+        probe += 1
+
+    raise RuntimeError("Failed to allocate unique Wiegand-26 credential")
+
+
+def _get_or_create_wiegand_credential(cursor: pyodbc.Cursor, key_id: int, user_id: int, access_point_id: int) -> dict[str, Any]:
+    existing = _find_wiegand_for_key(cursor, key_id=key_id, access_point_id=access_point_id)
+    if existing is not None:
+        return existing
+    return _create_wiegand_credential(cursor, key_id=key_id, user_id=user_id, access_point_id=access_point_id)
+
+
+def _ensure_wiegand_credentials_for_points(cursor: pyodbc.Cursor, key_id: int, user_id: int, access_point_ids: list[int]) -> None:
+    for access_point_id in access_point_ids:
+        _get_or_create_wiegand_credential(cursor, key_id=key_id, user_id=user_id, access_point_id=access_point_id)
+
+
+def _all_access_point_ids(cursor: pyodbc.Cursor) -> list[int]:
+    cursor.execute("SELECT id FROM AccessPoints ORDER BY id")
+    rows = cursor.fetchall()
+    return [int(row.id) for row in rows]
+
+
 def add_permanent_key(
     key_type: str,
     key_value: str,
     access_point_ids: list[int],
-    resident_name: str = "Житель",
+    resident_name: str = "Resident",
 ) -> int:
     validated_key_type = _validate_key_type(key_type)
     normalized_key_value = _normalize_key_value(validated_key_type, key_value)
     validated_points = _validate_access_point_ids(access_point_ids)
 
     with _transaction_cursor() as (_, cursor):
+        _ensure_wiegand_schema(cursor)
+
         existing = _find_existing_active_key(cursor, validated_key_type, normalized_key_value)
         if existing is not None:
             key_id, user_id, _ = existing
             _add_missing_access_permissions(cursor, user_id, validated_points, is_permanent=True)
+            _ensure_wiegand_credentials_for_points(
+                cursor,
+                key_id=key_id,
+                user_id=user_id,
+                access_point_ids=_all_access_point_ids(cursor),
+            )
             return key_id
 
         user_id = _create_user(cursor, resident_name, is_visitor=False)
@@ -217,6 +375,12 @@ def add_permanent_key(
             valid_to=None,
         )
         _add_missing_access_permissions(cursor, user_id, validated_points, is_permanent=True)
+        _ensure_wiegand_credentials_for_points(
+            cursor,
+            key_id=key_id,
+            user_id=user_id,
+            access_point_ids=_all_access_point_ids(cursor),
+        )
         return key_id
 
 
@@ -232,21 +396,36 @@ def add_temporary_key(
 
     if not isinstance(expires_at, datetime):
         raise ValueError("expires_at must be a datetime instance")
-    if expires_at <= datetime.now():
+    normalized_expires_at = _to_naive_utc(expires_at)
+    if normalized_expires_at <= datetime.utcnow():
         raise ValueError("expires_at must be in the future")
 
     with _transaction_cursor() as (_, cursor):
+        _ensure_wiegand_schema(cursor)
+
         existing = _find_existing_active_key(cursor, validated_key_type, normalized_key_value)
         if existing is not None:
             key_id, user_id, current_valid_to = existing
             if current_valid_to is None:
                 _add_missing_access_permissions(cursor, user_id, validated_points, is_permanent=True)
+                _ensure_wiegand_credentials_for_points(
+                    cursor,
+                    key_id=key_id,
+                    user_id=user_id,
+                    access_point_ids=_all_access_point_ids(cursor),
+                )
                 return key_id
 
-            if expires_at > current_valid_to:
-                cursor.execute("UPDATE Keys SET valid_to = ? WHERE id = ?", (expires_at, key_id))
+            if normalized_expires_at > _to_naive_utc(current_valid_to):
+                cursor.execute("UPDATE Keys SET valid_to = ? WHERE id = ?", (normalized_expires_at, key_id))
 
             _add_missing_access_permissions(cursor, user_id, validated_points, is_permanent=False)
+            _ensure_wiegand_credentials_for_points(
+                cursor,
+                key_id=key_id,
+                user_id=user_id,
+                access_point_ids=_all_access_point_ids(cursor),
+            )
             return key_id
 
         user_id = _create_user(cursor, normalized_key_value, is_visitor=True)
@@ -256,9 +435,15 @@ def add_temporary_key(
             key_type=validated_key_type,
             key_value=normalized_key_value,
             valid_from=datetime.now(),
-            valid_to=expires_at,
+            valid_to=normalized_expires_at,
         )
         _add_missing_access_permissions(cursor, user_id, validated_points, is_permanent=False)
+        _ensure_wiegand_credentials_for_points(
+            cursor,
+            key_id=key_id,
+            user_id=user_id,
+            access_point_ids=_all_access_point_ids(cursor),
+        )
         return key_id
 
 
@@ -267,16 +452,16 @@ def remove_key(key_id: int) -> bool:
         raise ValueError("key_id must be a positive integer")
 
     with _transaction_cursor() as (_, cursor):
+        _ensure_wiegand_schema(cursor)
+
         cursor.execute("SELECT user_id, valid_to FROM Keys WHERE id = ?", (key_id,))
         row = cursor.fetchone()
         if row is None:
             return False
 
         user_id = int(row.user_id)
-        valid_to = row.valid_to
-        if valid_to is None:
-            return False
 
+        cursor.execute("DELETE FROM WiegandCredentials WHERE key_id = ?", (key_id,))
         cursor.execute("DELETE FROM Keys WHERE id = ?", (key_id,))
         deleted_rows = cursor.rowcount
         if deleted_rows <= 0:
@@ -292,11 +477,13 @@ def remove_key(key_id: int) -> bool:
 
 
 def cleanup_expired_keys(now: datetime | None = None) -> int:
-    check_time = now or datetime.now()
+    check_time = _to_naive_utc(now) if now is not None else datetime.now()
     if not isinstance(check_time, datetime):
         raise ValueError("now must be datetime or None")
 
     with _transaction_cursor() as (_, cursor):
+        _ensure_wiegand_schema(cursor)
+
         cursor.execute(
             """
             SELECT id, user_id
@@ -313,6 +500,7 @@ def cleanup_expired_keys(now: datetime | None = None) -> int:
         user_ids = {int(row.user_id) for row in expired_rows}
 
         placeholders = ", ".join(["?"] * len(expired_key_ids))
+        cursor.execute(f"DELETE FROM WiegandCredentials WHERE key_id IN ({placeholders})", expired_key_ids)
         cursor.execute(f"DELETE FROM Keys WHERE id IN ({placeholders})", expired_key_ids)
 
         for user_id in user_ids:
@@ -372,6 +560,70 @@ def _has_key_permission(cursor: pyodbc.Cursor, key_id: int, access_point_id: int
     return cursor.fetchone() is not None
 
 
+def _send_wiegand26(access_point_id: int, credential: dict[str, Any]) -> GateOpenResponse:
+    transport = os.getenv("GATE_WIEGAND_TRANSPORT", "dry_run").strip().lower()
+    timeout_seconds = float(os.getenv("GATE_WIEGAND_TIMEOUT_SECONDS", "2.0"))
+
+    payload = {
+        "access_point_id": access_point_id,
+        "wiegand": {
+            "bit_length": WIEGAND_BITS,
+            "facility_code": credential["facility_code"],
+            "card_number": credential["card_number"],
+            "payload_hex": credential["wiegand_payload"],
+        },
+    }
+
+    if transport in {"", "dry_run", "mock", "simulate", "disabled"}:
+        return GateOpenResponse(
+            success=True,
+            message=(
+                f"Wiegand-26 dry-run sent: AP={access_point_id}, FC={credential['facility_code']}, "
+                f"CN={credential['card_number']}, HEX={credential['wiegand_payload']}"
+            ),
+        )
+
+    if transport != "http":
+        return GateOpenResponse(success=False, error_code="transport_not_supported", message=f"Unknown transport: {transport}")
+
+    url = os.getenv("GATE_WIEGAND_HTTP_URL", "").strip()
+    if not url:
+        return GateOpenResponse(
+            success=False,
+            error_code="integration_unavailable",
+            message="GATE_WIEGAND_HTTP_URL is not configured",
+        )
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    token = os.getenv("GATE_WIEGAND_HTTP_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        response = httpx.post(url, json=payload, headers=headers, timeout=timeout_seconds)
+        if response.status_code >= 400:
+            return GateOpenResponse(
+                success=False,
+                error_code="transport_http_error",
+                message=f"Wiegand transport HTTP {response.status_code}",
+            )
+
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+
+        if isinstance(data, dict):
+            success = bool(data.get("success", True))
+            message = str(data.get("message") or "Wiegand-26 command accepted")
+            error_code = str(data.get("error_code")) if data.get("error_code") else None
+            return GateOpenResponse(success=success, message=message, error_code=error_code)
+
+        return GateOpenResponse(success=True, message="Wiegand-26 command accepted")
+    except Exception as exc:
+        return GateOpenResponse(success=False, error_code="transport_error", message=f"Wiegand transport failed: {exc}")
+
+
 def get_key_permissions(external_key_id: str) -> list[dict[str, Any]]:
     with _transaction_cursor() as (_, cursor):
         key_id = _resolve_active_key_id(cursor, external_key_id)
@@ -393,11 +645,43 @@ def get_key_permissions(external_key_id: str) -> list[dict[str, Any]]:
         return [{"access_point_id": int(row.access_point_id), "access_point_name": str(row.name)} for row in rows]
 
 
+def get_wiegand_credentials(external_key_id: str) -> list[dict[str, Any]]:
+    with _transaction_cursor() as (_, cursor):
+        _ensure_wiegand_schema(cursor)
+
+        key_id = _resolve_active_key_id(cursor, external_key_id)
+        if key_id is None:
+            return []
+
+        cursor.execute(
+            """
+            SELECT wc.access_point_id, wc.bit_length, wc.facility_code, wc.card_number, wc.wiegand_payload
+            FROM WiegandCredentials wc
+            WHERE wc.key_id = ?
+            ORDER BY wc.access_point_id
+            """,
+            (key_id,),
+        )
+        rows = cursor.fetchall()
+        return [
+            {
+                "access_point_id": int(row.access_point_id),
+                "bit_length": int(row.bit_length),
+                "facility_code": int(row.facility_code),
+                "card_number": int(row.card_number),
+                "payload_hex": str(row.wiegand_payload),
+            }
+            for row in rows
+        ]
+
+
 def open_access_point(access_point_id: int, external_key_id: str | None = None) -> dict[str, Any]:
     if not isinstance(access_point_id, int) or access_point_id <= 0:
         raise ValueError("access_point_id must be a positive integer")
 
     with _transaction_cursor() as (_, cursor):
+        _ensure_wiegand_schema(cursor)
+
         if not _access_point_exists(cursor, access_point_id):
             result = GateOpenResponse(
                 success=False,
@@ -423,12 +707,31 @@ def open_access_point(access_point_id: int, external_key_id: str | None = None) 
             )
             return {"success": result.success, "error_code": result.error_code, "message": result.message}
 
-        # HYPOTHESIS: actual physical open command is executed by a separate local service/SDK,
-        # not by direct writes to GATE .mdb. This function defines a safe contract and returns
-        # explicit integration_unavailable until confirmed transport is implemented.
-        result = GateOpenResponse(
-            success=False,
-            error_code="integration_unavailable",
-            message="Physical open transport is not configured",
+        if key_id is None:
+            result = GateOpenResponse(
+                success=False,
+                error_code="key_not_found",
+                message="Open by key requires external_key_id",
+            )
+            return {"success": result.success, "error_code": result.error_code, "message": result.message}
+
+        cursor.execute("SELECT user_id FROM Keys WHERE id = ?", (key_id,))
+        row = cursor.fetchone()
+        if row is None:
+            result = GateOpenResponse(success=False, error_code="key_not_found", message="Key was removed")
+            return {"success": result.success, "error_code": result.error_code, "message": result.message}
+
+        user_id = int(row.user_id)
+        credential = _get_or_create_wiegand_credential(
+            cursor,
+            key_id=key_id,
+            user_id=user_id,
+            access_point_id=access_point_id,
         )
-        return {"success": result.success, "error_code": result.error_code, "message": result.message}
+
+        transport_result = _send_wiegand26(access_point_id=access_point_id, credential=credential)
+        return {
+            "success": transport_result.success,
+            "error_code": transport_result.error_code,
+            "message": transport_result.message,
+        }

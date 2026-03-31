@@ -5,9 +5,12 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import get_settings
 from ..models import Request, User
 from ..schemas import CreateRequestRequest
 from .gate import gate_client
+
+settings = get_settings()
 
 
 def resolve_request_status(is_permanent: bool, expires_at: datetime | None) -> str:
@@ -19,17 +22,25 @@ def resolve_request_status(is_permanent: bool, expires_at: datetime | None) -> s
 
 
 async def create_request(session: AsyncSession, user: User, payload: CreateRequestRequest) -> Request:
+    is_permanent = payload.is_permanent
+    request_hours = payload.hours
+
+    if payload.is_courier and settings.courier_ttl_only_enabled:
+        is_permanent = False
+        base_hours = request_hours if request_hours is not None else settings.courier_default_hours
+        request_hours = min(base_hours, settings.courier_max_hours)
+
     expires_at: datetime | None = None
-    if not payload.is_permanent:
-        hours = payload.hours if payload.hours is not None else 24
+    if not is_permanent:
+        hours = request_hours if request_hours is not None else 24
         expires_at = datetime.now(timezone.utc) + timedelta(hours=hours)
 
-    if payload.is_permanent:
+    if is_permanent:
         gate_key_id = gate_client.add_permanent_key(
             key_type=payload.key_type,
             key_value=payload.key_value,
             access_point_ids=payload.access_point_ids,
-            resident_name=user.name or user.login or "Житель",
+            resident_name=user.name or user.login or "Resident",
         )
     else:
         gate_key_id = gate_client.add_temporary_key(
@@ -45,7 +56,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
         key_value=payload.key_value,
         gate_key_id=gate_key_id,
         access_point_ids=payload.access_point_ids,
-        is_permanent=payload.is_permanent,
+        is_permanent=is_permanent,
         expires_at=expires_at,
         status="active",
         plot_number=payload.plot_number,

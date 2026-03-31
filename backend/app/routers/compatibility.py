@@ -15,6 +15,7 @@ from ..schemas import (
     CompatGateActionResult,
     CompatOpenActionRequest,
     CompatPassItem,
+    CompatUpdateProfilePayload,
     CompatUser,
     CreateRequestRequest,
     MessageResponse,
@@ -35,7 +36,7 @@ def _compat_user(user: User) -> CompatUser:
     return CompatUser(
         id=str(user.id),
         login=user.login or "",
-        fullName=user.name or user.login or "User",
+        fullName=user.name or "",
         plotNumber=user.plot_number or user.apartment or "",
     )
 
@@ -53,7 +54,36 @@ async def compat_login(payload: dict, session: AsyncSession = Depends(get_db_ses
     if user is None or token is None:
         return CompatAuthResult(success=False, error=_INVALID_LOGIN_MESSAGE)
 
-    return CompatAuthResult(success=True, user=_compat_user(user), access_token=token)
+    return CompatAuthResult(
+        success=True,
+        user=_compat_user(user),
+        access_token=token,
+        requiresProfileCompletion=not bool((user.name or "").strip()),
+    )
+
+
+@router.get("/user/me", response_model=CompatUser)
+async def compat_get_me(user: User = Depends(get_current_user)) -> CompatUser:
+    return _compat_user(user)
+
+
+@router.put("/user/profile", response_model=CompatUser)
+async def compat_update_profile(
+    payload: CompatUpdateProfilePayload,
+    session: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+) -> CompatUser:
+    normalized_name = payload.fullName.strip()
+    if not normalized_name:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Full name is required")
+
+    user.name = normalized_name
+    if payload.plotNumber is not None:
+        user.plot_number = payload.plotNumber.strip()
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return _compat_user(user)
 
 
 def _to_compat_pass(item) -> CompatPassItem:

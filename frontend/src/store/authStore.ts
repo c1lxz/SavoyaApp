@@ -5,11 +5,14 @@ import { RequestState, User } from '@/types';
 
 type AuthStore = {
   user: User | null;
+  requiresProfileCompletion: boolean;
   loginState: RequestState;
   logoutState: RequestState;
   restoreState: RequestState;
+  profileState: RequestState;
   error: string | null;
   login: (login: string, password: string) => Promise<boolean>;
+  updateProfile: (fullName: string, plotNumber?: string) => Promise<boolean>;
   // Roadmap: wire logout to UI entrypoint.
   logout: () => Promise<void>;
   // Roadmap: call restoreSession during app bootstrap.
@@ -18,9 +21,11 @@ type AuthStore = {
 
 export const useAuthStore = create<AuthStore>((set) => ({
   user: null,
+  requiresProfileCompletion: false,
   loginState: 'idle',
   logoutState: 'idle',
   restoreState: 'idle',
+  profileState: 'idle',
   error: null,
   async login(login, password) {
     set({ loginState: 'loading', error: null });
@@ -28,7 +33,11 @@ export const useAuthStore = create<AuthStore>((set) => ({
       const result = await mockAuthService.login(login, password);
 
       if (result.success && result.user) {
-        set({ user: result.user, loginState: 'success' });
+        set({
+          user: result.user,
+          loginState: 'success',
+          requiresProfileCompletion: Boolean(result.requiresProfileCompletion),
+        });
         return true;
       }
 
@@ -40,11 +49,27 @@ export const useAuthStore = create<AuthStore>((set) => ({
       return false;
     }
   },
+  async updateProfile(fullName, plotNumber) {
+    set({ profileState: 'loading', error: null });
+    try {
+      const updated = await mockAuthService.updateProfile(fullName, plotNumber);
+      set({
+        user: updated,
+        profileState: 'success',
+        requiresProfileCompletion: false,
+      });
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Ошибка сети';
+      set({ profileState: 'error', error: message });
+      return false;
+    }
+  },
   async logout() {
     set({ logoutState: 'loading', error: null });
     try {
       await mockAuthService.logout();
-      set({ user: null, logoutState: 'success' });
+      set({ user: null, logoutState: 'success', requiresProfileCompletion: false });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Ошибка сети';
       set({ logoutState: 'error', error: message });
@@ -54,7 +79,11 @@ export const useAuthStore = create<AuthStore>((set) => ({
     set({ restoreState: 'loading', error: null });
     try {
       const user = await mockAuthService.getCurrentUser();
-      set({ user, restoreState: 'success' });
+      set({
+        user,
+        restoreState: 'success',
+        requiresProfileCompletion: user ? !Boolean(user.fullName.trim()) : false,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Ошибка сети';
       set({ restoreState: 'error', error: message, user: null });

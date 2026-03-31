@@ -26,7 +26,8 @@ export const AuthScreen = ({ navigation }: Props) => {
   const onSubmit = async () => {
     const success = await login(loginValue.trim(), password);
     if (success) {
-      navigation.replace('Home');
+      const shouldCompleteProfile = useAuthStore.getState().requiresProfileCompletion;
+      navigation.replace(shouldCompleteProfile ? 'ProfileSetup' : 'Home');
     }
   };
 

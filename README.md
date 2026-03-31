@@ -1,64 +1,27 @@
 ﻿# SavoyaApp
 
-## Test Prep
+## Current deployment mode
+Project is prepared for deployment on the same Windows PC where Gate `config.mdb` is located.
+Bridge/VPS mode is removed.
 
-### Runtime versions
-- Python: 3.12
-- Node.js: use project lockfile (`frontend/package-lock.json`) and Expo from `frontend/package.json` (`expo ~51.0.28`)
+## Quick start (server machine)
+1. Install dependencies:
+   - `py -3.12 -m pip install -r backend/requirements.txt`
+2. Configure environment in `.env`:
+   - `DATABASE_URL=sqlite+aiosqlite:///./backend_prod.db`
+   - `DEBUG=False`
+   - `GATE_REAL_INTEGRATION_ENABLED=True`
+   - `GATE_MDB_PATH=C:/Gate/Server/config.mdb` (adjust for your server)
+   - `GATE_WIEGAND_TRANSPORT=dry_run` (use `http` only when real transport endpoint exists)
+3. Start backend:
+   - `py -3.12 -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000`
+4. Health check:
+   - `http://127.0.0.1:8000/health`
 
-### Environment checklist
-Use `test.env` and verify these variables are set before tests:
-- `DATABASE_URL`
-- `DEBUG`
-- `GATE_REAL_INTEGRATION_ENABLED`
-- `GATE_MDB_PATH`
-- `EXPO_PUBLIC_API_BASE_URL`
-- `EXPO_PUBLIC_USE_REAL_API`
+## Test commands
+- Backend tests: `py -3.12 -m pytest -q backend/tests`
+- Frontend typecheck: `cd frontend && npm run typecheck`
 
-### Commands
-- Backend tests:
-  - `py -3.12 -m pytest -q backend/tests`
-- Frontend typecheck:
-  - `cd frontend && npm run typecheck`
-
-### Gate MDB setup (real integration)
-- Install Python dependency:
-  - `py -3.12 -m pip install pyodbc`
-- Ensure Microsoft Access Database Engine / ODBC driver is installed.
-- Create or recreate `config.mdb`:
-  - `py -3.12 -m backend.app.scripts.init_gate_mdb --force`
-- Runtime config for backend:
-  - `GATE_REAL_INTEGRATION_ENABLED=True`
-  - `GATE_MDB_PATH=E:/savoya/SavoyaApp/config.mdb`
-
-### Smoke API flow
-1. Login:
-   - `POST /api/auth/login`
-2. Create pass:
-   - `POST /api/requests/`
-3. Open access point:
-   - `POST /api/access/open`
-
-## Bug Report Template
-
-```
-Title:
-Environment:
-- Backend commit:
-- Frontend commit:
-- OS:
-- API mode (real/mock):
-
-Steps to reproduce:
-1.
-2.
-3.
-
-Expected result:
-
-Actual result:
-
-Logs / payloads:
-
-Screenshots (if UI issue):
-```
+## Full server runbook
+Detailed Russian instruction for launch and verification with Gate Server/Terminal/Commander:
+- [SERVER_RUNBOOK_RU.md](/e:/savoya/SavoyaApp/SERVER_RUNBOOK_RU.md)

@@ -11,6 +11,7 @@ export type AuthResult = {
   success: boolean;
   user?: User;
   error?: string;
+  requiresProfileCompletion?: boolean;
 };
 
 export type CreatePassPayload = {
