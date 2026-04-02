@@ -39,6 +39,18 @@ COURIER_MAX_HOURS=12
 - `GATE_MDB_PATH` должен указывать на реальный `config.mdb` сервера Gate.
 - Bridge-переменные (`GATE_BRIDGE_*`) больше не используются.
 - На первом этапе держите `GATE_WIEGAND_TRANSPORT=dry_run`, чтобы проверить бизнес-цепочку без физического открытия.
+- Для физического открытия используйте один из вариантов:
+  - HTTP transport:
+    - `GATE_WIEGAND_TRANSPORT=http`
+    - `GATE_WIEGAND_HTTP_URL=http://<host>:<port>/<path>`
+    - `GATE_WIEGAND_HTTP_TOKEN=<token>` (если нужен)
+  - TCP transport:
+    - `GATE_WIEGAND_TRANSPORT=tcp`
+    - `GATE_WIEGAND_TCP_HOST=<ip-or-host>`
+    - `GATE_WIEGAND_TCP_PORT=<port>`
+    - `GATE_WIEGAND_TCP_PAYLOAD_FORMAT=json` (или `payload_hex`, `fc_cn`)
+    - `GATE_WIEGAND_TCP_APPEND_NEWLINE=true` (по умолчанию)
+    - `GATE_WIEGAND_TCP_ENCODING=utf-8` (по умолчанию)
 
 ## 4. Проверка, что Gate-система в норме (до запуска backend)
 1. Запустите `Сервер GATE` и убедитесь, что он без ошибок.
@@ -69,7 +81,7 @@ py -3.12 -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
 ### 6.3 Команда открытия
 `POST /api/access/open`
 
-Если `GATE_WIEGAND_TRANSPORT=dry_run`, API должен вернуть успешный технический ответ без физического срабатывания точки прохода.
+Если `GATE_WIEGAND_TRANSPORT=dry_run`, API вернет успешный технический ответ без физического срабатывания точки прохода.
 
 ## 7. Что смотреть в Gate-программах во время теста
 - `GATE-Terminal`:
@@ -101,7 +113,7 @@ print("Access points:", gate_db.get_access_points())
 ## 9. Переход с dry-run на реальное открытие
 Переключать только после успешного сухого прогона и проверки с инженером на объекте:
 - в `.env` сменить `GATE_WIEGAND_TRANSPORT` на нужный режим интеграции (`http`),
-- заполнить `GATE_WIEGAND_HTTP_URL` и (при необходимости) `GATE_WIEGAND_HTTP_TOKEN`,
+- заполнить параметры выбранного транспорта (`GATE_WIEGAND_HTTP_*` или `GATE_WIEGAND_TCP_*`),
 - повторить тесты из разделов 6-7.
 
 ## 10. Важно по архитектуре

@@ -1,8 +1,8 @@
-﻿import { AuthResult, User } from '@/types';
+import { AuthResult, User } from '@/types';
 import { apiRequest } from '@/services/api/httpClient';
 import { setAccessToken } from '@/services/api/tokenStore';
 
-type LoginResponse = {
+type CompatLoginResponse = {
   success: boolean;
   user?: User;
   error?: string;
@@ -10,14 +10,46 @@ type LoginResponse = {
   requiresProfileCompletion?: boolean;
 };
 
+type BackendUser = {
+  id: number;
+  phone: string;
+  name?: string | null;
+  apartment?: string | null;
+  is_admin?: boolean;
+};
+
+type BackendTokenResponse = {
+  access_token: string;
+  token_type: string;
+  user: BackendUser;
+};
+
 let currentUser: User | null = null;
+
+const mapBackendUser = (user: BackendUser): User => ({
+  id: String(user.id),
+  login: user.phone,
+  fullName: user.name ?? '',
+  plotNumber: user.apartment ?? '',
+});
 
 export const apiAuthService = {
   async login(login: string, password: string): Promise<AuthResult> {
-    const result = await apiRequest<LoginResponse>('/auth/login', {
+    const result = await apiRequest<CompatLoginResponse | BackendTokenResponse>('/auth/login', {
       method: 'POST',
       body: { login, password },
     });
+
+    if ('token_type' in result && 'access_token' in result) {
+      const mappedUser = mapBackendUser(result.user);
+      setAccessToken(result.access_token);
+      currentUser = mappedUser;
+      return {
+        success: true,
+        user: mappedUser,
+        requiresProfileCompletion: !Boolean(mappedUser.fullName.trim()),
+      };
+    }
 
     if (result.success && result.access_token && result.user) {
       setAccessToken(result.access_token);

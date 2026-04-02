@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import socket
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -582,6 +584,63 @@ def _send_wiegand26(access_point_id: int, credential: dict[str, Any]) -> GateOpe
                 f"CN={credential['card_number']}, HEX={credential['wiegand_payload']}"
             ),
         )
+
+    if transport in {"tcp", "tcp_ip", "socket"}:
+        host = os.getenv("GATE_WIEGAND_TCP_HOST", "").strip()
+        raw_port = os.getenv("GATE_WIEGAND_TCP_PORT", "").strip()
+        if not host:
+            return GateOpenResponse(
+                success=False,
+                error_code="integration_unavailable",
+                message="GATE_WIEGAND_TCP_HOST is not configured",
+            )
+        if not raw_port:
+            return GateOpenResponse(
+                success=False,
+                error_code="integration_unavailable",
+                message="GATE_WIEGAND_TCP_PORT is not configured",
+            )
+
+        try:
+            port = int(raw_port)
+        except ValueError:
+            return GateOpenResponse(
+                success=False,
+                error_code="integration_unavailable",
+                message=f"Invalid GATE_WIEGAND_TCP_PORT: {raw_port}",
+            )
+
+        payload_format = os.getenv("GATE_WIEGAND_TCP_PAYLOAD_FORMAT", "json").strip().lower()
+        if payload_format == "json":
+            body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        elif payload_format in {"payload_hex", "hex"}:
+            body = str(credential["wiegand_payload"])
+        elif payload_format in {"fc_cn", "facility_card"}:
+            body = f"{credential['facility_code']}:{credential['card_number']}"
+        else:
+            return GateOpenResponse(
+                success=False,
+                error_code="transport_not_supported",
+                message=f"Unknown GATE_WIEGAND_TCP_PAYLOAD_FORMAT: {payload_format}",
+            )
+
+        append_newline = os.getenv("GATE_WIEGAND_TCP_APPEND_NEWLINE", "true").strip().lower() in {"1", "true", "yes", "on"}
+        encoding = os.getenv("GATE_WIEGAND_TCP_ENCODING", "utf-8").strip() or "utf-8"
+        wire_data = (body + ("\n" if append_newline else "")).encode(encoding)
+
+        try:
+            with socket.create_connection((host, port), timeout=timeout_seconds) as conn:
+                conn.sendall(wire_data)
+            return GateOpenResponse(
+                success=True,
+                message=f"Wiegand-26 sent via TCP to {host}:{port}",
+            )
+        except Exception as exc:
+            return GateOpenResponse(
+                success=False,
+                error_code="transport_error",
+                message=f"Wiegand TCP transport failed: {exc}",
+            )
 
     if transport != "http":
         return GateOpenResponse(success=False, error_code="transport_not_supported", message=f"Unknown transport: {transport}")

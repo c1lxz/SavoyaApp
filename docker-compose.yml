@@ -32,8 +32,20 @@ services:
       DEBUG: "false"
       GATE_REAL_INTEGRATION_ENABLED: "false"
       CLEANUP_INTERVAL_SECONDS: "60"
+      CORS_ALLOW_ORIGINS_JSON: '["http://localhost","http://127.0.0.1","http://localhost:80","http://127.0.0.1:80"]'
     ports:
       - "8000:8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: savoya_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
 
 volumes:
   pg_data:

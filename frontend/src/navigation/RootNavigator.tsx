@@ -8,7 +8,7 @@ import { CreatePassScreen } from '@/screens/CreatePassScreen';
 import { HomeScreen } from '@/screens/HomeScreen';
 import { MyPassesScreen } from '@/screens/MyPassesScreen';
 import { OpenBarrierScreen } from '@/screens/OpenBarrierScreen';
-import { ProfileSetupScreen } from '@/screens/ProfileSetupScreen';
+import { ProfileSetupWebScreen } from '@/screens/ProfileSetupWebScreen';
 import { WicketsScreen } from '@/screens/WicketsScreen';
 import { useAuthStore } from '@/store/authStore';
 import { theme } from '@/theme';
@@ -42,7 +42,7 @@ export const RootNavigator = () => {
       >
         {user ? (
           requiresProfileCompletion ? (
-            <Stack.Screen name="ProfileSetup" component={ProfileSetupScreen} />
+            <Stack.Screen name="ProfileSetup" component={ProfileSetupWebScreen} />
           ) : (
             <>
               <Stack.Screen name="Home" component={HomeScreen} />
