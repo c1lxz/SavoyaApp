@@ -3,7 +3,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from .utils.input_safety import (
+    normalize_full_name,
+    normalize_login,
+    normalize_password,
+    normalize_phone_key,
+    normalize_plot_number,
+    normalize_vehicle_number,
+)
 
 
 class MessageResponse(BaseModel):
@@ -21,6 +30,16 @@ class UserResponse(BaseModel):
 class LoginRequest(BaseModel):
     login: str
     password: str
+
+    @field_validator("login")
+    @classmethod
+    def validate_login(cls, value: str) -> str:
+        return normalize_login(value)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return normalize_password(value)
 
 
 class TokenResponse(BaseModel):
@@ -46,6 +65,21 @@ class CreateRequestRequest(BaseModel):
     is_courier: bool = False
     hours: int | None = Field(default=None, ge=1, le=24 * 365)
     plot_number: str | None = None
+
+    @field_validator("plot_number")
+    @classmethod
+    def validate_plot_number(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_plot_number(value)
+
+    @model_validator(mode="after")
+    def validate_key_value(self) -> "CreateRequestRequest":
+        if self.key_type == "Phone":
+            self.key_value = normalize_phone_key(self.key_value)
+        else:
+            self.key_value = normalize_vehicle_number(self.key_value)
+        return self
 
 
 class RequestResponse(BaseModel):
@@ -84,12 +118,49 @@ class CompatUpdateProfilePayload(BaseModel):
     fullName: str = Field(min_length=2, max_length=120)
     plotNumber: str | None = Field(default=None, max_length=20)
 
+    @field_validator("fullName")
+    @classmethod
+    def validate_full_name(cls, value: str) -> str:
+        return normalize_full_name(value)
+
+    @field_validator("plotNumber")
+    @classmethod
+    def validate_plot_number(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_plot_number(value)
+
+
+class CompatLoginPayload(BaseModel):
+    login: str
+    password: str
+
+    @field_validator("login")
+    @classmethod
+    def validate_login(cls, value: str) -> str:
+        return normalize_login(value)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return normalize_password(value)
+
 
 class CompatCreatePassPayload(BaseModel):
     carNumber: str
     plotNumber: str
     expiresAt: str | None
     isPermanent: bool
+
+    @field_validator("carNumber")
+    @classmethod
+    def validate_car_number(cls, value: str) -> str:
+        return normalize_vehicle_number(value)
+
+    @field_validator("plotNumber")
+    @classmethod
+    def validate_plot_number(cls, value: str) -> str:
+        return normalize_plot_number(value)
 
 
 class CompatPassItem(BaseModel):

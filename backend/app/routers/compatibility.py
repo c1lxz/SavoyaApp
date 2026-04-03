@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
@@ -13,6 +13,7 @@ from ..schemas import (
     CompatAuthResult,
     CompatCreatePassPayload,
     CompatGateActionResult,
+    CompatLoginPayload,
     CompatOpenActionRequest,
     CompatPassItem,
     CompatUpdateProfilePayload,
@@ -42,13 +43,17 @@ def _compat_user(user: User) -> CompatUser:
 
 
 @router.post("/auth/login", response_model=CompatAuthResult)
-async def compat_login(payload: dict, session: AsyncSession = Depends(get_db_session)) -> CompatAuthResult:
-    login = str(payload.get("login", "")).strip()
-    password = str(payload.get("password", ""))
-    if not login or not password:
-        return CompatAuthResult(success=False, error=_INVALID_LOGIN_MESSAGE)
+async def compat_login(
+    payload: CompatLoginPayload,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+) -> CompatAuthResult:
+    client_ip = request.client.host if request.client else "unknown"
+    limiter = request.app.state.login_rate_limiter
+    if not limiter.is_allowed(f"compat:{client_ip}:{payload.login.lower()}"):
+        return CompatAuthResult(success=False, error="Too many login attempts")
 
-    user, token, error_code = await login_with_password(session, login, password)
+    user, token, error_code = await login_with_password(session, payload.login, payload.password)
     if error_code == "inactive_user":
         return CompatAuthResult(success=False, error="User is inactive")
     if user is None or token is None:
@@ -73,13 +78,9 @@ async def compat_update_profile(
     session: AsyncSession = Depends(get_db_session),
     user: User = Depends(get_current_user),
 ) -> CompatUser:
-    normalized_name = payload.fullName.strip()
-    if not normalized_name:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Full name is required")
-
-    user.name = normalized_name
+    user.name = payload.fullName
     if payload.plotNumber is not None:
-        user.plot_number = payload.plotNumber.strip()
+        user.plot_number = payload.plotNumber
     session.add(user)
     await session.commit()
     await session.refresh(user)
@@ -118,7 +119,7 @@ async def compat_create_pass(
 
     create_payload = CreateRequestRequest(
         key_type="VehicleNumber",
-        key_value=payload.carNumber.strip().upper(),
+        key_value=payload.carNumber,
         access_point_ids=settings.default_access_point_ids,
         is_permanent=payload.isPermanent,
         hours=None if payload.isPermanent else (hours or 24),

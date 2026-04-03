@@ -1,10 +1,9 @@
 const resolveDefaultApiBaseUrl = (): string => {
   if (typeof window !== 'undefined') {
-    const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-    return `${protocol}//${window.location.hostname}:8000`;
+    return `${window.location.origin}/api`;
   }
 
-  return 'http://localhost:8000';
+  return 'http://localhost:8000/api';
 };
 
 const normalizeApiBaseUrl = (value: string): string => {

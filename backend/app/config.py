@@ -17,6 +17,8 @@ class Settings(BaseSettings):
         '["http://localhost", "http://127.0.0.1", "http://localhost:80", "http://127.0.0.1:80", '
         '"http://localhost:8081", "http://127.0.0.1:8081", "http://localhost:19006", "http://127.0.0.1:19006"]'
     )
+    allowed_hosts_json: str = '["localhost", "127.0.0.1", "testserver"]'
+    docs_enabled: bool = False
 
     database_url: str = "postgresql+asyncpg://user:password@localhost:5432/gate_app"
 
@@ -30,6 +32,7 @@ class Settings(BaseSettings):
     demo_phone: str = "+70000000000"
     demo_full_name: str = "\u0414\u0435\u043c\u043e \u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c"
     demo_plot_number: str = "25"
+    bootstrap_demo_user: bool = True
 
     # Gate integration controls
     gate_real_integration_enabled: bool = False
@@ -42,6 +45,8 @@ class Settings(BaseSettings):
     courier_ttl_only_enabled: bool = True
     courier_default_hours: int = 2
     courier_max_hours: int = 12
+    login_rate_limit_attempts: int = 5
+    login_rate_limit_window_seconds: int = 300
 
     @property
     def gate_action_map(self) -> dict[str, int]:
@@ -56,6 +61,11 @@ class Settings(BaseSettings):
     @property
     def cors_allow_origins(self) -> list[str]:
         raw = json.loads(self.cors_allow_origins_json)
+        return [str(value).strip() for value in raw if str(value).strip()]
+
+    @property
+    def allowed_hosts(self) -> list[str]:
+        raw = json.loads(self.allowed_hosts_json)
         return [str(value).strip() for value in raw if str(value).strip()]
 
 

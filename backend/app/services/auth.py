@@ -21,6 +21,9 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 async def ensure_demo_user(session: AsyncSession) -> None:
+    if not settings.bootstrap_demo_user:
+        return
+
     query = await session.execute(select(User).where(User.login == settings.demo_login))
     user = query.scalar_one_or_none()
     if user is not None:

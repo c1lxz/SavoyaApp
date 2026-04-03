@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db_session
@@ -23,7 +23,12 @@ def _to_user_response(user: User) -> UserResponse:
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(payload: LoginRequest, session: AsyncSession = Depends(get_db_session)) -> TokenResponse:
+async def login(payload: LoginRequest, request: Request, session: AsyncSession = Depends(get_db_session)) -> TokenResponse:
+    client_ip = request.client.host if request.client else "unknown"
+    limiter = request.app.state.login_rate_limiter
+    if not limiter.is_allowed(f"api:{client_ip}:{payload.login.lower()}"):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many login attempts")
+
     user, token, error_code = await login_with_password(session, payload.login, payload.password)
     if error_code == "inactive_user":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Пользователь деактивирован")

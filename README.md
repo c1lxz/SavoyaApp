@@ -45,3 +45,11 @@ Bridge/VPS mode is removed.
 ## Full server runbook
 Detailed Russian instruction for launch and verification with Gate Server/Terminal/Commander:
 - [SERVER_RUNBOOK_RU.md](/e:/savoya/SavoyaApp/SERVER_RUNBOOK_RU.md)
+
+## MDB diagnostics runbook
+Separate Russian instruction for checking integration with main Gate `config.mdb`, logs, and error locations:
+- [CONFIG_MDB_CHECK_RUNBOOK_RU.md](/e:/savoya/SavoyaApp/CONFIG_MDB_CHECK_RUNBOOK_RU.md)
+
+## Nginx IP deploy
+Safe publication behind a single Nginx entry point with backend bound to localhost:
+- [NGINX_IP_DEPLOY_RU.md](/e:/savoya/SavoyaApp/NGINX_IP_DEPLOY_RU.md)
