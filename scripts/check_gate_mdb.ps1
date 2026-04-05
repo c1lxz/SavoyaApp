@@ -17,6 +17,14 @@ if ($Top -lt 1) {
     throw "Top must be >= 1"
 }
 
+$tempMdb = Join-Path ([System.IO.Path]::GetTempPath()) ("gate-config-copy-{0}.mdb" -f [System.Guid]::NewGuid().ToString("N"))
+try {
+    Copy-Item -LiteralPath $MdbPath -Destination $tempMdb -Force
+}
+catch {
+    throw "Failed to create temporary copy of config.mdb. Original file may be locked too aggressively or access is denied. Path: $MdbPath. Error: $($_.Exception.Message)"
+}
+
 $pythonScript = @'
 import json
 import os
@@ -58,10 +66,13 @@ conn.close()
 $tempPy = [System.IO.Path]::GetTempFileName()
 try {
     Set-Content -LiteralPath $tempPy -Value $pythonScript -Encoding UTF8
-    py -3.12 $tempPy $MdbPath $Top
+    py -3.12 $tempPy $tempMdb $Top
 }
 finally {
     if (Test-Path -LiteralPath $tempPy) {
         Remove-Item -LiteralPath $tempPy -Force
+    }
+    if (Test-Path -LiteralPath $tempMdb) {
+        Remove-Item -LiteralPath $tempMdb -Force
     }
 }
