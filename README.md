@@ -13,6 +13,9 @@
    - `DEBUG=False`
    - `GATE_REAL_INTEGRATION_ENABLED=True`
    - `GATE_MDB_PATH=C:/Gate/Server/config.mdb`
+   - `GATE_SYSTEMDB_PATH=C:/GATE/Server/Gate.mdw`
+   - `GATE_MDB_UID=YOUR_GATE_UID`
+   - `GATE_MDB_PWD=YOUR_GATE_PWD`
    - `GATE_WIEGAND_TRANSPORT=dry_run`
 4. Запустите backend:
    - `py -3.12 -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000`
@@ -49,12 +52,14 @@
 
 ### 2. Что должно быть установлено на Windows-сервере
 1. Python 3.12 с launcher `py`.
+   Для старого Jet/Access `*.mdb` диагностические скрипты по умолчанию запускают `py -3.12-32`.
 2. Python-зависимости backend:
    - `py -3.12 -m pip install -r backend/requirements.txt`
 3. `pyodbc` для диагностики MDB:
    - `py -3.12 -m pip install pyodbc`
 4. Microsoft Access Database Engine / ODBC driver для `*.mdb` / `*.accdb`.
    Без Access ODBC драйвера оба PowerShell-скрипта упадут на `pyodbc.connect(...)`.
+   Для старой базы Gate предпочтителен драйвер вида `Driver do Microsoft Access (*.mdb)` или `Microsoft Access Driver (*.mdb)`.
 
 ### 3. Какой `.env` нужен на сервере
 Минимальный рабочий пример:
@@ -70,6 +75,11 @@ DATABASE_URL=sqlite+aiosqlite:///./backend_test_local.db
 BOOTSTRAP_DEMO_USER=False
 GATE_REAL_INTEGRATION_ENABLED=True
 GATE_MDB_PATH=C:/GATE/Server/config.mdb
+GATE_SYSTEMDB_PATH=C:/GATE/Server/Gate.mdw
+GATE_MDB_UID=YOUR_GATE_UID
+GATE_MDB_PWD=YOUR_GATE_PWD
+GATE_ODBC_DRIVER=Driver do Microsoft Access (*.mdb)
+GATE_PYTHON_VERSION=-3.12-32
 GATE_ACTION_MAP_JSON={"entry":1,"exit":2,"wicket_north":3,"wicket_lake":4,"wicket_admin":5,"wicket_forest":6}
 DEFAULT_ACCESS_POINT_IDS_JSON=[1,2,3,4,5,6]
 GATE_WIEGAND_TRANSPORT=dry_run
@@ -79,6 +89,9 @@ EXPO_PUBLIC_API_BASE_URL=/api
 
 Примечания:
 - `GATE_MDB_PATH` должен указывать на реальный файл Gate именно на этом сервере.
+- `GATE_SYSTEMDB_PATH` должен указывать на `Gate.mdw`, который используется вместе с `config.mdb`.
+- `GATE_MDB_UID` и `GATE_MDB_PWD` нужны для диагностических `ps1`-скриптов, которые читают Gate MDB через ODBC.
+- `GATE_ODBC_DRIVER` и `GATE_PYTHON_VERSION` относятся только к диагностике; если текущие значения уже работают на сервере, их можно не менять.
 - Для первого запуска используйте `GATE_WIEGAND_TRANSPORT=dry_run`, чтобы приложение не пыталось физически открывать шлагбаум.
 - Замените `203.0.113.10` на реальный LAN/public IP сервера.
 
@@ -86,10 +99,10 @@ EXPO_PUBLIC_API_BASE_URL=/api
 Из корня проекта `E:\savoya\SavoyaApp` в `cmd.exe`:
 
 ```bat
-powershell -ExecutionPolicy Bypass -File scripts\check_gate_mdb.ps1 -MdbPath "C:\GATE\Server\config.mdb" -Top 10
+powershell -ExecutionPolicy Bypass -File scripts\check_gate_mdb.ps1 -MdbPath "C:\GATE\Server\config.mdb" -SystemDbPath "C:\GATE\Server\Gate.mdw" -Uid "YOUR_GATE_UID" -Pwd "YOUR_GATE_PWD" -Top 10
 ```
 
-Если `GATE_MDB_PATH` уже задан как системная или пользовательская переменная окружения, `-MdbPath` можно не указывать:
+Если `GATE_MDB_PATH`, `GATE_SYSTEMDB_PATH`, `GATE_MDB_UID` и `GATE_MDB_PWD` уже заданы как системные или пользовательские переменные окружения, можно оставить только `-Top`:
 
 ```bat
 powershell -ExecutionPolicy Bypass -File scripts\check_gate_mdb.ps1 -Top 10
@@ -108,7 +121,7 @@ powershell -ExecutionPolicy Bypass -File scripts\check_gate_mdb.ps1 -Top 10
 Поиск по фрагменту телефона:
 
 ```bat
-powershell -ExecutionPolicy Bypass -File scripts\find_gate_key.ps1 -Needle "9261234567" -MdbPath "C:\GATE\Server\config.mdb"
+powershell -ExecutionPolicy Bypass -File scripts\find_gate_key.ps1 -Needle "9261234567" -MdbPath "C:\GATE\Server\config.mdb" -SystemDbPath "C:\GATE\Server\Gate.mdw" -Uid "YOUR_GATE_UID" -Pwd "YOUR_GATE_PWD"
 ```
 
 Поиск по номеру машины или фрагменту значения карты:
@@ -116,6 +129,9 @@ powershell -ExecutionPolicy Bypass -File scripts\find_gate_key.ps1 -Needle "9261
 ```bat
 powershell -ExecutionPolicy Bypass -File scripts\find_gate_key.ps1 -Needle "A123AA"
 ```
+
+По умолчанию оба скрипта используют `py -3.12-32` и драйвер `Driver do Microsoft Access (*.mdb)`.
+Если на конкретном сервере нужны другие значения, переопределите их через `-PythonLauncher`, `-PythonVersion`, `-Driver` или одноимённые переменные окружения.
 
 Что должно появиться в выводе:
 - `=== Matching Keys ===` с найденными строками из `Keys`

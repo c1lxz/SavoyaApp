@@ -32,7 +32,8 @@ services:
       DEBUG: "false"
       GATE_REAL_INTEGRATION_ENABLED: "false"
       CLEANUP_INTERVAL_SECONDS: "60"
-      CORS_ALLOW_ORIGINS_JSON: '["http://localhost","http://127.0.0.1","http://localhost:80","http://127.0.0.1:80"]'
+      ALLOWED_HOSTS_JSON: '["xn--80aaachc8cmu1au8c1f.xn--p1ai","localhost","127.0.0.1","testserver"]'
+      CORS_ALLOW_ORIGINS_JSON: '["http://xn--80aaachc8cmu1au8c1f.xn--p1ai","https://xn--80aaachc8cmu1au8c1f.xn--p1ai","http://localhost","http://127.0.0.1","http://localhost:80","http://127.0.0.1:80"]'
     ports:
       - "8000:8000"
 
