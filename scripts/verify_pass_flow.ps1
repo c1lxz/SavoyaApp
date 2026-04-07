@@ -130,34 +130,32 @@ def pick_driver(preferred: str) -> str:
     raise RuntimeError("No compatible MDB ODBC driver was found.")
 
 
-LOOKALIKE_MAP = str.maketrans(
-    {
-        "A": "А",
-        "B": "В",
-        "C": "С",
-        "E": "Е",
-        "H": "Н",
-        "K": "К",
-        "M": "М",
-        "O": "О",
-        "P": "Р",
-        "T": "Т",
-        "X": "Х",
-        "Y": "У",
-        "А": "А",
-        "В": "В",
-        "С": "С",
-        "Е": "Е",
-        "Н": "Н",
-        "К": "К",
-        "М": "М",
-        "О": "О",
-        "Р": "Р",
-        "Т": "Т",
-        "Х": "Х",
-        "У": "У",
-    }
-)
+LOOKALIKE_MAP = {
+    "A": "\u0410",
+    "B": "\u0412",
+    "C": "\u0421",
+    "E": "\u0415",
+    "H": "\u041d",
+    "K": "\u041a",
+    "M": "\u041c",
+    "O": "\u041e",
+    "P": "\u0420",
+    "T": "\u0422",
+    "X": "\u0425",
+    "Y": "\u0423",
+    "\u0410": "\u0410",
+    "\u0412": "\u0412",
+    "\u0421": "\u0421",
+    "\u0415": "\u0415",
+    "\u041d": "\u041d",
+    "\u041a": "\u041a",
+    "\u041c": "\u041c",
+    "\u041e": "\u041e",
+    "\u0420": "\u0420",
+    "\u0422": "\u0422",
+    "\u0425": "\u0425",
+    "\u0423": "\u0423",
+}
 
 
 def normalize_digits(value) -> str:
@@ -170,7 +168,7 @@ def normalize_text(value) -> str:
     if value is None:
         return ""
     compact = re.sub(r"\s+", "", str(value).upper())
-    return compact.translate(LOOKALIKE_MAP)
+    return "".join(LOOKALIKE_MAP.get(ch, ch) for ch in compact)
 
 
 def parse_request_rows(sqlite_conn: sqlite3.Connection, top: int, needle: str | None):
@@ -333,7 +331,11 @@ else:
     for row in request_rows:
         print(f"RequestId: {row['id']}")
         print(f"BackendKey: type={row['key_type']} value={row['key_value']!r}")
-        print(f"BackendStatus: status={row['status']} gate_key_id={row['gate_key_id']} created_at={row['created_at']} expires_at={row['expires_at']}")
+        print(
+            "BackendStatus: "
+            f"status={row['status']} gate_key_id={row['gate_key_id']} "
+            f"created_at={row['created_at']} expires_at={row['expires_at']}"
+        )
         print(f"Resident: {row['resident_name'] or row['resident_login'] or row['resident_phone'] or ('user:' + str(row['resident_id']))}")
         print(f"Plot: {row['plot_number']}")
         print(f"AccessPointIds: {row['access_point_ids']}")
