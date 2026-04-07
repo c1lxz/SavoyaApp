@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from backend.app.scripts import gate_runtime
+
+
+def _parse_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _json_default(value):
+    if isinstance(value, datetime):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _call(action: str, payload: dict) -> object:
+    if action == "add_temporary_key":
+        return gate_runtime.add_temporary_key(
+            key_type=str(payload["key_type"]),
+            key_value=str(payload["key_value"]),
+            expires_at=_parse_datetime(str(payload["expires_at"])),
+            access_point_ids=[int(item) for item in payload["access_point_ids"]],
+        )
+    if action == "add_permanent_key":
+        return gate_runtime.add_permanent_key(
+            key_type=str(payload["key_type"]),
+            key_value=str(payload["key_value"]),
+            access_point_ids=[int(item) for item in payload["access_point_ids"]],
+            resident_name=str(payload.get("resident_name") or "Resident"),
+        )
+    if action == "remove_key":
+        return gate_runtime.remove_key(int(payload["key_id"]))
+    if action == "get_access_points":
+        return gate_runtime.get_access_points()
+    if action == "get_key_permissions":
+        return gate_runtime.get_key_permissions(str(payload["external_key_id"]))
+    if action == "get_wiegand_credentials":
+        return gate_runtime.get_wiegand_credentials(str(payload["external_key_id"]))
+    if action == "open_access_point":
+        return gate_runtime.open_access_point(
+            access_point_id=int(payload["access_point_id"]),
+            external_key_id=str(payload["external_key_id"]) if payload.get("external_key_id") is not None else None,
+        )
+    raise ValueError(f"Unsupported gate bridge action: {action}")
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print(json.dumps({"ok": False, "error": "Missing gate bridge action"}, ensure_ascii=False))
+        return 2
+
+    action = sys.argv[1]
+    payload = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
+
+    try:
+        result = _call(action, payload)
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        return 1
+
+    print(json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=_json_default))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

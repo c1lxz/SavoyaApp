@@ -42,6 +42,50 @@ def _compat_user(user: User) -> CompatUser:
     )
 
 
+def _infer_action_from_access_point_name(name: str) -> str | None:
+    value = (name or "").lower()
+    if "въезд" in value or "entry" in value:
+        return "entry"
+    if "выезд" in value or "exit" in value:
+        return "exit"
+    if "север" in value or "north" in value:
+        return "wicket_north"
+    if "озер" in value or "lake" in value:
+        return "wicket_lake"
+    if "админ" in value or "администрац" in value or "admin" in value:
+        return "wicket_admin"
+    if "лес" in value or "forest" in value:
+        return "wicket_forest"
+    return None
+
+
+def _runtime_gate_action_map() -> dict[str, int]:
+    configured = dict(settings.gate_action_map)
+    if not settings.gate_real_integration_enabled:
+        return configured
+
+    points = gate_client.get_access_points()
+    available_ids = {int(item["id"]) for item in points}
+    resolved = {action: point_id for action, point_id in configured.items() if point_id in available_ids}
+    for point in points:
+        action = _infer_action_from_access_point_name(str(point["name"]))
+        if action and action not in resolved:
+            resolved[action] = int(point["id"])
+    return resolved or configured
+
+
+def _runtime_default_access_point_ids() -> list[int]:
+    configured = list(settings.default_access_point_ids)
+    if not settings.gate_real_integration_enabled:
+        return configured
+
+    points = gate_client.get_access_points()
+    available_ids = {int(item["id"]) for item in points}
+    if configured and all(point_id in available_ids for point_id in configured):
+        return configured
+    return [int(item["id"]) for item in points] or configured
+
+
 @router.post("/auth/login", response_model=CompatAuthResult)
 async def compat_login(
     payload: CompatLoginPayload,
@@ -120,7 +164,7 @@ async def compat_create_pass(
     create_payload = CreateRequestRequest(
         key_type="VehicleNumber",
         key_value=payload.carNumber,
-        access_point_ids=settings.default_access_point_ids,
+        access_point_ids=_runtime_default_access_point_ids(),
         is_permanent=payload.isPermanent,
         hours=None if payload.isPermanent else (hours or 24),
         plot_number=payload.plotNumber,
@@ -164,7 +208,7 @@ async def compat_open_gate_action(
     session: AsyncSession = Depends(get_db_session),
     user: User = Depends(get_current_user),
 ) -> CompatGateActionResult:
-    access_point_id = settings.gate_action_map.get(payload.action)
+    access_point_id = _runtime_gate_action_map().get(payload.action)
     if access_point_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown action")
 

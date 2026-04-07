@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-import importlib
+import json
 import random
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from ..config import get_settings
 
 settings = get_settings()
-
-
-def _load_gate_db_module():
-    return importlib.import_module("gate_db")
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_GATE_BRIDGE_SCRIPT = _PROJECT_ROOT / "backend" / "app" / "scripts" / "gate_bridge.py"
 
 
 @dataclass
@@ -30,10 +30,47 @@ class GateClient:
         self._fallback_counter += 1
         return self._fallback_counter
 
+    def _run_bridge(self, action: str, payload: dict[str, Any] | None = None) -> Any:
+        command = [settings.gate_python_launcher]
+        if settings.gate_python_version:
+            command.append(settings.gate_python_version)
+        command.extend([str(_GATE_BRIDGE_SCRIPT), action, json.dumps(payload or {}, ensure_ascii=False)])
+
+        completed = subprocess.run(
+            command,
+            cwd=_PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=settings.gate_bridge_timeout_seconds,
+            check=False,
+        )
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+        if completed.returncode != 0:
+            message = stdout or stderr or f"Gate bridge failed with exit code {completed.returncode}"
+            raise RuntimeError(message)
+
+        try:
+            data = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Gate bridge returned invalid JSON: {stdout}") from exc
+
+        if not data.get("ok"):
+            raise RuntimeError(str(data.get("error") or "Gate bridge failed"))
+        return data.get("result")
+
     def add_temporary_key(self, key_type: str, key_value: str, expires_at: datetime, access_point_ids: list[int]) -> int:
         if settings.gate_real_integration_enabled:
-            module = _load_gate_db_module()
-            return int(module.add_temporary_key(key_type, key_value, expires_at, access_point_ids))
+            result = self._run_bridge(
+                "add_temporary_key",
+                {
+                    "key_type": key_type,
+                    "key_value": key_value,
+                    "expires_at": expires_at.isoformat(),
+                    "access_point_ids": access_point_ids,
+                },
+            )
+            return int(result)
         return self._next_fallback_key_id()
 
     def add_permanent_key(
@@ -44,20 +81,27 @@ class GateClient:
         resident_name: str,
     ) -> int:
         if settings.gate_real_integration_enabled:
-            module = _load_gate_db_module()
-            return int(module.add_permanent_key(key_type, key_value, access_point_ids, resident_name))
+            result = self._run_bridge(
+                "add_permanent_key",
+                {
+                    "key_type": key_type,
+                    "key_value": key_value,
+                    "access_point_ids": access_point_ids,
+                    "resident_name": resident_name,
+                },
+            )
+            return int(result)
         return self._next_fallback_key_id()
 
     def remove_key(self, key_id: int) -> bool:
         if settings.gate_real_integration_enabled:
-            module = _load_gate_db_module()
-            return bool(module.remove_key(key_id))
+            return bool(self._run_bridge("remove_key", {"key_id": key_id}))
         return True
 
     def get_access_points(self) -> list[dict[str, Any]]:
         if settings.gate_real_integration_enabled:
-            module = _load_gate_db_module()
-            return list(module.get_access_points())
+            result = self._run_bridge("get_access_points")
+            return [dict(item) for item in result]
 
         action_map = settings.gate_action_map
         reverse_map = {value: key for key, value in action_map.items()}
@@ -68,15 +112,13 @@ class GateClient:
 
     def open_access_point(self, access_point_id: int, key_external_id: str | None = None) -> GateOpenResult:
         if settings.gate_real_integration_enabled:
-            module = _load_gate_db_module()
-            if not hasattr(module, "open_access_point"):
-                return GateOpenResult(
-                    success=False,
-                    code="integration_unavailable",
-                    message="GATE open command is not implemented in gate_db.py",
-                )
-
-            response = module.open_access_point(access_point_id=access_point_id, external_key_id=key_external_id)
+            response = self._run_bridge(
+                "open_access_point",
+                {
+                    "access_point_id": access_point_id,
+                    "external_key_id": key_external_id,
+                },
+            )
             return GateOpenResult(
                 success=bool(response.get("success")),
                 message=str(response.get("message", "")),

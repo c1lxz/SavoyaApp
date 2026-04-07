@@ -8,6 +8,7 @@
 1. Установите Python 3.12.
 2. Установите зависимости backend:
    - `py -3.12 -m pip install -r backend/requirements.txt`
+   - `py -3.12-32 -m pip install pyodbc python-dotenv`
 3. Заполните `.env`:
    - `DATABASE_URL=sqlite+aiosqlite:///./backend_prod.db`
    - `DEBUG=False`
@@ -56,7 +57,7 @@
 2. Python-зависимости backend:
    - `py -3.12 -m pip install -r backend/requirements.txt`
 3. `pyodbc` для диагностики MDB:
-   - `py -3.12 -m pip install pyodbc`
+   - `py -3.12-32 -m pip install pyodbc python-dotenv`
 4. Microsoft Access Database Engine / ODBC driver для `*.mdb` / `*.accdb`.
    Без Access ODBC драйвера оба PowerShell-скрипта упадут на `pyodbc.connect(...)`.
    Для старой базы Gate предпочтителен драйвер вида `Driver do Microsoft Access (*.mdb)` или `Microsoft Access Driver (*.mdb)`.
@@ -79,9 +80,10 @@ GATE_SYSTEMDB_PATH=C:/GATE/Server/Gate.mdw
 GATE_MDB_UID=YOUR_GATE_UID
 GATE_MDB_PWD=YOUR_GATE_PWD
 GATE_ODBC_DRIVER=Driver do Microsoft Access (*.mdb)
+GATE_PYTHON_LAUNCHER=py
 GATE_PYTHON_VERSION=-3.12-32
-GATE_ACTION_MAP_JSON={"entry":1,"exit":2,"wicket_north":3,"wicket_lake":4,"wicket_admin":5,"wicket_forest":6}
-DEFAULT_ACCESS_POINT_IDS_JSON=[1,2,3,4,5,6]
+GATE_ACTION_MAP_JSON={"entry":19,"exit":20,"wicket_north":15,"wicket_lake":23,"wicket_admin":17,"wicket_forest":21}
+DEFAULT_ACCESS_POINT_IDS_JSON=[15,17,19,20,21,23]
 GATE_WIEGAND_TRANSPORT=dry_run
 EXPO_PUBLIC_USE_REAL_API=true
 EXPO_PUBLIC_API_BASE_URL=/api
@@ -91,7 +93,7 @@ EXPO_PUBLIC_API_BASE_URL=/api
 - `GATE_MDB_PATH` должен указывать на реальный файл Gate именно на этом сервере.
 - `GATE_SYSTEMDB_PATH` должен указывать на `Gate.mdw`, который используется вместе с `config.mdb`.
 - `GATE_MDB_UID` и `GATE_MDB_PWD` нужны для диагностических `ps1`-скриптов, которые читают Gate MDB через ODBC.
-- `GATE_ODBC_DRIVER` и `GATE_PYTHON_VERSION` относятся только к диагностике; если текущие значения уже работают на сервере, их можно не менять.
+- `GATE_ODBC_DRIVER` и `GATE_PYTHON_VERSION` используются и диагностическими `ps1`, и backend bridge для работы с реальным `config.mdb`.
 - Для первого запуска используйте `GATE_WIEGAND_TRANSPORT=dry_run`, чтобы приложение не пыталось физически открывать шлагбаум.
 - Замените `203.0.113.10` на реальный LAN/public IP сервера.
 
@@ -109,11 +111,11 @@ powershell -ExecutionPolicy Bypass -File scripts\check_gate_mdb.ps1 -Top 10
 ```
 
 Что должно появиться в выводе:
-- `=== AccessPoints ===`
+- `=== Tables ===`
+- `=== Readers ===`
 - `=== Users ===`
-- `=== Keys ===`
-- `=== AccessPermissions ===`
-- `=== WiegandCredentials ===`
+- `=== AccessTable ===`
+- `=== AccessZones ===`
 
 Если в каком-то блоке выводится `ERROR: ...`, значит таблица отсутствует или схема реального `config.mdb` отличается от ожидаемой.
 
@@ -134,7 +136,7 @@ powershell -ExecutionPolicy Bypass -File scripts\find_gate_key.ps1 -Needle "A123
 Если на конкретном сервере нужны другие значения, переопределите их через `-PythonLauncher`, `-PythonVersion`, `-Driver` или одноимённые переменные окружения.
 
 Что должно появиться в выводе:
-- `=== Matching Keys ===` с найденными строками из `Keys`
+- `=== Matching Users ===` с найденными строками из `Users`
 - `=== Related Permissions ===` с точками доступа, привязанными к найденным пользователям
 
 ### 6. Как запустить backend на сервере
@@ -188,7 +190,7 @@ npm run web
 - `config.mdb not found`
   Проверьте `GATE_MDB_PATH` или передайте правильный путь через `-MdbPath`.
 - Ошибка импорта `pyodbc`
-  Установите пакет: `py -3.12 -m pip install pyodbc`.
+  Установите пакет: `py -3.12-32 -m pip install pyodbc python-dotenv`.
 - Ошибка ODBC-драйвера для Access
   Установите Microsoft Access Database Engine / Access ODBC driver.
 - `TrustedHostMiddleware` блокирует запросы

@@ -13,6 +13,8 @@ import { theme } from '@/theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ProfileSetup'>;
 
+const hasAtLeastTwoWords = (value: string) => value.trim().split(/\s+/).filter(Boolean).length >= 2;
+
 export const ProfileSetupScreen = ({ navigation }: Props) => {
   const user = useAuthStore((state) => state.user);
   const updateProfile = useAuthStore((state) => state.updateProfile);
@@ -25,8 +27,8 @@ export const ProfileSetupScreen = ({ navigation }: Props) => {
 
   const onSave = async () => {
     const normalized = fullName.trim();
-    if (normalized.length < 2) {
-      setFormError('Введите ФИО');
+    if (!hasAtLeastTwoWords(normalized)) {
+      setFormError('Введите фамилию и имя');
       return;
     }
 
@@ -41,16 +43,16 @@ export const ProfileSetupScreen = ({ navigation }: Props) => {
     <AppBackground>
       <SafeAreaView style={styles.safeArea}>
         <ScreenHeader title="Ваш профиль" />
-        <Text style={styles.description}>Заполните ФИО один раз. Дальше оно будет подставляться автоматически.</Text>
+        <Text style={styles.description}>Укажите фамилию и имя один раз. Отчество можно не заполнять.</Text>
 
         <View style={styles.form}>
           <AppInput
-            label="ФИО"
+            label="Фамилия и имя"
             icon="account"
             value={fullName}
             onChangeText={setFullName}
             autoCapitalize="words"
-            placeholder="Иванов Иван Иванович"
+            placeholder="Иванов Иван"
           />
           <AppInput
             label="Номер участка"

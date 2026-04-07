@@ -6,6 +6,7 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./backend_test.db"
 os.environ["GATE_OPEN_SUCCESS_RATE"] = "1.0"
 os.environ["GATE_REAL_INTEGRATION_ENABLED"] = "False"
 os.environ["DEBUG"] = "False"
+os.environ["BOOTSTRAP_DEMO_USER"] = "True"
 
 import pytest
 from fastapi.testclient import TestClient

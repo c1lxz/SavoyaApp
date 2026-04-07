@@ -26,20 +26,18 @@ async def ensure_demo_user(session: AsyncSession) -> None:
 
     query = await session.execute(select(User).where(User.login == settings.demo_login))
     user = query.scalar_one_or_none()
-    if user is not None:
-        return
+    if user is None:
+        user = User(login=settings.demo_login)
+        session.add(user)
 
-    demo = User(
-        phone=settings.demo_phone,
-        name=settings.demo_full_name,
-        apartment=settings.demo_plot_number,
-        is_admin=False,
-        is_active=True,
-        login=settings.demo_login,
-        password_hash=hash_password(settings.demo_password),
-        plot_number=settings.demo_plot_number,
-    )
-    session.add(demo)
+    user.phone = settings.demo_phone
+    user.name = settings.demo_full_name
+    user.apartment = settings.demo_plot_number
+    user.is_admin = False
+    user.is_active = True
+    user.login = settings.demo_login
+    user.password_hash = hash_password(settings.demo_password)
+    user.plot_number = settings.demo_plot_number
     await session.commit()
 
 

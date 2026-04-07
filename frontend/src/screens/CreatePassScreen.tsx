@@ -1,4 +1,4 @@
-﻿import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -10,12 +10,21 @@ import { AppButton } from '@/components/AppButton';
 import { AppInput } from '@/components/AppInput';
 import { ScreenHeader } from '@/components/ScreenHeader';
 import { RootStackParamList } from '@/navigation/types';
+import { loadCreatePassDraft, saveCreatePassDraft } from '@/services/formMemory';
 import { useAuthStore } from '@/store/authStore';
 import { usePassesStore } from '@/store/passesStore';
 import { theme } from '@/theme';
 import { formatDate, toIsoDate } from '@/utils/date';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CreatePass'>;
+
+const hasAtLeastTwoWords = (value: string) => value.trim().split(/\s+/).filter(Boolean).length >= 2;
+
+const renderClearButton = (onPress: () => void) => (
+  <Pressable onPress={onPress} hitSlop={8}>
+    <MaterialCommunityIcons name="close-circle-outline" size={24} color={theme.colors.textSecondary} />
+  </Pressable>
+);
 
 export const CreatePassScreen = ({ navigation }: Props) => {
   const user = useAuthStore((state) => state.user);
@@ -33,8 +42,41 @@ export const CreatePassScreen = ({ navigation }: Props) => {
   const [dateInput, setDateInput] = useState(formatDate(new Date().toISOString()));
   const [showPicker, setShowPicker] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [draftLoaded, setDraftLoaded] = useState(false);
 
   const dateLabel = useMemo(() => formatDate(expiresAt.toISOString()), [expiresAt]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const restoreDraft = async () => {
+      const draft = await loadCreatePassDraft(user?.id);
+      if (isCancelled) {
+        return;
+      }
+
+      setFullName(draft.residentName || user?.fullName || '');
+      setCarNumber(draft.carNumber);
+      setDraftLoaded(true);
+    };
+
+    void restoreDraft();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [user?.fullName, user?.id]);
+
+  useEffect(() => {
+    if (!draftLoaded) {
+      return;
+    }
+
+    void saveCreatePassDraft(user?.id, {
+      residentName: fullName,
+      carNumber,
+    });
+  }, [carNumber, draftLoaded, fullName, user?.id]);
 
   const parseRuDate = (value: string): Date | null => {
     const match = value.trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
@@ -95,8 +137,8 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     const normalizedPlotNumber = plotNumber.trim();
     const parsedDate = parseRuDate(dateInput);
 
-    if (!normalizedFullName || normalizedFullName.length < 2) {
-      setFormError('Введите ФИО');
+    if (!normalizedFullName || !hasAtLeastTwoWords(normalizedFullName)) {
+      setFormError('Введите фамилию и имя');
       return;
     }
 
@@ -130,7 +172,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     if (user && (normalizedFullName !== user.fullName || normalizedPlotNumber !== user.plotNumber)) {
       const saved = await updateProfile(normalizedFullName, normalizedPlotNumber);
       if (!saved) {
-        setFormError('Не удалось сохранить ФИО');
+        setFormError('Не удалось сохранить фамилию и имя');
         return;
       }
     }
@@ -154,12 +196,13 @@ export const CreatePassScreen = ({ navigation }: Props) => {
 
         <View style={styles.form}>
           <AppInput
-            label="ФИО"
+            label="Фамилия и имя"
             icon="account"
             value={fullName}
             onChangeText={setFullName}
             autoCapitalize="words"
-            placeholder="Иванов Иван Иванович"
+            placeholder="Иванов Иван"
+            rightSlot={fullName ? renderClearButton(() => setFullName('')) : null}
           />
 
           <AppInput
@@ -168,9 +211,16 @@ export const CreatePassScreen = ({ navigation }: Props) => {
             value={carNumber}
             onChangeText={setCarNumber}
             autoCapitalize="characters"
+            rightSlot={carNumber ? renderClearButton(() => setCarNumber('')) : null}
           />
 
-          <AppInput label="Номер участка" icon="home" value={plotNumber} onChangeText={setPlotNumber} keyboardType="number-pad" />
+          <AppInput
+            label="Номер участка"
+            icon="home"
+            value={plotNumber}
+            onChangeText={setPlotNumber}
+            keyboardType="number-pad"
+          />
 
           <View style={[styles.dateWrap, isPermanent && styles.dateDisabled]}>
             <Text style={styles.dateLabel}>Дата окончания</Text>
@@ -186,8 +236,17 @@ export const CreatePassScreen = ({ navigation }: Props) => {
                 keyboardType="number-pad"
                 maxLength={10}
               />
-              <Pressable onPress={() => setShowPicker(true)} disabled={isPermanent} hitSlop={8} style={styles.calendarButton}>
-                <MaterialCommunityIcons name="calendar-month-outline" size={24} color={theme.colors.textSecondary} />
+              <Pressable
+                onPress={() => setShowPicker(true)}
+                disabled={isPermanent}
+                hitSlop={8}
+                style={styles.calendarButton}
+              >
+                <MaterialCommunityIcons
+                  name="calendar-month-outline"
+                  size={24}
+                  color={theme.colors.textSecondary}
+                />
               </Pressable>
             </View>
           </View>
@@ -200,7 +259,11 @@ export const CreatePassScreen = ({ navigation }: Props) => {
           {formError ? <Text style={styles.error}>{formError}</Text> : null}
           {createError ? <Text style={styles.error}>{createError}</Text> : null}
 
-          <AppButton title="Создать пропуск" onPress={onCreate} loading={createState === 'loading' || profileState === 'loading'} />
+          <AppButton
+            title="Создать пропуск"
+            onPress={onCreate}
+            loading={createState === 'loading' || profileState === 'loading'}
+          />
         </View>
 
         {showPicker ? (

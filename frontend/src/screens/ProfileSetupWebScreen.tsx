@@ -14,15 +14,16 @@ import { theme } from '@/theme';
 type Props = NativeStackScreenProps<RootStackParamList, 'ProfileSetup'>;
 
 const TEXT = {
-  requiredName: '\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0424\u0418\u041e',
-  title: '\u0412\u0430\u0448 \u043f\u0440\u043e\u0444\u0438\u043b\u044c',
-  description:
-    '\u0417\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u0424\u0418\u041e \u043e\u0434\u0438\u043d \u0440\u0430\u0437. \u0414\u0430\u043b\u044c\u0448\u0435 \u043e\u043d\u043e \u0431\u0443\u0434\u0435\u0442 \u043f\u043e\u0434\u0441\u0442\u0430\u0432\u043b\u044f\u0442\u044c\u0441\u044f \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438.',
-  fullNameLabel: '\u0424\u0418\u041e',
-  fullNamePlaceholder: '\u0418\u0432\u0430\u043d\u043e\u0432 \u0418\u0432\u0430\u043d \u0418\u0432\u0430\u043d\u043e\u0432\u0438\u0447',
-  plotLabel: '\u041d\u043e\u043c\u0435\u0440 \u0443\u0447\u0430\u0441\u0442\u043a\u0430',
-  save: '\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c',
+  requiredName: 'Введите фамилию и имя',
+  title: 'Ваш профиль',
+  description: 'Укажите фамилию и имя один раз. Отчество можно не заполнять.',
+  fullNameLabel: 'Фамилия и имя',
+  fullNamePlaceholder: 'Иванов Иван',
+  plotLabel: 'Номер участка',
+  save: 'Сохранить',
 } as const;
+
+const hasAtLeastTwoWords = (value: string) => value.trim().split(/\s+/).filter(Boolean).length >= 2;
 
 export const ProfileSetupWebScreen = ({ navigation }: Props) => {
   const user = useAuthStore((state) => state.user);
@@ -36,7 +37,7 @@ export const ProfileSetupWebScreen = ({ navigation }: Props) => {
 
   const onSave = async () => {
     const normalized = fullName.trim();
-    if (normalized.length < 2) {
+    if (!hasAtLeastTwoWords(normalized)) {
       setFormError(TEXT.requiredName);
       return;
     }

@@ -13,7 +13,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 if (-not $Needle) {
-    throw "Pass -Needle with phone digits or vehicle number fragment."
+    throw "Pass -Needle with phone digits, car number, card fragment, or resident name."
 }
 
 if (-not $MdbPath) {
@@ -85,75 +85,108 @@ def pick_driver(preferred: str) -> str:
         return preferred
     raise RuntimeError("No compatible MDB ODBC driver was found.")
 
+
+def normalize_digits(value) -> str:
+    if value is None:
+        return ""
+    return "".join(ch for ch in str(value) if ch.isdigit())
+
+
+def normalize_text(value) -> str:
+    if value is None:
+        return ""
+    return re.sub(r"\s+", "", str(value).upper())
+
+
 driver = pick_driver(preferred_driver)
 conn = pyodbc.connect(
     f"DRIVER={{{driver}}};DBQ={mdb_path};SystemDB={systemdb_path};UID={uid};PWD={pwd}"
 )
 cur = conn.cursor()
 
-needle_digits = "".join(ch for ch in needle if ch.isdigit())
-needle_upper = re.sub(r"\s+", "", needle.upper())
+needle_digits = normalize_digits(needle)
+needle_upper = normalize_text(needle)
 
-sql = f"""
-SELECT TOP {top}
-    k.id,
-    k.user_id,
-    k.key_type,
-    k.key_value,
-    k.valid_from,
-    k.valid_to,
-    k.is_blocked,
-    u.last_name,
-    u.first_name
-FROM Keys k
-LEFT JOIN Users u ON u.id = k.user_id
-ORDER BY k.id DESC
-"""
+users = cur.execute(
+    f"""
+    SELECT TOP {top * 50}
+        UserPtr,
+        Phone,
+        Number,
+        NumberU,
+        NumberMifare,
+        LastName,
+        FirstName,
+        Visitor,
+        Deleted,
+        UseExpiry,
+        ExpiryDate,
+        ExpiryTime
+    FROM Users
+    ORDER BY UserPtr DESC
+    """
+).fetchall()
 
-rows = cur.execute(sql).fetchall()
 matches = []
-for row in rows:
-    key_value = "" if row.key_value is None else str(row.key_value)
-    key_digits = "".join(ch for ch in key_value if ch.isdigit())
-    key_upper = re.sub(r"\s+", "", key_value.upper())
+for row in users:
+    fields = [row.Phone, row.Number, row.NumberU, row.NumberMifare, row.LastName, row.FirstName]
+    normalized_digits = [normalize_digits(item) for item in fields]
+    normalized_text = [normalize_text(item) for item in fields]
 
-    if needle_digits and needle_digits in key_digits:
+    if needle_digits and any(needle_digits in item for item in normalized_digits if item):
         matches.append(row)
         continue
-    if needle_upper and needle_upper in key_upper:
+    if needle_upper and any(needle_upper in item for item in normalized_text if item):
         matches.append(row)
 
-print("=== Matching Keys ===")
+print("=== Matching Users ===")
 if not matches:
     print("(no rows)")
 else:
-    for row in matches:
+    for row in matches[:top]:
         print(tuple(row))
 
 print()
-print("=== Related Permissions ===")
+print("=== Related Access ===")
 if not matches:
     print("(no rows)")
 else:
-    user_ids = sorted({int(row.user_id) for row in matches if row.user_id is not None})
-    if not user_ids:
-        print("(no rows)")
-    else:
-        placeholders = ", ".join(["?"] * len(user_ids))
-        perm_sql = f"""
-        SELECT TOP {top}
-            ap.id,
-            ap.user_id,
-            ap.access_point_id,
-            ap.is_permanent,
-            p.name
-        FROM AccessPermissions ap
-        LEFT JOIN AccessPoints p ON p.id = ap.access_point_id
-        WHERE ap.user_id IN ({placeholders})
-        ORDER BY ap.id DESC
-        """
-        for row in cur.execute(perm_sql, user_ids).fetchall():
-            print(tuple(row))
+    seen = set()
+    for row in matches[:top]:
+        user_ptr = int(row.UserPtr)
+        if user_ptr in seen:
+            continue
+        seen.add(user_ptr)
+        print(f"-- UserPtr={user_ptr} --")
+        perms = cur.execute(
+            f"""
+            SELECT TOP {top}
+                a.UserPtr,
+                a.RdrPtr,
+                r.Name,
+                a.Always,
+                a.Schedule1,
+                a.Schedule2,
+                a.Schedule3,
+                a.Schedule4,
+                a.Schedule5,
+                a.Schedule6,
+                a.Schedule7,
+                a.NoEntry,
+                a.NoExit
+            FROM AccessTable AS a
+            LEFT JOIN Readers AS r ON r.RdrPtr = a.RdrPtr
+            WHERE a.UserPtr = ?
+            ORDER BY a.RdrPtr
+            """,
+            user_ptr,
+        ).fetchall()
+        if not perms:
+            print("(no rows)")
+        else:
+            for perm in perms:
+                print(tuple(perm))
+        print()
 
 cur.close()
 conn.close()

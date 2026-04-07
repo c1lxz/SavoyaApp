@@ -51,7 +51,6 @@ catch {
 }
 
 $pythonScript = @'
-import json
 import sys
 
 import pyodbc
@@ -79,18 +78,34 @@ def pick_driver(preferred: str) -> str:
         return preferred
     raise RuntimeError("No compatible MDB ODBC driver was found.")
 
+
 driver = pick_driver(preferred_driver)
 conn = pyodbc.connect(
     f"DRIVER={{{driver}}};DBQ={mdb_path};SystemDB={systemdb_path};UID={uid};PWD={pwd}"
 )
 cur = conn.cursor()
 
+print("=== Tables ===")
+tables = []
+for row in cur.tables():
+    if str(getattr(row, "table_type", "")).upper() == "TABLE":
+        tables.append(str(row.table_name))
+for name in sorted(set(tables)):
+    print(name)
+print()
+
 queries = [
-    ("AccessPoints", f"SELECT TOP {top} id, name FROM AccessPoints ORDER BY id DESC"),
-    ("Users", f"SELECT TOP {top} id, last_name, first_name, is_visitor, created_at FROM Users ORDER BY id DESC"),
-    ("Keys", f"SELECT TOP {top} id, user_id, key_type, key_value, valid_from, valid_to, is_blocked FROM Keys ORDER BY id DESC"),
-    ("AccessPermissions", f"SELECT TOP {top} id, user_id, access_point_id, is_permanent FROM AccessPermissions ORDER BY id DESC"),
-    ("WiegandCredentials", f"SELECT TOP {top} id, key_id, user_id, access_point_id, facility_code, card_number, wiegand_payload, created_at FROM WiegandCredentials ORDER BY id DESC"),
+    ("Readers", f"SELECT TOP {top} RdrPtr, Name, DevPtr, Locked FROM Readers ORDER BY RdrPtr DESC"),
+    (
+        "Users",
+        f"SELECT TOP {top} UserPtr, Phone, Number, NumberU, NumberMifare, LastName, FirstName, Visitor, Deleted, UseExpiry, ExpiryDate, ExpiryTime FROM Users ORDER BY UserPtr DESC",
+    ),
+    (
+        "AccessTable",
+        f"SELECT TOP {top} a.UserPtr, a.RdrPtr, r.Name, a.Always, a.Schedule1, a.Schedule2, a.Schedule3, a.Schedule4, a.Schedule5, a.Schedule6, a.Schedule7, a.NoEntry, a.NoExit FROM AccessTable AS a LEFT JOIN Readers AS r ON r.RdrPtr = a.RdrPtr ORDER BY a.UserPtr DESC, a.RdrPtr DESC",
+    ),
+    ("AccessZones", f"SELECT TOP {top} ZonePtr, ZoneName FROM AccessZones ORDER BY ZonePtr DESC"),
+    ("KeyTypes", f"SELECT TOP {top} * FROM KeyTypes"),
 ]
 
 for title, sql in queries:
