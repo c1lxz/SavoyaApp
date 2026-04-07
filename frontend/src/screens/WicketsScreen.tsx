@@ -1,5 +1,5 @@
-﻿import React, { memo, useEffect } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { memo, useEffect } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -9,6 +9,7 @@ import { ScreenHeader } from '@/components/ScreenHeader';
 import { RootStackParamList } from '@/navigation/types';
 import { useGateStore } from '@/store/gateStore';
 import { theme } from '@/theme';
+import { getLayoutMetrics } from '@/utils/layout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Wickets'>;
 
@@ -32,6 +33,9 @@ const WicketActionButton = memo(({ title, onPress, disabled, icon }: WicketButto
 WicketActionButton.displayName = 'WicketActionButton';
 
 export const WicketsScreen = ({ navigation }: Props) => {
+  const { width, height } = useWindowDimensions();
+  const metrics = getLayoutMetrics(width, height);
+
   const gateState = useGateStore((state) => state.gateState);
   const result = useGateStore((state) => state.result);
   const error = useGateStore((state) => state.error);
@@ -50,51 +54,55 @@ export const WicketsScreen = ({ navigation }: Props) => {
   return (
     <AppBackground>
       <SafeAreaView style={styles.safeArea}>
-        <ScreenHeader title="Калитки" onBack={() => navigation.goBack()} />
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          <View style={[styles.panel, { maxWidth: metrics.formMaxWidth }]}>
+            <ScreenHeader title="Калитки" onBack={() => navigation.goBack()} />
 
-        <View style={styles.actions}>
-          <WicketActionButton
-            title="Калитка Северная (СНТ Пальмира)"
-            onPress={openWicketNorth}
-            disabled={isLoading}
-            icon={<MaterialCommunityIcons name="compass-outline" size={26} color={theme.colors.textPrimary} />}
-          />
-          <WicketActionButton
-            title="Калитка Озеро (СНТ Вартемяки)"
-            onPress={openWicketLake}
-            disabled={isLoading}
-            icon={<MaterialCommunityIcons name="waves" size={26} color={theme.colors.textPrimary} />}
-          />
-          <WicketActionButton
-            title="Калитка у администрации"
-            onPress={openWicketAdmin}
-            disabled={isLoading}
-            icon={<MaterialCommunityIcons name="office-building-marker-outline" size={26} color={theme.colors.textPrimary} />}
-          />
-          <WicketActionButton
-            title="Калитка Лес"
-            onPress={openWicketForest}
-            disabled={isLoading}
-            icon={<MaterialCommunityIcons name="tree-outline" size={26} color={theme.colors.textPrimary} />}
-          />
-        </View>
-
-        <View style={styles.feedback}>
-          {result ? (
-            <View style={styles.feedbackCard}>
-              <View style={styles.feedbackRow}>
-                <MaterialCommunityIcons
-                  name={result.success ? 'check-circle-outline' : 'alert-circle-outline'}
-                  size={22}
-                  color={result.success ? theme.colors.success : theme.colors.danger}
-                />
-                <Text style={[styles.feedbackText, !result.success && styles.feedbackError]}>{result.message}</Text>
-              </View>
+            <View style={[styles.actions, { gap: metrics.panelGap }]}>
+              <WicketActionButton
+                title="Калитка Северная (СНТ Пальмира)"
+                onPress={openWicketNorth}
+                disabled={isLoading}
+                icon={<MaterialCommunityIcons name="compass-outline" size={26} color={theme.colors.textPrimary} />}
+              />
+              <WicketActionButton
+                title="Калитка Озеро (СНТ Вартемяки)"
+                onPress={openWicketLake}
+                disabled={isLoading}
+                icon={<MaterialCommunityIcons name="waves" size={26} color={theme.colors.textPrimary} />}
+              />
+              <WicketActionButton
+                title="Калитка у администрации"
+                onPress={openWicketAdmin}
+                disabled={isLoading}
+                icon={<MaterialCommunityIcons name="office-building-marker-outline" size={26} color={theme.colors.textPrimary} />}
+              />
+              <WicketActionButton
+                title="Калитка Лес"
+                onPress={openWicketForest}
+                disabled={isLoading}
+                icon={<MaterialCommunityIcons name="tree-outline" size={26} color={theme.colors.textPrimary} />}
+              />
             </View>
-          ) : null}
 
-          {error ? <Text style={styles.feedbackError}>{error}</Text> : null}
-        </View>
+            <View style={styles.feedback}>
+              {result ? (
+                <View style={styles.feedbackCard}>
+                  <View style={styles.feedbackRow}>
+                    <MaterialCommunityIcons
+                      name={result.success ? 'check-circle-outline' : 'alert-circle-outline'}
+                      size={22}
+                      color={result.success ? theme.colors.success : theme.colors.danger}
+                    />
+                    <Text style={[styles.feedbackText, !result.success && styles.feedbackError]}>{result.message}</Text>
+                  </View>
+                </View>
+              ) : null}
+
+              {error ? <Text style={styles.feedbackError}>{error}</Text> : null}
+            </View>
+          </View>
+        </ScrollView>
       </SafeAreaView>
     </AppBackground>
   );
@@ -104,12 +112,18 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
+  scrollContent: {
+    flexGrow: 1,
+  },
+  panel: {
+    width: '100%',
+    alignSelf: 'center',
+  },
   actions: {
-    marginTop: 16,
-    gap: 10,
+    marginTop: 8,
   },
   wicketButton: {
-    minHeight: 90,
+    minHeight: 86,
     borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,

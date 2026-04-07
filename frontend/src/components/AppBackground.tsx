@@ -7,12 +7,21 @@ import { getLayoutMetrics } from '@/utils/layout';
 const BACKGROUND_IMAGE = require('../../assets/app-background.png');
 
 export const AppBackground = ({ children }: PropsWithChildren) => {
-  const { width } = useWindowDimensions();
-  const metrics = getLayoutMetrics(width);
+  const { width, height } = useWindowDimensions();
+  const metrics = getLayoutMetrics(width, height);
 
   return (
     <ImageBackground source={BACKGROUND_IMAGE} style={styles.background} resizeMode="cover">
-      <View style={[styles.overlay, { paddingHorizontal: metrics.horizontalPadding }]}>
+      <View
+        style={[
+          styles.overlay,
+          {
+            paddingHorizontal: metrics.horizontalPadding,
+            paddingTop: metrics.isCompactHeight ? 8 : 16,
+            paddingBottom: metrics.isCompactHeight ? 12 : 20,
+          },
+        ]}
+      >
         <View style={styles.vignette} />
         <View style={[styles.content, { maxWidth: metrics.contentMaxWidth }]}>{children}</View>
       </View>
@@ -28,7 +37,6 @@ const styles = StyleSheet.create({
   overlay: {
     flex: 1,
     backgroundColor: theme.colors.overlay,
-    paddingBottom: 20,
     alignItems: 'center',
   },
   content: {

@@ -1,7 +1,8 @@
-﻿import React from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import React from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { theme } from '@/theme';
+import { getLayoutMetrics } from '@/utils/layout';
 
 type AppButtonProps = {
   title: string;
@@ -20,19 +21,32 @@ const AppButtonComponent = ({
   variant = 'primary',
   leftIcon,
 }: AppButtonProps) => {
+  const { width, height } = useWindowDimensions();
+  const metrics = getLayoutMetrics(width, height);
+
   return (
     <Pressable
-      style={[styles.button, variant === 'card' ? styles.cardButton : styles.primaryButton, (disabled || loading) && styles.disabled]}
+      style={[
+        styles.button,
+        variant === 'card' ? styles.cardButton : styles.primaryButton,
+        { minHeight: metrics.buttonMinHeight },
+        (disabled || loading) && styles.disabled,
+      ]}
       onPress={onPress}
       disabled={disabled || loading}
     >
-      <View style={styles.content}>
+      <View
+        style={[
+          styles.content,
+          { paddingHorizontal: metrics.isCompactHeight ? theme.spacing.md : theme.spacing.lg },
+        ]}
+      >
         {loading ? (
           <ActivityIndicator color={theme.colors.textPrimary} />
         ) : (
           <View style={styles.row}>
             {leftIcon ? <View style={styles.iconWrap}>{leftIcon}</View> : null}
-            <Text style={styles.label}>{title}</Text>
+            <Text style={[styles.label, { fontSize: metrics.isCompactHeight ? 17 : 18 }]}>{title}</Text>
           </View>
         )}
       </View>
@@ -48,7 +62,6 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    minHeight: 70,
     justifyContent: 'center',
   },
   primaryButton: {
@@ -60,7 +73,6 @@ const styles = StyleSheet.create({
   content: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: theme.spacing.lg,
   },
   row: {
     flexDirection: 'row',
@@ -74,9 +86,9 @@ const styles = StyleSheet.create({
   },
   label: {
     color: theme.colors.textPrimary,
-    fontSize: 18,
     fontWeight: '600',
     letterSpacing: 0.2,
+    textAlign: 'center',
   },
   disabled: {
     opacity: 0.75,

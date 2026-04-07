@@ -1,5 +1,5 @@
-﻿import React, { useCallback, useMemo } from 'react';
-import { FlatList, StyleSheet, Text } from 'react-native';
+import React, { useCallback, useMemo } from 'react';
+import { FlatList, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -13,10 +13,14 @@ import { RootStackParamList } from '@/navigation/types';
 import { usePassesStore } from '@/store/passesStore';
 import { theme } from '@/theme';
 import { PassItem } from '@/types';
+import { getLayoutMetrics } from '@/utils/layout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'MyPasses'>;
 
 export const MyPassesScreen = ({ navigation }: Props) => {
+  const { width, height } = useWindowDimensions();
+  const metrics = getLayoutMetrics(width, height);
+
   const passes = usePassesStore((state) => state.passes);
   const loadMyPasses = usePassesStore((state) => state.loadMyPasses);
   const loadState = usePassesStore((state) => state.loadState);
@@ -35,22 +39,24 @@ export const MyPassesScreen = ({ navigation }: Props) => {
   return (
     <AppBackground>
       <SafeAreaView style={styles.safeArea}>
-        <ScreenHeader title="Мои пропуски" onBack={() => navigation.goBack()} />
+        <View style={[styles.content, { maxWidth: metrics.contentMaxWidth }]}>
+          <ScreenHeader title="Мои пропуски" onBack={() => navigation.goBack()} />
 
-        <FlatList
-          data={passes}
-          keyExtractor={keyExtractor}
-          renderItem={renderItem}
-          initialNumToRender={8}
-          maxToRenderPerBatch={8}
-          windowSize={7}
-          removeClippedSubviews
-          contentContainerStyle={styles.listContent}
-          ListEmptyComponent={emptyState}
-        />
+          <FlatList
+            data={passes}
+            keyExtractor={keyExtractor}
+            renderItem={renderItem}
+            initialNumToRender={8}
+            maxToRenderPerBatch={8}
+            windowSize={7}
+            removeClippedSubviews
+            contentContainerStyle={styles.listContent}
+            ListEmptyComponent={emptyState}
+          />
 
-        <LoadingOverlay visible={loadState === 'loading'} />
-        {loadError ? <Text style={styles.error}>{loadError}</Text> : null}
+          <LoadingOverlay visible={loadState === 'loading'} />
+          {loadError ? <Text style={styles.error}>{loadError}</Text> : null}
+        </View>
       </SafeAreaView>
     </AppBackground>
   );
@@ -59,6 +65,11 @@ export const MyPassesScreen = ({ navigation }: Props) => {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
+  },
+  content: {
+    flex: 1,
+    width: '100%',
+    alignSelf: 'center',
   },
   listContent: {
     paddingBottom: theme.spacing.xl,

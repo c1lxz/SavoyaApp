@@ -1,8 +1,9 @@
-﻿import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React from 'react';
+import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 
 import { theme } from '@/theme';
+import { getLayoutMetrics } from '@/utils/layout';
 
 type ScreenHeaderProps = {
   title: string;
@@ -10,8 +11,11 @@ type ScreenHeaderProps = {
 };
 
 export const ScreenHeader = ({ title, onBack }: ScreenHeaderProps) => {
+  const { width, height } = useWindowDimensions();
+  const metrics = getLayoutMetrics(width, height);
+
   return (
-    <View style={styles.root}>
+    <View style={[styles.root, { marginBottom: metrics.panelGap + 2 }]}>
       <View style={styles.topRow}>
         {onBack ? (
           <Pressable onPress={onBack} hitSlop={10}>
@@ -20,7 +24,9 @@ export const ScreenHeader = ({ title, onBack }: ScreenHeaderProps) => {
         ) : (
           <View style={styles.spacer} />
         )}
-        <Text style={styles.title}>{title}</Text>
+        <Text style={[styles.title, { fontSize: metrics.titleFontSize }]} numberOfLines={2}>
+          {title}
+        </Text>
         <View style={styles.spacer} />
       </View>
       <View style={styles.line} />
@@ -31,7 +37,6 @@ export const ScreenHeader = ({ title, onBack }: ScreenHeaderProps) => {
 const styles = StyleSheet.create({
   root: {
     paddingTop: theme.spacing.sm,
-    marginBottom: theme.spacing.lg,
   },
   topRow: {
     minHeight: 46,
@@ -39,11 +44,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 10,
+    gap: 12,
   },
   title: {
+    flex: 1,
     color: theme.colors.textPrimary,
-    fontSize: 24,
     fontWeight: '600',
+    textAlign: 'center',
   },
   spacer: {
     width: 34,
@@ -53,4 +60,3 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.border,
   },
 });
-

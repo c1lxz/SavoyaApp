@@ -1,5 +1,5 @@
-﻿import React, { memo, useEffect } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { memo, useEffect } from 'react';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -9,6 +9,7 @@ import { ScreenHeader } from '@/components/ScreenHeader';
 import { RootStackParamList } from '@/navigation/types';
 import { useGateStore } from '@/store/gateStore';
 import { theme } from '@/theme';
+import { getLayoutMetrics } from '@/utils/layout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'OpenBarrier'>;
 
@@ -23,11 +24,7 @@ const ENTRY_ICON = require('../../assets/barrier-entry.png');
 const EXIT_ICON = require('../../assets/barrier-exit.png');
 
 const BarrierActionButton = memo(({ title, onPress, disabled, iconSource }: BarrierButtonProps) => (
-  <Pressable
-    onPress={onPress}
-    disabled={disabled}
-    style={[styles.barrierButton, disabled && styles.barrierButtonDisabled]}
-  >
+  <Pressable onPress={onPress} disabled={disabled} style={[styles.barrierButton, disabled && styles.barrierButtonDisabled]}>
     <View style={styles.barrierRow}>
       <Image source={iconSource} style={styles.barrierIcon} resizeMode="contain" />
       <Text style={styles.barrierLabel}>{title}</Text>
@@ -37,6 +34,9 @@ const BarrierActionButton = memo(({ title, onPress, disabled, iconSource }: Barr
 BarrierActionButton.displayName = 'BarrierActionButton';
 
 export const OpenBarrierScreen = ({ navigation }: Props) => {
+  const { width, height } = useWindowDimensions();
+  const metrics = getLayoutMetrics(width, height);
+
   const gateState = useGateStore((state) => state.gateState);
   const result = useGateStore((state) => state.result);
   const error = useGateStore((state) => state.error);
@@ -53,29 +53,33 @@ export const OpenBarrierScreen = ({ navigation }: Props) => {
   return (
     <AppBackground>
       <SafeAreaView style={styles.safeArea}>
-        <ScreenHeader title="Открыть шлагбаум" onBack={() => navigation.goBack()} />
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          <View style={[styles.panel, { maxWidth: metrics.formMaxWidth }]}>
+            <ScreenHeader title="Открыть шлагбаум" onBack={() => navigation.goBack()} />
 
-        <View style={styles.actions}>
-          <BarrierActionButton title="Въезд" onPress={openEntry} disabled={isLoading} iconSource={ENTRY_ICON} />
-          <BarrierActionButton title="Выезд" onPress={openExit} disabled={isLoading} iconSource={EXIT_ICON} />
-        </View>
-
-        <View style={styles.feedback}>
-          {result ? (
-            <View style={styles.feedbackCard}>
-              <View style={styles.feedbackRow}>
-                <MaterialCommunityIcons
-                  name={result.success ? 'check-circle-outline' : 'alert-circle-outline'}
-                  size={22}
-                  color={result.success ? theme.colors.success : theme.colors.danger}
-                />
-                <Text style={[styles.feedbackText, !result.success && styles.feedbackError]}>{result.message}</Text>
-              </View>
+            <View style={[styles.actions, { gap: metrics.panelGap }]}>
+              <BarrierActionButton title="Въезд" onPress={openEntry} disabled={isLoading} iconSource={ENTRY_ICON} />
+              <BarrierActionButton title="Выезд" onPress={openExit} disabled={isLoading} iconSource={EXIT_ICON} />
             </View>
-          ) : null}
 
-          {error ? <Text style={styles.feedbackError}>{error}</Text> : null}
-        </View>
+            <View style={styles.feedback}>
+              {result ? (
+                <View style={styles.feedbackCard}>
+                  <View style={styles.feedbackRow}>
+                    <MaterialCommunityIcons
+                      name={result.success ? 'check-circle-outline' : 'alert-circle-outline'}
+                      size={22}
+                      color={result.success ? theme.colors.success : theme.colors.danger}
+                    />
+                    <Text style={[styles.feedbackText, !result.success && styles.feedbackError]}>{result.message}</Text>
+                  </View>
+                </View>
+              ) : null}
+
+              {error ? <Text style={styles.feedbackError}>{error}</Text> : null}
+            </View>
+          </View>
+        </ScrollView>
       </SafeAreaView>
     </AppBackground>
   );
@@ -85,12 +89,18 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
+  scrollContent: {
+    flexGrow: 1,
+  },
+  panel: {
+    width: '100%',
+    alignSelf: 'center',
+  },
   actions: {
-    marginTop: 24,
-    gap: 16,
+    marginTop: 8,
   },
   barrierButton: {
-    minHeight: 90,
+    minHeight: 86,
     borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
@@ -136,6 +146,7 @@ const styles = StyleSheet.create({
   feedbackText: {
     color: theme.colors.textPrimary,
     fontSize: 18,
+    flex: 1,
   },
   feedbackError: {
     color: theme.colors.danger,

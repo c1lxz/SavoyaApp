@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -15,6 +15,7 @@ import { useAuthStore } from '@/store/authStore';
 import { usePassesStore } from '@/store/passesStore';
 import { theme } from '@/theme';
 import { formatDate, toIsoDate } from '@/utils/date';
+import { getLayoutMetrics } from '@/utils/layout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CreatePass'>;
 
@@ -27,6 +28,9 @@ const renderClearButton = (onPress: () => void) => (
 );
 
 export const CreatePassScreen = ({ navigation }: Props) => {
+  const { width, height } = useWindowDimensions();
+  const metrics = getLayoutMetrics(width, height);
+
   const user = useAuthStore((state) => state.user);
   const updateProfile = useAuthStore((state) => state.updateProfile);
   const profileState = useAuthStore((state) => state.profileState);
@@ -100,7 +104,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     return parsed;
   };
 
-  const onDateChange = (event: DateTimePickerEvent, selectedDate?: Date) => {
+  const onDateChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
     if (Platform.OS === 'android') {
       setShowPicker(false);
     }
@@ -192,79 +196,83 @@ export const CreatePassScreen = ({ navigation }: Props) => {
   return (
     <AppBackground>
       <SafeAreaView style={styles.safeArea}>
-        <ScreenHeader title="Создание пропуска" onBack={() => navigation.goBack()} />
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          <View style={[styles.formWrap, { maxWidth: metrics.formMaxWidth }]}>
+            <ScreenHeader title="Создание пропуска" onBack={() => navigation.goBack()} />
 
-        <View style={styles.form}>
-          <AppInput
-            label="Фамилия и имя"
-            icon="account"
-            value={fullName}
-            onChangeText={setFullName}
-            autoCapitalize="words"
-            placeholder="Иванов Иван"
-            rightSlot={fullName ? renderClearButton(() => setFullName('')) : null}
-          />
-
-          <AppInput
-            label="Номер автомобиля"
-            icon="car"
-            value={carNumber}
-            onChangeText={setCarNumber}
-            autoCapitalize="characters"
-            rightSlot={carNumber ? renderClearButton(() => setCarNumber('')) : null}
-          />
-
-          <AppInput
-            label="Номер участка"
-            icon="home"
-            value={plotNumber}
-            onChangeText={setPlotNumber}
-            keyboardType="number-pad"
-          />
-
-          <View style={[styles.dateWrap, isPermanent && styles.dateDisabled]}>
-            <Text style={styles.dateLabel}>Дата окончания</Text>
-            <View style={styles.dateButton}>
-              <TextInput
-                value={dateInput}
-                onChangeText={onDateInputChange}
-                onBlur={onDateInputBlur}
-                editable={!isPermanent}
-                placeholder="ДД.ММ.ГГГГ"
-                placeholderTextColor={theme.colors.textMuted}
-                style={styles.dateValue}
-                keyboardType="number-pad"
-                maxLength={10}
+            <View style={[styles.form, { gap: metrics.panelGap }]}>
+              <AppInput
+                label="Фамилия и имя"
+                icon="account"
+                value={fullName}
+                onChangeText={setFullName}
+                autoCapitalize="words"
+                placeholder="Иванов Иван"
+                rightSlot={fullName ? renderClearButton(() => setFullName('')) : null}
               />
-              <Pressable
-                onPress={() => setShowPicker(true)}
-                disabled={isPermanent}
-                hitSlop={8}
-                style={styles.calendarButton}
-              >
-                <MaterialCommunityIcons
-                  name="calendar-month-outline"
-                  size={24}
-                  color={theme.colors.textSecondary}
-                />
+
+              <AppInput
+                label="Номер автомобиля"
+                icon="car"
+                value={carNumber}
+                onChangeText={setCarNumber}
+                autoCapitalize="characters"
+                rightSlot={carNumber ? renderClearButton(() => setCarNumber('')) : null}
+              />
+
+              <AppInput
+                label="Номер участка"
+                icon="home"
+                value={plotNumber}
+                onChangeText={setPlotNumber}
+                keyboardType="number-pad"
+              />
+
+              <View style={[styles.dateWrap, isPermanent && styles.dateDisabled]}>
+                <Text style={[styles.dateLabel, { fontSize: metrics.bodyFontSize }]}>Дата окончания</Text>
+                <View style={[styles.dateButton, { minHeight: metrics.isCompactHeight ? 56 : 62 }]}>
+                  <TextInput
+                    value={dateInput}
+                    onChangeText={onDateInputChange}
+                    onBlur={onDateInputBlur}
+                    editable={!isPermanent}
+                    placeholder="ДД.ММ.ГГГГ"
+                    placeholderTextColor={theme.colors.textMuted}
+                    style={styles.dateValue}
+                    keyboardType="number-pad"
+                    maxLength={10}
+                  />
+                  <Pressable
+                    onPress={() => setShowPicker(true)}
+                    disabled={isPermanent}
+                    hitSlop={8}
+                    style={styles.calendarButton}
+                  >
+                    <MaterialCommunityIcons
+                      name="calendar-month-outline"
+                      size={24}
+                      color={theme.colors.textSecondary}
+                    />
+                  </Pressable>
+                </View>
+              </View>
+
+              <Pressable style={styles.checkboxRow} onPress={() => setIsPermanent((prev) => !prev)}>
+                <View style={[styles.checkbox, isPermanent && styles.checkboxChecked]} />
+                <Text style={[styles.checkboxText, { fontSize: metrics.bodyFontSize }]}>Постоянный пропуск</Text>
               </Pressable>
+
+              {formError ? <Text style={styles.error}>{formError}</Text> : null}
+              {createError ? <Text style={styles.error}>{createError}</Text> : null}
+
+              <AppButton
+                title="Создать пропуск"
+                onPress={onCreate}
+                loading={createState === 'loading' || profileState === 'loading'}
+              />
             </View>
           </View>
-
-          <Pressable style={styles.checkboxRow} onPress={() => setIsPermanent((prev) => !prev)}>
-            <View style={[styles.checkbox, isPermanent && styles.checkboxChecked]} />
-            <Text style={styles.checkboxText}>Постоянный пропуск</Text>
-          </Pressable>
-
-          {formError ? <Text style={styles.error}>{formError}</Text> : null}
-          {createError ? <Text style={styles.error}>{createError}</Text> : null}
-
-          <AppButton
-            title="Создать пропуск"
-            onPress={onCreate}
-            loading={createState === 'loading' || profileState === 'loading'}
-          />
-        </View>
+        </ScrollView>
 
         {showPicker ? (
           <DateTimePicker
@@ -283,9 +291,14 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
-  form: {
-    gap: theme.spacing.md,
+  scrollContent: {
+    flexGrow: 1,
   },
+  formWrap: {
+    width: '100%',
+    alignSelf: 'center',
+  },
+  form: {},
   dateWrap: {
     gap: 8,
   },
@@ -294,11 +307,9 @@ const styles = StyleSheet.create({
   },
   dateLabel: {
     color: theme.colors.textSecondary,
-    fontSize: 18,
     marginLeft: 4,
   },
   dateButton: {
-    minHeight: 62,
     borderWidth: 1,
     borderColor: theme.colors.border,
     borderRadius: theme.radius.md,
@@ -310,7 +321,7 @@ const styles = StyleSheet.create({
   },
   dateValue: {
     color: theme.colors.textPrimary,
-    fontSize: 20,
+    fontSize: 19,
     flex: 1,
     paddingVertical: 0,
   },
@@ -335,7 +346,6 @@ const styles = StyleSheet.create({
   },
   checkboxText: {
     color: theme.colors.textSecondary,
-    fontSize: 18,
   },
   error: {
     color: theme.colors.danger,

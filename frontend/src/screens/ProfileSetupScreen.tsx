@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -10,12 +10,16 @@ import { ScreenHeader } from '@/components/ScreenHeader';
 import { RootStackParamList } from '@/navigation/types';
 import { useAuthStore } from '@/store/authStore';
 import { theme } from '@/theme';
+import { getLayoutMetrics } from '@/utils/layout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ProfileSetup'>;
 
 const hasAtLeastTwoWords = (value: string) => value.trim().split(/\s+/).filter(Boolean).length >= 2;
 
 export const ProfileSetupScreen = ({ navigation }: Props) => {
+  const { width, height } = useWindowDimensions();
+  const metrics = getLayoutMetrics(width, height);
+
   const user = useAuthStore((state) => state.user);
   const updateProfile = useAuthStore((state) => state.updateProfile);
   const profileState = useAuthStore((state) => state.profileState);
@@ -42,29 +46,35 @@ export const ProfileSetupScreen = ({ navigation }: Props) => {
   return (
     <AppBackground>
       <SafeAreaView style={styles.safeArea}>
-        <ScreenHeader title="Ваш профиль" />
-        <Text style={styles.description}>Укажите фамилию и имя один раз. Отчество можно не заполнять.</Text>
+        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          <View style={[styles.formWrap, { maxWidth: metrics.formMaxWidth }]}>
+            <ScreenHeader title="Ваш профиль" />
+            <Text style={[styles.description, { fontSize: metrics.bodyFontSize }]}>
+              Укажите фамилию и имя один раз. Отчество можно не заполнять.
+            </Text>
 
-        <View style={styles.form}>
-          <AppInput
-            label="Фамилия и имя"
-            icon="account"
-            value={fullName}
-            onChangeText={setFullName}
-            autoCapitalize="words"
-            placeholder="Иванов Иван"
-          />
-          <AppInput
-            label="Номер участка"
-            icon="home"
-            value={plotNumber}
-            onChangeText={setPlotNumber}
-            keyboardType="number-pad"
-          />
-          {formError ? <Text style={styles.error}>{formError}</Text> : null}
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-          <AppButton title="Сохранить" onPress={onSave} loading={profileState === 'loading'} />
-        </View>
+            <View style={[styles.form, { gap: metrics.panelGap }]}>
+              <AppInput
+                label="Фамилия и имя"
+                icon="account"
+                value={fullName}
+                onChangeText={setFullName}
+                autoCapitalize="words"
+                placeholder="Иванов Иван"
+              />
+              <AppInput
+                label="Номер участка"
+                icon="home"
+                value={plotNumber}
+                onChangeText={setPlotNumber}
+                keyboardType="number-pad"
+              />
+              {formError ? <Text style={styles.error}>{formError}</Text> : null}
+              {error ? <Text style={styles.error}>{error}</Text> : null}
+              <AppButton title="Сохранить" onPress={onSave} loading={profileState === 'loading'} />
+            </View>
+          </View>
+        </ScrollView>
       </SafeAreaView>
     </AppBackground>
   );
@@ -73,19 +83,22 @@ export const ProfileSetupScreen = ({ navigation }: Props) => {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    paddingTop: 8,
+  },
+  scrollContent: {
+    flexGrow: 1,
+  },
+  formWrap: {
+    width: '100%',
+    alignSelf: 'center',
   },
   description: {
     color: theme.colors.textSecondary,
     textAlign: 'center',
-    fontSize: 18,
     lineHeight: 24,
     marginTop: 12,
     marginBottom: 24,
   },
-  form: {
-    gap: theme.spacing.md,
-  },
+  form: {},
   error: {
     color: theme.colors.danger,
     fontSize: 16,
