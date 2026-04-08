@@ -5,6 +5,7 @@ export type User = {
   login: string;
   fullName: string;
   plotNumber: string;
+  phoneNumber?: string;
 };
 
 export type AuthResult = {
@@ -17,6 +18,7 @@ export type AuthResult = {
 export type CreatePassPayload = {
   carNumber: string;
   plotNumber: string;
+  phoneNumber: string;
   expiresAt: string | null;
   isPermanent: boolean;
 };
@@ -27,6 +29,7 @@ export type PassItem = {
   id: string;
   carNumber: string;
   plotNumber: string;
+  phoneNumber?: string | null;
   expiresAt: string | null;
   isPermanent: boolean;
   status: PassStatus;

@@ -27,6 +27,7 @@ def _call(action: str, payload: dict) -> object:
         return gate_runtime.add_temporary_key(
             key_type=str(payload["key_type"]),
             key_value=str(payload["key_value"]),
+            phone_number=str(payload["phone_number"]) if payload.get("phone_number") is not None else None,
             expires_at=_parse_datetime(str(payload["expires_at"])),
             access_point_ids=[int(item) for item in payload["access_point_ids"]],
         )
@@ -34,6 +35,7 @@ def _call(action: str, payload: dict) -> object:
         return gate_runtime.add_permanent_key(
             key_type=str(payload["key_type"]),
             key_value=str(payload["key_value"]),
+            phone_number=str(payload["phone_number"]) if payload.get("phone_number") is not None else None,
             access_point_ids=[int(item) for item in payload["access_point_ids"]],
             resident_name=str(payload.get("resident_name") or "Resident"),
         )

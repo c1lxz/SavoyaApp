@@ -41,7 +41,7 @@ async def _insert_active_request_without_key(user_id: int, access_point_id: int)
             Request(
                 resident_id=user_id,
                 key_type="VehicleNumber",
-                key_value=f"NOKEY{access_point_id}",
+                key_value=f"NOKEY{access_point_id}_{uuid4().hex[:6]}",
                 gate_key_id=None,
                 access_point_ids=[access_point_id],
                 is_permanent=True,

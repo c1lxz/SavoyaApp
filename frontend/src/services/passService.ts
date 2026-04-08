@@ -32,6 +32,7 @@ export const mockPassService: PassService = {
       id: Date.now().toString(36),
       carNumber: payload.carNumber.toUpperCase(),
       plotNumber: payload.plotNumber,
+      phoneNumber: payload.phoneNumber,
       expiresAt: payload.expiresAt,
       isPermanent: payload.isPermanent,
       createdAt: new Date().toISOString(),

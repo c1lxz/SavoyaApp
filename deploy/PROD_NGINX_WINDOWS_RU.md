@@ -79,6 +79,15 @@ curl http://127.0.0.1/
 curl http://xn--80aaachc8cmu1au8c1f.xn--p1ai/health
 ```
 
+Или готовым скриптом из репозитория:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\check_domain_setup.ps1
+```
+
+Важно: если домен не резолвится во внешний IP сервера, это не исправляется кодом приложения или `nginx`.
+Сначала должна существовать корректная DNS `A`-запись для `шлагбаумсавоя.рф`.
+
 ## 5. Что уже исправлено в backend под прод
 
 - активные битые заявки с `gate_key_id <= 0` автоматически помечаются как `cancelled` на старте

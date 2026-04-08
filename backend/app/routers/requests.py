@@ -18,6 +18,7 @@ def _to_response(item) -> RequestResponse:
         resident_id=item.resident_id,
         key_type=item.key_type,
         key_value=item.key_value,
+        phone_number=item.contact_phone,
         is_permanent=item.is_permanent,
         expires_at=item.expires_at,
         status=item.status,

@@ -22,6 +22,9 @@ const PassCardComponent = ({ item }: PassCardProps) => {
         <View style={styles.content}>
           <Text style={[styles.car, { fontSize: metrics.isCompactHeight ? 22 : 24 }]}>{item.carNumber}</Text>
           <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>Участок №{item.plotNumber}</Text>
+          {item.phoneNumber ? (
+            <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>Телефон: {item.phoneNumber}</Text>
+          ) : null}
           <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>
             {item.isPermanent ? 'Без срока' : `До ${item.expiresAt ? formatDate(item.expiresAt) : '-'}`}
           </Text>

@@ -332,6 +332,13 @@ def _normalize_optional_phone(value: Any) -> str:
     return "".join(ch for ch in str(value) if ch.isdigit())
 
 
+def _normalize_contact_phone(value: str | None) -> str | None:
+    if value is None:
+        return None
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    return digits or None
+
+
 def _normalize_optional_text(value: Any) -> str:
     if value is None:
         return ""
@@ -391,6 +398,7 @@ def _insert_real_user(
     *,
     key_type: str,
     normalized_key_value: str,
+    phone_number: str | None,
     resident_name: str,
     is_visitor: bool,
     expires_at: datetime | None,
@@ -414,7 +422,7 @@ def _insert_real_user(
     add("Number", identity.number)
     add("NumberU", identity.number_u)
     add("NumberMifare", identity.number_mifare)
-    add("Phone", identity.phone)
+    add("Phone", _normalize_contact_phone(phone_number) or identity.phone)
     add("LastName", last_name)
     add("FirstName", first_name)
     add("FatherName", father_name)
@@ -438,6 +446,7 @@ def _reactivate_real_user(
     user_ptr: int,
     key_type: str,
     normalized_key_value: str,
+    phone_number: str | None,
     resident_name: str,
     is_visitor: bool,
     expires_at: datetime | None,
@@ -464,6 +473,9 @@ def _reactivate_real_user(
     else:
         assignments.append("[Number] = ?")
         params.append(normalized_key_value)
+        if phone_number is not None:
+            assignments.append("[Phone] = ?")
+            params.append(_normalize_contact_phone(phone_number))
     if last_name is not None:
         assignments.append("[LastName] = ?")
         params.append(last_name)
@@ -618,6 +630,7 @@ def _upsert_real_user(
     *,
     key_type: str,
     normalized_key_value: str,
+    phone_number: str | None,
     resident_name: str,
     is_visitor: bool,
     expires_at: datetime | None,
@@ -641,6 +654,8 @@ def _upsert_real_user(
                 existing_user_ptr,
             ),
         )
+        if phone_number is not None and key_type != "Phone":
+            cursor.execute("UPDATE Users SET Phone = ? WHERE UserPtr = ?", (_normalize_contact_phone(phone_number), existing_user_ptr))
         _ensure_access_permissions(cursor, existing_user_ptr, access_point_ids)
         return existing_user_ptr
 
@@ -651,6 +666,7 @@ def _upsert_real_user(
             user_ptr=reusable_user_ptr,
             key_type=key_type,
             normalized_key_value=normalized_key_value,
+            phone_number=phone_number,
             resident_name=resident_name,
             is_visitor=is_visitor,
             expires_at=expires_at,
@@ -662,6 +678,7 @@ def _upsert_real_user(
         cursor,
         key_type=key_type,
         normalized_key_value=normalized_key_value,
+        phone_number=phone_number,
         resident_name=resident_name,
         is_visitor=is_visitor,
         expires_at=expires_at,
@@ -673,6 +690,7 @@ def _upsert_real_user(
 def add_permanent_key(
     key_type: str,
     key_value: str,
+    phone_number: str | None,
     access_point_ids: list[int],
     resident_name: str = "Resident",
 ) -> int:
@@ -684,6 +702,7 @@ def add_permanent_key(
             cursor,
             key_type=validated_key_type,
             normalized_key_value=normalized_key_value,
+            phone_number=phone_number,
             resident_name=resident_name,
             is_visitor=False,
             expires_at=None,
@@ -694,6 +713,7 @@ def add_permanent_key(
 def add_temporary_key(
     key_type: str,
     key_value: str,
+    phone_number: str | None,
     expires_at: datetime,
     access_point_ids: list[int],
 ) -> int:
@@ -710,6 +730,7 @@ def add_temporary_key(
             cursor,
             key_type=validated_key_type,
             normalized_key_value=normalized_key_value,
+            phone_number=phone_number,
             resident_name=normalized_key_value,
             is_visitor=True,
             expires_at=expires_at,

@@ -162,6 +162,24 @@ def test_create_request_rejects_duplicate_active_vehicle_number(client):
     assert second.json()["detail"]["code"] == "duplicate_request"
 
 
+def test_create_request_persists_contact_phone(client):
+    headers, _ = _create_user_and_login(client)
+    response = client.post(
+        "/api/requests/",
+        headers=headers,
+        json={
+            "key_type": "VehicleNumber",
+            "key_value": f"P{uuid4().hex[:6]}",
+            "phone_number": "+79991234567",
+            "access_point_ids": [1],
+            "is_permanent": True,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["phone_number"] == "+79991234567"
+
+
 def test_cleanup_broken_requests_cancels_invalid_gate_key_rows():
     login = f"cleanup_{uuid4().hex[:8]}"
     password = "demo123"

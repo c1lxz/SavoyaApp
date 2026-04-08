@@ -31,6 +31,7 @@ const mapBackendUser = (user: BackendUser): User => ({
   login: user.phone,
   fullName: user.name ?? '',
   plotNumber: user.apartment ?? '',
+  phoneNumber: user.phone ?? '',
 });
 
 export const apiAuthService = {

@@ -46,6 +46,7 @@ def _compat_user(user: User) -> CompatUser:
         login=user.login or "",
         fullName=user.name or "",
         plotNumber=user.plot_number or user.apartment or "",
+        phoneNumber=user.phone or "",
     )
 
 
@@ -146,6 +147,7 @@ def _to_compat_pass(item) -> CompatPassItem:
         id=str(item.id),
         carNumber=item.key_value,
         plotNumber=item.plot_number or "",
+        phoneNumber=item.contact_phone,
         expiresAt=expires,
         isPermanent=item.is_permanent,
         status=status,
@@ -171,6 +173,7 @@ async def compat_create_pass(
     create_payload = CreateRequestRequest(
         key_type="VehicleNumber",
         key_value=payload.carNumber,
+        phone_number=payload.phoneNumber,
         access_point_ids=_runtime_default_access_point_ids(),
         is_permanent=payload.isPermanent,
         hours=None if payload.isPermanent else (hours or 24),

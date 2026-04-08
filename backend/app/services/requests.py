@@ -64,6 +64,9 @@ async def ensure_requests_schema(session: AsyncSession) -> None:
     if "is_courier" not in columns:
         await session.execute(text("ALTER TABLE requests ADD COLUMN is_courier BOOLEAN NOT NULL DEFAULT 0"))
         await session.commit()
+    if "contact_phone" not in columns:
+        await session.execute(text("ALTER TABLE requests ADD COLUMN contact_phone VARCHAR(32) NULL"))
+        await session.commit()
 
 
 async def cleanup_broken_requests(session: AsyncSession) -> int:
@@ -178,6 +181,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
         gate_key_id = gate_client.add_permanent_key(
             key_type=payload.key_type,
             key_value=payload.key_value,
+            phone_number=payload.phone_number,
             access_point_ids=payload.access_point_ids,
             resident_name=user.name or user.login or "Resident",
         )
@@ -185,6 +189,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
         gate_key_id = gate_client.add_temporary_key(
             key_type=payload.key_type,
             key_value=payload.key_value,
+            phone_number=payload.phone_number,
             expires_at=expires_at,
             access_point_ids=payload.access_point_ids,
         )
@@ -203,6 +208,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
         access_point_ids=payload.access_point_ids,
         is_permanent=is_permanent,
         is_courier=payload.is_courier,
+        contact_phone=payload.phone_number,
         expires_at=expires_at,
         status="active",
         plot_number=payload.plot_number,

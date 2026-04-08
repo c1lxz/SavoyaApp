@@ -60,6 +60,7 @@ class OpenGateResponse(BaseModel):
 class CreateRequestRequest(BaseModel):
     key_type: Literal["Phone", "VehicleNumber"]
     key_value: str
+    phone_number: str | None = None
     access_point_ids: list[int] = Field(min_length=1)
     is_permanent: bool = False
     is_courier: bool = False
@@ -72,6 +73,13 @@ class CreateRequestRequest(BaseModel):
         if value is None:
             return None
         return normalize_plot_number(value)
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone_number(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_phone_key(value)
 
     @model_validator(mode="after")
     def validate_key_value(self) -> "CreateRequestRequest":
@@ -87,6 +95,7 @@ class RequestResponse(BaseModel):
     resident_id: int
     key_type: str
     key_value: str
+    phone_number: str | None = None
     is_permanent: bool
     expires_at: datetime | None
     status: str
@@ -104,6 +113,7 @@ class CompatUser(BaseModel):
     login: str
     fullName: str
     plotNumber: str
+    phoneNumber: str
 
 
 class CompatAuthResult(BaseModel):
@@ -149,6 +159,7 @@ class CompatLoginPayload(BaseModel):
 class CompatCreatePassPayload(BaseModel):
     carNumber: str
     plotNumber: str
+    phoneNumber: str
     expiresAt: str | None
     isPermanent: bool
 
@@ -162,11 +173,17 @@ class CompatCreatePassPayload(BaseModel):
     def validate_plot_number(cls, value: str) -> str:
         return normalize_plot_number(value)
 
+    @field_validator("phoneNumber")
+    @classmethod
+    def validate_phone_number(cls, value: str) -> str:
+        return normalize_phone_key(value)
+
 
 class CompatPassItem(BaseModel):
     id: str
     carNumber: str
     plotNumber: str
+    phoneNumber: str | None = None
     expiresAt: str | None
     isPermanent: bool
     status: Literal["active", "expired", "permanent"]

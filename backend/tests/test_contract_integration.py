@@ -18,6 +18,7 @@ def test_compat_login_success(client):
     data = response.json()
     assert data['success'] is True
     assert data['user']['login'] == 'demo'
+    assert 'phoneNumber' in data['user']
     assert isinstance(data['access_token'], str)
 
 
@@ -41,6 +42,7 @@ def test_passes_create_and_list(client):
         json={
             'carNumber': car_number,
             'plotNumber': '25',
+            'phoneNumber': '+79991234567',
             'expiresAt': None,
             'isPermanent': True,
         },
@@ -48,6 +50,7 @@ def test_passes_create_and_list(client):
     assert create_response.status_code == 200
     created = create_response.json()
     assert created['status'] == 'permanent'
+    assert created['phoneNumber'] == '+79991234567'
 
     list_response = client.get('/passes/my', headers=headers)
     assert list_response.status_code == 200
@@ -73,6 +76,7 @@ def test_temporary_pass_create_and_list_with_sqlite_datetimes(client):
         json={
             'carNumber': car_number,
             'plotNumber': '25',
+            'phoneNumber': '+79997654321',
             'expiresAt': expires_at,
             'isPermanent': False,
         },
@@ -81,6 +85,7 @@ def test_temporary_pass_create_and_list_with_sqlite_datetimes(client):
     created = create_response.json()
     assert created['status'] == 'active'
     assert created['expiresAt'] is not None
+    assert created['phoneNumber'] == '+79997654321'
 
     list_response = client.get('/passes/my', headers=headers)
     assert list_response.status_code == 200
@@ -100,6 +105,7 @@ def test_passes_create_rejects_duplicate_active_car_number(client):
         json={
             'carNumber': car_number,
             'plotNumber': '25',
+            'phoneNumber': '+79990000001',
             'expiresAt': None,
             'isPermanent': True,
         },
@@ -112,6 +118,7 @@ def test_passes_create_rejects_duplicate_active_car_number(client):
         json={
             'carNumber': car_number,
             'plotNumber': '25',
+            'phoneNumber': '+79990000002',
             'expiresAt': (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(),
             'isPermanent': False,
         },
@@ -128,7 +135,7 @@ def test_gate_open_action(client):
     client.post(
         '/passes',
         headers=headers,
-        json={'carNumber': 'B234CC', 'plotNumber': '25', 'expiresAt': None, 'isPermanent': True},
+        json={'carNumber': 'B234CC', 'plotNumber': '25', 'phoneNumber': '+79991112233', 'expiresAt': None, 'isPermanent': True},
     )
     response = client.post('/gates/open-action', headers=headers, json={'action': 'entry'})
     assert response.status_code == 200
@@ -232,6 +239,7 @@ def test_passes_create_returns_502_when_gate_returns_invalid_key_id(client):
             json={
                 'carNumber': f'F{uuid4().hex[:5]}'.upper(),
                 'plotNumber': '25',
+                'phoneNumber': '+79995554433',
                 'expiresAt': None,
                 'isPermanent': True,
             },

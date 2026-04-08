@@ -59,13 +59,21 @@ class GateClient:
             raise RuntimeError(str(data.get("error") or "Gate bridge failed"))
         return data.get("result")
 
-    def add_temporary_key(self, key_type: str, key_value: str, expires_at: datetime, access_point_ids: list[int]) -> int:
+    def add_temporary_key(
+        self,
+        key_type: str,
+        key_value: str,
+        phone_number: str | None,
+        expires_at: datetime,
+        access_point_ids: list[int],
+    ) -> int:
         if settings.gate_real_integration_enabled:
             result = self._run_bridge(
                 "add_temporary_key",
                 {
                     "key_type": key_type,
                     "key_value": key_value,
+                    "phone_number": phone_number,
                     "expires_at": expires_at.isoformat(),
                     "access_point_ids": access_point_ids,
                 },
@@ -77,6 +85,7 @@ class GateClient:
         self,
         key_type: str,
         key_value: str,
+        phone_number: str | None,
         access_point_ids: list[int],
         resident_name: str,
     ) -> int:
@@ -86,6 +95,7 @@ class GateClient:
                 {
                     "key_type": key_type,
                     "key_value": key_value,
+                    "phone_number": phone_number,
                     "access_point_ids": access_point_ids,
                     "resident_name": resident_name,
                 },

@@ -41,6 +41,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
   const [fullName, setFullName] = useState(user?.fullName ?? '');
   const [carNumber, setCarNumber] = useState('');
   const [plotNumber, setPlotNumber] = useState(user?.plotNumber ?? '');
+  const [phoneNumber, setPhoneNumber] = useState(user?.phoneNumber ?? '');
   const [isPermanent, setIsPermanent] = useState(false);
   const [expiresAt, setExpiresAt] = useState(new Date());
   const [dateInput, setDateInput] = useState(formatDate(new Date().toISOString()));
@@ -61,6 +62,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
 
       setFullName(draft.residentName || user?.fullName || '');
       setCarNumber(draft.carNumber);
+      setPhoneNumber(draft.phoneNumber || user?.phoneNumber || '');
       setDraftLoaded(true);
     };
 
@@ -79,8 +81,9 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     void saveCreatePassDraft(user?.id, {
       residentName: fullName,
       carNumber,
+      phoneNumber,
     });
-  }, [carNumber, draftLoaded, fullName, user?.id]);
+  }, [carNumber, draftLoaded, fullName, phoneNumber, user?.id, user?.phoneNumber]);
 
   const parseRuDate = (value: string): Date | null => {
     const match = value.trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
@@ -139,6 +142,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     const normalizedFullName = fullName.trim();
     const normalizedCarNumber = carNumber.trim().toUpperCase();
     const normalizedPlotNumber = plotNumber.trim();
+    const normalizedPhoneNumber = phoneNumber.trim();
     const parsedDate = parseRuDate(dateInput);
 
     if (!normalizedFullName || !hasAtLeastTwoWords(normalizedFullName)) {
@@ -166,6 +170,17 @@ export const CreatePassScreen = ({ navigation }: Props) => {
       return;
     }
 
+    if (!normalizedPhoneNumber) {
+      setFormError('Введите номер телефона');
+      return;
+    }
+
+    const phoneDigits = normalizedPhoneNumber.replace(/\D/g, '');
+    if (phoneDigits.length < 7 || phoneDigits.length > 15) {
+      setFormError('Проверьте номер телефона');
+      return;
+    }
+
     if (!isPermanent && !parsedDate) {
       setFormError('Введите дату в формате ДД.ММ.ГГГГ');
       return;
@@ -184,6 +199,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     const success = await createPass({
       carNumber: normalizedCarNumber,
       plotNumber: normalizedPlotNumber,
+      phoneNumber: normalizedPhoneNumber,
       expiresAt: isPermanent ? null : toIsoDate(parsedDate ?? expiresAt),
       isPermanent,
     });
@@ -226,6 +242,16 @@ export const CreatePassScreen = ({ navigation }: Props) => {
                 value={plotNumber}
                 onChangeText={setPlotNumber}
                 keyboardType="number-pad"
+              />
+
+              <AppInput
+                label="Номер телефона"
+                icon="phone"
+                value={phoneNumber}
+                onChangeText={setPhoneNumber}
+                keyboardType="phone-pad"
+                placeholder="+7 999 123-45-67"
+                rightSlot={phoneNumber ? renderClearButton(() => setPhoneNumber('')) : null}
               />
 
               <View style={[styles.dateWrap, isPermanent && styles.dateDisabled]}>

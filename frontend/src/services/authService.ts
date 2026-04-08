@@ -14,6 +14,7 @@ const DEMO_USER: User = {
   login: 'demo',
   fullName: 'Демо Пользователь',
   plotNumber: '25',
+  phoneNumber: '+70000000000',
 };
 
 let currentUser: User | null = null;

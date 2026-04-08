@@ -3,11 +3,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export type CreatePassDraft = {
   residentName: string;
   carNumber: string;
+  phoneNumber: string;
 };
 
 const EMPTY_DRAFT: CreatePassDraft = {
   residentName: '',
   carNumber: '',
+  phoneNumber: '',
 };
 
 const buildCreatePassDraftKey = (userId?: string | null) => `create-pass-draft:v1:${userId ?? 'anonymous'}`;
@@ -17,6 +19,7 @@ const normalizeDraft = (draft: Partial<CreatePassDraft>): CreatePassDraft => ({
   carNumber: String(draft.carNumber ?? '')
     .trim()
     .toUpperCase(),
+  phoneNumber: String(draft.phoneNumber ?? '').trim(),
 });
 
 export const loadCreatePassDraft = async (userId?: string | null): Promise<CreatePassDraft> => {
