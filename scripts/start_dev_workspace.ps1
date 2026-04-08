@@ -9,6 +9,8 @@ param(
     [int]$BackendPort = 8000,
     [string]$BackendPythonLauncher = "py",
     [string]$BackendPythonVersion = "-3.12",
+    [bool]$FrontendUseRealApi = $true,
+    [string]$FrontendApiBaseUrl = "",
     [string]$GatePythonLauncher = "py",
     [string]$GatePythonVersion = "-3.12-32"
 )
@@ -100,8 +102,31 @@ function Start-WorkspaceWindow {
         -ArgumentList @("-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $command) | Out-Null
 }
 
+function Resolve-FrontendApiBaseUrl {
+    param(
+        [Parameter(Mandatory = $true)][string]$ApiHost,
+        [Parameter(Mandatory = $true)][int]$Port,
+        [string]$ConfiguredBaseUrl
+    )
+
+    if ($ConfiguredBaseUrl) {
+        return $ConfiguredBaseUrl.Trim()
+    }
+
+    $apiHost = $ApiHost.Trim()
+    if ($apiHost -in @("0.0.0.0", "::", "[::]")) {
+        $apiHost = "127.0.0.1"
+    }
+
+    return "http://{0}:{1}/api" -f $apiHost, $Port
+}
+
 $resolvedRepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $frontendRoot = Join-Path $resolvedRepoRoot "frontend"
+$resolvedFrontendApiBaseUrl = Resolve-FrontendApiBaseUrl `
+    -ApiHost $BackendHost `
+    -Port $BackendPort `
+    -ConfiguredBaseUrl $FrontendApiBaseUrl
 
 if (-not (Test-Path -LiteralPath (Join-Path $resolvedRepoRoot ".git"))) {
     throw "Git repository not found: $resolvedRepoRoot"
@@ -176,6 +201,8 @@ $backendBody = @(
 )
 
 $frontendBody = @(
+    "`$env:EXPO_PUBLIC_USE_REAL_API = $(Quote-PowerShellLiteral -Value $FrontendUseRealApi.ToString().ToLower())",
+    "`$env:EXPO_PUBLIC_API_BASE_URL = $(Quote-PowerShellLiteral -Value $resolvedFrontendApiBaseUrl)",
     "if (-not (Test-Path -LiteralPath 'node_modules')) { npm install }",
     "npm run web"
 )
