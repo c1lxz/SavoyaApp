@@ -120,6 +120,18 @@ function Get-LocalIpv4Addresses {
     return @($addresses | Select-Object -Unique)
 }
 
+function Convert-ToJsonStringArrayLiteral {
+    param([string[]]$Values)
+
+    $escaped = @(
+        foreach ($value in @($Values | Where-Object { $_ })) {
+            '"' + ($value.Replace('\', '\\').Replace('"', '\"')) + '"'
+        }
+    )
+
+    return "[" + ($escaped -join ",") + "]"
+}
+
 function Resolve-FrontendApiBaseUrl {
     param(
         [Parameter(Mandatory = $true)][string]$ApiHost,
@@ -142,54 +154,54 @@ function Resolve-FrontendApiBaseUrl {
 function Build-BackendAllowedHostsJson {
     param([string]$PrimaryApiBaseUrl)
 
-    $hosts = New-Object System.Collections.Generic.List[string]
+    $hosts = @()
     foreach ($value in @("localhost", "127.0.0.1", "testserver", $env:COMPUTERNAME)) {
-        if ($value -and -not $hosts.Contains($value)) {
-            $hosts.Add($value)
+        if ($value -and $value -notin $hosts) {
+            $hosts += $value
         }
     }
 
     foreach ($ip in Get-LocalIpv4Addresses) {
-        if ($ip -and -not $hosts.Contains($ip)) {
-            $hosts.Add($ip)
+        if ($ip -and $ip -notin $hosts) {
+            $hosts += $ip
         }
     }
 
     if ($PrimaryApiBaseUrl) {
         try {
             $uri = [System.Uri]$PrimaryApiBaseUrl
-            if ($uri.Host -and -not $hosts.Contains($uri.Host)) {
-                $hosts.Add($uri.Host)
+            if ($uri.Host -and $uri.Host -notin $hosts) {
+                $hosts += $uri.Host
             }
         } catch {
             # Keep the default host list when the custom API URL is not a valid absolute URI.
         }
     }
 
-    return ($hosts | ConvertTo-Json -Compress)
+    return Convert-ToJsonStringArrayLiteral -Values $hosts
 }
 
 function Build-BackendCorsOriginsJson {
     param([string]$PrimaryApiBaseUrl)
 
-    $hosts = New-Object System.Collections.Generic.List[string]
+    $hosts = @()
     foreach ($value in @("localhost", "127.0.0.1", $env:COMPUTERNAME)) {
-        if ($value -and -not $hosts.Contains($value)) {
-            $hosts.Add($value)
+        if ($value -and $value -notin $hosts) {
+            $hosts += $value
         }
     }
 
     foreach ($ip in Get-LocalIpv4Addresses) {
-        if ($ip -and -not $hosts.Contains($ip)) {
-            $hosts.Add($ip)
+        if ($ip -and $ip -notin $hosts) {
+            $hosts += $ip
         }
     }
 
     if ($PrimaryApiBaseUrl) {
         try {
             $uri = [System.Uri]$PrimaryApiBaseUrl
-            if ($uri.Host -and -not $hosts.Contains($uri.Host)) {
-                $hosts.Add($uri.Host)
+            if ($uri.Host -and $uri.Host -notin $hosts) {
+                $hosts += $uri.Host
             }
         } catch {
             # Keep the default origin list when the custom API URL is not a valid absolute URI.
@@ -197,17 +209,17 @@ function Build-BackendCorsOriginsJson {
     }
 
     $ports = @($null, 80, 8081, 8082, 8083, 19006)
-    $origins = New-Object System.Collections.Generic.List[string]
+    $origins = @()
     foreach ($hostName in $hosts) {
         foreach ($port in $ports) {
             $origin = if ($null -eq $port) { "http://$hostName" } else { "http://{0}:{1}" -f $hostName, $port }
-            if (-not $origins.Contains($origin)) {
-                $origins.Add($origin)
+            if ($origin -notin $origins) {
+                $origins += $origin
             }
         }
     }
 
-    return ($origins | ConvertTo-Json -Compress)
+    return Convert-ToJsonStringArrayLiteral -Values $origins
 }
 
 $resolvedRepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
