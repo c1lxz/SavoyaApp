@@ -1,8 +1,55 @@
-let accessToken: string | null = null;
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export const setAccessToken = (token: string | null) => {
-  accessToken = token;
+const ACCESS_TOKEN_STORAGE_KEY = 'savoya:access-token:v1';
+
+let accessToken: string | null = null;
+let restorePromise: Promise<string | null> | null = null;
+
+const normalizeToken = (value: string | null | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
 };
 
-export const getAccessToken = () => accessToken;
+export const setAccessToken = async (token: string | null): Promise<void> => {
+  const normalized = normalizeToken(token);
+  accessToken = normalized;
 
+  try {
+    if (normalized) {
+      await AsyncStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, normalized);
+    } else {
+      await AsyncStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // Keep the in-memory token even if persistent storage is unavailable.
+  }
+};
+
+export const restoreAccessToken = async (): Promise<string | null> => {
+  if (accessToken !== null) {
+    return accessToken;
+  }
+
+  if (!restorePromise) {
+    restorePromise = (async () => {
+      try {
+        accessToken = normalizeToken(await AsyncStorage.getItem(ACCESS_TOKEN_STORAGE_KEY));
+      } catch {
+        accessToken = null;
+      }
+      return accessToken;
+    })();
+  }
+
+  try {
+    return await restorePromise;
+  } finally {
+    restorePromise = null;
+  }
+};
+
+export const getAccessToken = (): string | null => accessToken;

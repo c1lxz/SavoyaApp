@@ -44,5 +44,18 @@ const normalizeApiBaseUrl = (value: string): string => {
   return trimmed;
 };
 
+const resolveUseRealApi = (): boolean => {
+  const configured = process.env.EXPO_PUBLIC_USE_REAL_API?.trim().toLowerCase();
+  if (configured === 'true') {
+    return true;
+  }
+  if (configured === 'false') {
+    return false;
+  }
+
+  // Default to the backend API. Mock mode still can be forced explicitly.
+  return true;
+};
+
 export const API_BASE_URL = normalizeApiBaseUrl(resolveApiBaseUrl());
-export const USE_REAL_API = (process.env.EXPO_PUBLIC_USE_REAL_API ?? 'false') === 'true';
+export const USE_REAL_API = resolveUseRealApi();

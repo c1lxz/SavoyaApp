@@ -1,6 +1,6 @@
 import { AuthResult, User } from '@/types';
 import { apiRequest } from '@/services/api/httpClient';
-import { setAccessToken } from '@/services/api/tokenStore';
+import { getAccessToken, restoreAccessToken, setAccessToken } from '@/services/api/tokenStore';
 
 type CompatLoginResponse = {
   success: boolean;
@@ -42,7 +42,7 @@ export const apiAuthService = {
 
     if ('token_type' in result && 'access_token' in result) {
       const mappedUser = mapBackendUser(result.user);
-      setAccessToken(result.access_token);
+      await setAccessToken(result.access_token);
       currentUser = mappedUser;
       return {
         success: true,
@@ -52,7 +52,7 @@ export const apiAuthService = {
     }
 
     if (result.success && result.access_token && result.user) {
-      setAccessToken(result.access_token);
+      await setAccessToken(result.access_token);
       currentUser = result.user;
     }
 
@@ -64,16 +64,28 @@ export const apiAuthService = {
     };
   },
   async logout(): Promise<void> {
-    setAccessToken(null);
+    await setAccessToken(null);
     currentUser = null;
   },
   async getCurrentUser(): Promise<User | null> {
-    if (!currentUser) {
+    if (currentUser) {
+      return currentUser;
+    }
+
+    await restoreAccessToken();
+    if (!getAccessToken()) {
       return null;
     }
-    const actual = await apiRequest<User>('/user/me');
-    currentUser = actual;
-    return actual;
+
+    try {
+      const actual = await apiRequest<User>('/user/me');
+      currentUser = actual;
+      return actual;
+    } catch {
+      await setAccessToken(null);
+      currentUser = null;
+      return null;
+    }
   },
   async updateProfile(fullName: string, plotNumber?: string): Promise<User> {
     const updated = await apiRequest<User>('/user/profile', {
