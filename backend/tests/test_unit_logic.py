@@ -18,3 +18,7 @@ def test_resolve_request_status_active():
     future = datetime.now(timezone.utc) + timedelta(days=1)
     assert resolve_request_status(is_permanent=False, expires_at=future) == "active"
 
+
+def test_resolve_request_status_accepts_naive_sqlite_datetime():
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).replace(tzinfo=None)
+    assert resolve_request_status(is_permanent=False, expires_at=future) == "active"

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..models import Request, User
 from ..schemas import CreateRequestRequest
+from ..utils.datetime import ensure_utc_datetime, utcnow
 from .gate import gate_client
 
 settings = get_settings()
@@ -16,7 +17,8 @@ settings = get_settings()
 def resolve_request_status(is_permanent: bool, expires_at: datetime | None) -> str:
     if is_permanent:
         return "permanent"
-    if expires_at and expires_at < datetime.now(timezone.utc):
+    normalized_expires_at = ensure_utc_datetime(expires_at)
+    if normalized_expires_at and normalized_expires_at < utcnow():
         return "expired"
     return "active"
 
@@ -33,7 +35,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
     expires_at: datetime | None = None
     if not is_permanent:
         hours = request_hours if request_hours is not None else 24
-        expires_at = datetime.now(timezone.utc) + timedelta(hours=hours)
+        expires_at = utcnow() + timedelta(hours=hours)
 
     if is_permanent:
         gate_key_id = gate_client.add_permanent_key(
@@ -83,7 +85,7 @@ async def cancel_request(session: AsyncSession, user_id: int, request_id: int) -
         return None
 
     request.status = "cancelled"
-    request.cancelled_at = datetime.now(timezone.utc)
+    request.cancelled_at = utcnow()
 
     other_query = await session.execute(
         select(func.count(Request.id)).where(
@@ -111,21 +113,22 @@ async def has_access_to_point(session: AsyncSession, user_id: int, access_point_
         )
     )
     active_requests = list(query.scalars().all())
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     for item in active_requests:
         if access_point_id not in (item.access_point_ids or []):
             continue
         if item.is_permanent:
             return True
-        if item.expires_at is None:
+        normalized_expires_at = ensure_utc_datetime(item.expires_at)
+        if normalized_expires_at is None:
             return True
-        if item.expires_at >= now:
+        if normalized_expires_at >= now:
             return True
     return False
 
 
 async def cleanup_expired_requests(session: AsyncSession) -> int:
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     query = await session.execute(
         select(Request).where(
             Request.status == "active",

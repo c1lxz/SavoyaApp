@@ -25,6 +25,7 @@ from ..services import access as access_service
 from ..services.auth import login_with_password
 from ..services.gate import gate_client
 from ..services.requests import create_request, list_my_requests, resolve_request_status
+from ..utils.datetime import to_utc_isoformat, utcnow
 
 router = APIRouter(tags=["compatibility"])
 settings = get_settings()
@@ -133,8 +134,8 @@ async def compat_update_profile(
 
 def _to_compat_pass(item) -> CompatPassItem:
     status = resolve_request_status(item.is_permanent, item.expires_at)
-    expires = item.expires_at.astimezone(timezone.utc).isoformat() if item.expires_at else None
-    created = item.created_at.astimezone(timezone.utc).isoformat() if item.created_at else datetime.now(timezone.utc).isoformat()
+    expires = to_utc_isoformat(item.expires_at)
+    created = to_utc_isoformat(item.created_at) or utcnow().isoformat()
     return CompatPassItem(
         id=str(item.id),
         carNumber=item.key_value,

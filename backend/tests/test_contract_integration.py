@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -53,6 +54,37 @@ def test_passes_create_and_list(client):
     assert any(item['carNumber'] == 'A123BB' for item in rows)
 
 
+def test_temporary_pass_create_and_list_with_sqlite_datetimes(client):
+    login_name = f'temp_{uuid4().hex[:8]}'
+    password = 'demo123'
+    asyncio.run(_ensure_user(login_name, password, full_name='Temp User', plot_number='25'))
+
+    login = client.post('/auth/login', json={'login': login_name, 'password': password}).json()
+    token = login['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+
+    create_response = client.post(
+        '/passes',
+        headers=headers,
+        json={
+            'carNumber': 'T555TT',
+            'plotNumber': '25',
+            'expiresAt': expires_at,
+            'isPermanent': False,
+        },
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created['status'] == 'active'
+    assert created['expiresAt'] is not None
+
+    list_response = client.get('/passes/my', headers=headers)
+    assert list_response.status_code == 200
+    rows = list_response.json()
+    assert any(item['carNumber'] == 'T555TT' for item in rows)
+
+
 def test_gate_open_action(client):
     login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
     token = login['access_token']
@@ -90,6 +122,32 @@ async def _ensure_user_without_name(login: str, password: str) -> None:
         else:
             user.password_hash = hash_password(password)
             user.name = None
+            user.is_active = True
+        await session.commit()
+
+
+async def _ensure_user(login: str, password: str, *, full_name: str, plot_number: str) -> None:
+    async with SessionLocal() as session:
+        query = await session.execute(select(User).where(User.login == login))
+        user = query.scalar_one_or_none()
+        if user is None:
+            session.add(
+                User(
+                    phone=f"+7999{str(uuid4().int)[:7]}",
+                    login=login,
+                    password_hash=hash_password(password),
+                    name=full_name,
+                    apartment=plot_number,
+                    plot_number=plot_number,
+                    is_admin=False,
+                    is_active=True,
+                )
+            )
+        else:
+            user.password_hash = hash_password(password)
+            user.name = full_name
+            user.apartment = plot_number
+            user.plot_number = plot_number
             user.is_active = True
         await session.commit()
 

@@ -8,6 +8,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import AccessEventLog, AccessKey, AccessPermission, AccessPoint, Request
+from ..utils.datetime import ensure_utc_datetime, utcnow
 from .gate import gate_client
 
 OPEN_ACTION = "open"
@@ -36,7 +37,7 @@ class OpenAccessResult:
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return utcnow()
 
 
 def _is_request_active(item: Request, now: datetime) -> bool:
@@ -44,9 +45,10 @@ def _is_request_active(item: Request, now: datetime) -> bool:
         return False
     if item.is_permanent:
         return True
-    if item.expires_at is None:
+    normalized_expires_at = ensure_utc_datetime(item.expires_at)
+    if normalized_expires_at is None:
         return True
-    return item.expires_at >= now
+    return normalized_expires_at >= now
 
 
 def _infer_access_point_type(name: str) -> str:
