@@ -42,6 +42,7 @@ class Request(Base):
     gate_key_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     access_point_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
     is_permanent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_courier: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

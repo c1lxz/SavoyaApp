@@ -191,3 +191,25 @@ def test_cleanup_broken_requests_cancels_invalid_gate_key_rows():
             assert refreshed.cancelled_at is not None
 
     asyncio.run(scenario())
+
+
+def test_create_request_returns_502_when_gate_returns_invalid_key_id(client):
+    headers, _ = _create_user_and_login(client)
+    original_add_permanent_key = gate_client.add_permanent_key
+    gate_client.add_permanent_key = lambda **kwargs: 0
+    try:
+        response = client.post(
+            "/api/requests/",
+            headers=headers,
+            json={
+                "key_type": "VehicleNumber",
+                "key_value": f"E{uuid4().hex[:6]}",
+                "access_point_ids": [1],
+                "is_permanent": True,
+            },
+        )
+    finally:
+        gate_client.add_permanent_key = original_add_permanent_key
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "invalid_gate_key"

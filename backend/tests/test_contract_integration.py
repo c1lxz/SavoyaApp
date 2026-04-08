@@ -9,6 +9,7 @@ from sqlalchemy import select
 from backend.app.database import SessionLocal
 from backend.app.models import User
 from backend.app.services.auth import hash_password
+from backend.app.services.gate import gate_client
 
 
 def test_compat_login_success(client):
@@ -215,3 +216,28 @@ def test_compat_update_profile_persists_full_name(client):
     me_body = me.json()
     assert me_body['fullName'] == 'Иванов Иван Иванович'
     assert me_body['plotNumber'] == '77'
+
+
+def test_passes_create_returns_502_when_gate_returns_invalid_key_id(client):
+    login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
+    token = login['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+
+    original_add_permanent_key = gate_client.add_permanent_key
+    gate_client.add_permanent_key = lambda **kwargs: 0
+    try:
+        response = client.post(
+            '/passes',
+            headers=headers,
+            json={
+                'carNumber': f'F{uuid4().hex[:5]}'.upper(),
+                'plotNumber': '25',
+                'expiresAt': None,
+                'isPermanent': True,
+            },
+        )
+    finally:
+        gate_client.add_permanent_key = original_add_permanent_key
+
+    assert response.status_code == 502
+    assert response.json()['detail']['code'] == 'invalid_gate_key'

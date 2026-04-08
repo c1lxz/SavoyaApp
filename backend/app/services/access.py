@@ -40,6 +40,13 @@ def _utcnow() -> datetime:
     return utcnow()
 
 
+def _request_priority(item: Request, *, prefer_courier: bool) -> tuple[int, int, float]:
+    created_at = ensure_utc_datetime(item.created_at) or datetime.fromtimestamp(0, tz=timezone.utc)
+    courier_rank = 0 if prefer_courier and bool(getattr(item, "is_courier", False)) else 1
+    permanent_rank = 1 if item.is_permanent else 0
+    return (courier_rank, permanent_rank, -created_at.timestamp())
+
+
 def _is_request_active(item: Request, now: datetime) -> bool:
     if item.status != "active":
         return False
@@ -174,7 +181,8 @@ async def _resolve_access_context(
     if not with_key:
         raise AccessServiceError(code="key_not_found", message="Active key not found", http_status=404)
 
-    primary = with_key[0]
+    prefer_courier = access_point.type == "barrier_exit"
+    primary = sorted(with_key, key=lambda item: _request_priority(item, prefer_courier=prefer_courier))[0]
     access_key = await _get_or_create_access_key(session, primary)
     await _ensure_permission(
         session,
@@ -186,6 +194,26 @@ async def _resolve_access_context(
     )
     await session.commit()
     return access_point, access_key, primary
+
+
+async def _complete_courier_request_after_exit(
+    session: AsyncSession,
+    *,
+    request_item: Request,
+    access_key: AccessKey,
+) -> None:
+    request_item.status = "completed"
+    request_item.cancelled_at = utcnow()
+    access_key.is_active = False
+
+    permissions_query = await session.execute(
+        select(AccessPermission).where(AccessPermission.key_id == access_key.id)
+    )
+    for permission in permissions_query.scalars().all():
+        permission.is_allowed = False
+
+    if request_item.gate_key_id is not None:
+        gate_client.remove_key(int(request_item.gate_key_id))
 
 
 async def list_my_access_points(session: AsyncSession, *, user_id: int) -> list[AccessPoint]:
@@ -257,7 +285,7 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
     await _check_rate_limit(session, user_id=user_id)
     await _check_duplicate(session, user_id=user_id, access_point_id=access_point_id)
 
-    access_point, access_key, _ = await _resolve_access_context(
+    access_point, access_key, request_item = await _resolve_access_context(
         session,
         user_id=user_id,
         access_point_id=access_point_id,
@@ -280,6 +308,26 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
     event.status = STATUS_SUCCESS if result.success else STATUS_FAILED
     event.error_code = result.code if not result.success else None
     event.error_message = result.message if not result.success else None
+    cleanup_error: str | None = None
+    if result.success and access_point.type == "barrier_exit" and bool(getattr(request_item, "is_courier", False)):
+        try:
+            await _complete_courier_request_after_exit(session, request_item=request_item, access_key=access_key)
+            event.details = {
+                **(event.details or {}),
+                "courier_request_id": request_item.id,
+                "courier_cleanup": "completed",
+            }
+        except Exception as exc:
+            cleanup_error = str(exc)
+            event.details = {
+                **(event.details or {}),
+                "courier_request_id": request_item.id,
+                "courier_cleanup": "failed",
+                "courier_cleanup_error": cleanup_error,
+            }
     await session.commit()
 
-    return OpenAccessResult(status=event.status, message=result.message, request_id=request_id)
+    message = result.message
+    if cleanup_error:
+        message = f"{message}. Courier pass cleanup failed: {cleanup_error}"
+    return OpenAccessResult(status=event.status, message=message, request_id=request_id)

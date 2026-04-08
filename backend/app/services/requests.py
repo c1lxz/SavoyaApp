@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, func, select, text
+from sqlalchemy import and_, func, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +19,13 @@ _ACTIVE_REQUEST_STATUSES = ("active",)
 
 
 class RequestConflictError(Exception):
+    def __init__(self, *, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+class RequestIntegrationError(Exception):
     def __init__(self, *, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
@@ -45,6 +52,18 @@ async def ensure_active_request_unique_index(session: AsyncSession) -> None:
         )
     )
     await session.commit()
+
+
+async def ensure_requests_schema(session: AsyncSession) -> None:
+    connection = await session.connection()
+
+    def _get_columns(sync_connection) -> set[str]:
+        return {str(column["name"]) for column in inspect(sync_connection).get_columns("requests")}
+
+    columns = await connection.run_sync(_get_columns)
+    if "is_courier" not in columns:
+        await session.execute(text("ALTER TABLE requests ADD COLUMN is_courier BOOLEAN NOT NULL DEFAULT 0"))
+        await session.commit()
 
 
 async def cleanup_broken_requests(session: AsyncSession) -> int:
@@ -171,7 +190,10 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
         )
 
     if gate_key_id <= 0:
-        raise RuntimeError(f"Gate returned invalid key id: {gate_key_id}")
+        raise RequestIntegrationError(
+            code="invalid_gate_key",
+            message=f"Gate returned invalid key id: {gate_key_id}",
+        )
 
     request = Request(
         resident_id=user.id,
@@ -180,6 +202,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
         gate_key_id=gate_key_id,
         access_point_ids=payload.access_point_ids,
         is_permanent=is_permanent,
+        is_courier=payload.is_courier,
         expires_at=expires_at,
         status="active",
         plot_number=payload.plot_number,

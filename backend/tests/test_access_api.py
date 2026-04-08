@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -51,6 +51,27 @@ async def _insert_active_request_without_key(user_id: int, access_point_id: int)
             )
         )
         await session.commit()
+
+
+async def _insert_active_courier_request(user_id: int, access_point_id: int, gate_key_id: int) -> int:
+    async with SessionLocal() as session:
+        row = Request(
+            resident_id=user_id,
+            key_type="VehicleNumber",
+            key_value=f"COURIER{uuid4().hex[:5]}",
+            gate_key_id=gate_key_id,
+            access_point_ids=[access_point_id],
+            is_permanent=False,
+            is_courier=True,
+            expires_at=(datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0),
+            status="active",
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(row)
+        await session.flush()
+        request_id = int(row.id)
+        await session.commit()
+        return request_id
 
 
 def _create_user_and_login(client) -> tuple[dict[str, str], int]:
@@ -162,3 +183,29 @@ def test_access_events_are_logged(client):
     assert events.status_code == 200
     rows = events.json()
     assert any(item["request_id"] == request_id for item in rows)
+
+
+def test_access_open_exit_completes_courier_request_and_removes_gate_key(client):
+    headers, user_id = _create_user_and_login(client)
+    request_id = asyncio.run(_insert_active_courier_request(user_id, 2, 200501))
+
+    removed_key_ids: list[int] = []
+    original_remove_key = gate_client.remove_key
+    gate_client.remove_key = lambda key_id: removed_key_ids.append(int(key_id)) or True
+    try:
+        opened = client.post("/api/access/open", headers=headers, json={"access_point_id": 2})
+        assert opened.status_code == 200
+        assert opened.json()["status"] == "success"
+    finally:
+        gate_client.remove_key = original_remove_key
+
+    assert removed_key_ids == [200501]
+
+    async def _assert_request_completed() -> None:
+        async with SessionLocal() as session:
+            row = await session.get(Request, request_id)
+            assert row is not None
+            assert row.status == "completed"
+            assert row.cancelled_at is not None
+
+    asyncio.run(_assert_request_completed())
