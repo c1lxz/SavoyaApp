@@ -21,6 +21,7 @@ export type CreatePassPayload = {
   phoneNumber: string;
   expiresAt: string | null;
   isPermanent: boolean;
+  isCourier: boolean;
 };
 
 export type PassStatus = 'active' | 'expired' | 'permanent';
@@ -32,6 +33,7 @@ export type PassItem = {
   phoneNumber?: string | null;
   expiresAt: string | null;
   isPermanent: boolean;
+  isCourier?: boolean;
   status: PassStatus;
   createdAt: string;
 };

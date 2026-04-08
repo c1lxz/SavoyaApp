@@ -150,6 +150,7 @@ def _to_compat_pass(item) -> CompatPassItem:
         phoneNumber=item.contact_phone,
         expiresAt=expires,
         isPermanent=item.is_permanent,
+        isCourier=bool(getattr(item, "is_courier", False)),
         status=status,
         createdAt=created,
     )
@@ -176,6 +177,7 @@ async def compat_create_pass(
         phone_number=payload.phoneNumber,
         access_point_ids=_runtime_default_access_point_ids(),
         is_permanent=payload.isPermanent,
+        is_courier=payload.isCourier,
         hours=None if payload.isPermanent else (hours or 24),
         plot_number=payload.plotNumber,
     )

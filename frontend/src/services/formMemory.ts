@@ -4,12 +4,14 @@ export type CreatePassDraft = {
   residentName: string;
   carNumber: string;
   phoneNumber: string;
+  isCourier: boolean;
 };
 
 const EMPTY_DRAFT: CreatePassDraft = {
   residentName: '',
   carNumber: '',
   phoneNumber: '',
+  isCourier: false,
 };
 
 const buildCreatePassDraftKey = (userId?: string | null) => `create-pass-draft:v1:${userId ?? 'anonymous'}`;
@@ -20,6 +22,7 @@ const normalizeDraft = (draft: Partial<CreatePassDraft>): CreatePassDraft => ({
     .trim()
     .toUpperCase(),
   phoneNumber: String(draft.phoneNumber ?? '').trim(),
+  isCourier: Boolean(draft.isCourier),
 });
 
 export const loadCreatePassDraft = async (userId?: string | null): Promise<CreatePassDraft> => {

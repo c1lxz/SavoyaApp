@@ -162,6 +162,7 @@ class CompatCreatePassPayload(BaseModel):
     phoneNumber: str
     expiresAt: str | None
     isPermanent: bool
+    isCourier: bool = False
 
     @field_validator("carNumber")
     @classmethod
@@ -186,6 +187,7 @@ class CompatPassItem(BaseModel):
     phoneNumber: str | None = None
     expiresAt: str | None
     isPermanent: bool
+    isCourier: bool = False
     status: Literal["active", "expired", "permanent"]
     createdAt: str
 

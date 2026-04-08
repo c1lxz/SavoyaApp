@@ -45,6 +45,7 @@ def test_passes_create_and_list(client):
             'phoneNumber': '+79991234567',
             'expiresAt': None,
             'isPermanent': True,
+            'isCourier': False,
         },
     )
     assert create_response.status_code == 200
@@ -79,6 +80,7 @@ def test_temporary_pass_create_and_list_with_sqlite_datetimes(client):
             'phoneNumber': '+79997654321',
             'expiresAt': expires_at,
             'isPermanent': False,
+            'isCourier': False,
         },
     )
     assert create_response.status_code == 200
@@ -108,6 +110,7 @@ def test_passes_create_rejects_duplicate_active_car_number(client):
             'phoneNumber': '+79990000001',
             'expiresAt': None,
             'isPermanent': True,
+            'isCourier': False,
         },
     )
     assert first.status_code == 200
@@ -121,6 +124,7 @@ def test_passes_create_rejects_duplicate_active_car_number(client):
             'phoneNumber': '+79990000002',
             'expiresAt': (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(),
             'isPermanent': False,
+            'isCourier': False,
         },
     )
     assert second.status_code == 409
@@ -135,7 +139,7 @@ def test_gate_open_action(client):
     client.post(
         '/passes',
         headers=headers,
-        json={'carNumber': 'B234CC', 'plotNumber': '25', 'phoneNumber': '+79991112233', 'expiresAt': None, 'isPermanent': True},
+        json={'carNumber': 'B234CC', 'plotNumber': '25', 'phoneNumber': '+79991112233', 'expiresAt': None, 'isPermanent': True, 'isCourier': False},
     )
     response = client.post('/gates/open-action', headers=headers, json={'action': 'entry'})
     assert response.status_code == 200
@@ -242,6 +246,7 @@ def test_passes_create_returns_502_when_gate_returns_invalid_key_id(client):
                 'phoneNumber': '+79995554433',
                 'expiresAt': None,
                 'isPermanent': True,
+                'isCourier': False,
             },
         )
     finally:
@@ -249,3 +254,27 @@ def test_passes_create_returns_502_when_gate_returns_invalid_key_id(client):
 
     assert response.status_code == 502
     assert response.json()['detail']['code'] == 'invalid_gate_key'
+
+
+def test_passes_create_courier_flow_sets_flag(client):
+    login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
+    token = login['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+
+    response = client.post(
+        '/passes',
+        headers=headers,
+        json={
+            'carNumber': f'C{uuid4().hex[:5]}'.upper(),
+            'plotNumber': '25',
+            'phoneNumber': '+79994443322',
+            'expiresAt': (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+            'isPermanent': False,
+            'isCourier': True,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body['isCourier'] is True
+    assert body['isPermanent'] is False

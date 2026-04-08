@@ -43,6 +43,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
   const [plotNumber, setPlotNumber] = useState(user?.plotNumber ?? '');
   const [phoneNumber, setPhoneNumber] = useState(user?.phoneNumber ?? '');
   const [isPermanent, setIsPermanent] = useState(false);
+  const [isCourier, setIsCourier] = useState(false);
   const [expiresAt, setExpiresAt] = useState(new Date());
   const [dateInput, setDateInput] = useState(formatDate(new Date().toISOString()));
   const [showPicker, setShowPicker] = useState(false);
@@ -63,6 +64,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
       setFullName(draft.residentName || user?.fullName || '');
       setCarNumber(draft.carNumber);
       setPhoneNumber(draft.phoneNumber || user?.phoneNumber || '');
+      setIsCourier(Boolean(draft.isCourier));
       setDraftLoaded(true);
     };
 
@@ -82,8 +84,9 @@ export const CreatePassScreen = ({ navigation }: Props) => {
       residentName: fullName,
       carNumber,
       phoneNumber,
+      isCourier,
     });
-  }, [carNumber, draftLoaded, fullName, phoneNumber, user?.id, user?.phoneNumber]);
+  }, [carNumber, draftLoaded, fullName, isCourier, phoneNumber, user?.id, user?.phoneNumber]);
 
   const parseRuDate = (value: string): Date | null => {
     const match = value.trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
@@ -202,6 +205,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
       phoneNumber: normalizedPhoneNumber,
       expiresAt: isPermanent ? null : toIsoDate(parsedDate ?? expiresAt),
       isPermanent,
+      isCourier,
     });
 
     if (success) {
@@ -283,9 +287,36 @@ export const CreatePassScreen = ({ navigation }: Props) => {
                 </View>
               </View>
 
-              <Pressable style={styles.checkboxRow} onPress={() => setIsPermanent((prev) => !prev)}>
+              <Pressable
+                style={styles.checkboxRow}
+                onPress={() =>
+                  setIsPermanent((prev) => {
+                    const next = !prev;
+                    if (next) {
+                      setIsCourier(false);
+                    }
+                    return next;
+                  })
+                }
+              >
                 <View style={[styles.checkbox, isPermanent && styles.checkboxChecked]} />
                 <Text style={[styles.checkboxText, { fontSize: metrics.bodyFontSize }]}>Постоянный пропуск</Text>
+              </Pressable>
+
+              <Pressable
+                style={styles.checkboxRow}
+                onPress={() =>
+                  setIsCourier((prev) => {
+                    const next = !prev;
+                    if (next) {
+                      setIsPermanent(false);
+                    }
+                    return next;
+                  })
+                }
+              >
+                <View style={[styles.checkbox, isCourier && styles.checkboxChecked]} />
+                <Text style={[styles.checkboxText, { fontSize: metrics.bodyFontSize }]}>Курьер</Text>
               </Pressable>
 
               {formError ? <Text style={styles.error}>{formError}</Text> : null}
