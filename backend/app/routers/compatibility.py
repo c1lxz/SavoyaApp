@@ -24,7 +24,7 @@ from ..schemas import (
 from ..services import access as access_service
 from ..services.auth import login_with_password
 from ..services.gate import gate_client
-from ..services.requests import create_request, list_my_requests, resolve_request_status
+from ..services.requests import RequestConflictError, create_request, list_my_requests, resolve_request_status
 from ..utils.datetime import to_utc_isoformat, utcnow
 
 router = APIRouter(tags=["compatibility"])
@@ -170,7 +170,13 @@ async def compat_create_pass(
         hours=None if payload.isPermanent else (hours or 24),
         plot_number=payload.plotNumber,
     )
-    request = await create_request(session, user, create_payload)
+    try:
+        request = await create_request(session, user, create_payload)
+    except RequestConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
     return _to_compat_pass(request)
 
 

@@ -26,3 +26,11 @@ def reset_settings_cache():
 def client():
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture(autouse=True)
+def reset_login_rate_limiter():
+    limiter = app.state.login_rate_limiter
+    limiter._events.clear()
+    yield
+    limiter._events.clear()

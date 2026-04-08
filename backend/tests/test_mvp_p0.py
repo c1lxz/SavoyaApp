@@ -9,6 +9,7 @@ from sqlalchemy import select
 from backend.app.database import SessionLocal
 from backend.app.models import Request, User
 from backend.app.services.auth import hash_password
+from backend.app.services.requests import cleanup_broken_requests
 from backend.app.services.gate import gate_client
 
 
@@ -128,3 +129,65 @@ def test_courier_request_forces_ttl_mode(client):
     body = response.json()
     assert body["is_permanent"] is False
     assert body["expires_at"] is not None
+
+
+def test_create_request_rejects_duplicate_active_vehicle_number(client):
+    headers, _ = _create_user_and_login(client)
+    key_value = f"D{uuid4().hex[:6]}"
+
+    first = client.post(
+        "/api/requests/",
+        headers=headers,
+        json={
+            "key_type": "VehicleNumber",
+            "key_value": key_value,
+            "access_point_ids": [1],
+            "is_permanent": True,
+        },
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/api/requests/",
+        headers=headers,
+        json={
+            "key_type": "VehicleNumber",
+            "key_value": key_value,
+            "access_point_ids": [1, 2],
+            "is_permanent": False,
+            "hours": 2,
+        },
+    )
+    assert second.status_code == 409
+    assert second.json()["detail"]["code"] == "duplicate_request"
+
+
+def test_cleanup_broken_requests_cancels_invalid_gate_key_rows():
+    login = f"cleanup_{uuid4().hex[:8]}"
+    password = "demo123"
+    user_id = asyncio.run(_ensure_user(login, password, is_active=True))
+
+    async def scenario() -> None:
+        async with SessionLocal() as session:
+            broken = Request(
+                resident_id=user_id,
+                key_type="VehicleNumber",
+                key_value=f"Z{uuid4().hex[:6]}",
+                gate_key_id=0,
+                access_point_ids=[1],
+                is_permanent=True,
+                status="active",
+                created_at=datetime.now(timezone.utc),
+            )
+            session.add(broken)
+            await session.commit()
+
+            changed = await cleanup_broken_requests(session)
+            assert changed >= 1
+
+            refreshed = await session.get(Request, broken.id)
+            assert refreshed is not None
+            assert refreshed.status == "cancelled"
+            assert refreshed.cancelled_at is not None
+
+    asyncio.run(scenario())

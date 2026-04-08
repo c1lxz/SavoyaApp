@@ -12,6 +12,7 @@ from .database import Base, SessionLocal, engine
 from .routers import access, auth, compatibility, gate, requests, user
 from .security import LoginRateLimiter
 from .services.auth import ensure_demo_user
+from .services.requests import cleanup_broken_requests, cleanup_duplicate_requests, ensure_active_request_unique_index
 
 settings = get_settings()
 logging.basicConfig(level=logging.INFO)
@@ -53,6 +54,13 @@ async def startup_event() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
     async with SessionLocal() as session:
+        broken_count = await cleanup_broken_requests(session)
+        if broken_count:
+            logging.info("Cleaned up %s broken active requests with invalid gate_key_id", broken_count)
+        duplicate_count = await cleanup_duplicate_requests(session)
+        if duplicate_count:
+            logging.info("Cleaned up %s duplicate active requests", duplicate_count)
+        await ensure_active_request_unique_index(session)
         await ensure_demo_user(session)
 
 

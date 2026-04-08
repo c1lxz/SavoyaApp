@@ -32,12 +32,13 @@ def test_passes_create_and_list(client):
     login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
     token = login['access_token']
     headers = {'Authorization': f'Bearer {token}'}
+    car_number = f'A{uuid4().hex[:5]}'.upper()
 
     create_response = client.post(
         '/passes',
         headers=headers,
         json={
-            'carNumber': 'A123BB',
+            'carNumber': car_number,
             'plotNumber': '25',
             'expiresAt': None,
             'isPermanent': True,
@@ -51,7 +52,7 @@ def test_passes_create_and_list(client):
     assert list_response.status_code == 200
     rows = list_response.json()
     assert len(rows) >= 1
-    assert any(item['carNumber'] == 'A123BB' for item in rows)
+    assert any(item['carNumber'] == car_number for item in rows)
 
 
 def test_temporary_pass_create_and_list_with_sqlite_datetimes(client):
@@ -63,12 +64,13 @@ def test_temporary_pass_create_and_list_with_sqlite_datetimes(client):
     token = login['access_token']
     headers = {'Authorization': f'Bearer {token}'}
     expires_at = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    car_number = f'T{uuid4().hex[:5]}'.upper()
 
     create_response = client.post(
         '/passes',
         headers=headers,
         json={
-            'carNumber': 'T555TT',
+            'carNumber': car_number,
             'plotNumber': '25',
             'expiresAt': expires_at,
             'isPermanent': False,
@@ -82,7 +84,39 @@ def test_temporary_pass_create_and_list_with_sqlite_datetimes(client):
     list_response = client.get('/passes/my', headers=headers)
     assert list_response.status_code == 200
     rows = list_response.json()
-    assert any(item['carNumber'] == 'T555TT' for item in rows)
+    assert any(item['carNumber'] == car_number for item in rows)
+
+
+def test_passes_create_rejects_duplicate_active_car_number(client):
+    login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
+    token = login['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    car_number = f'X{uuid4().hex[:5]}'.upper()
+
+    first = client.post(
+        '/passes',
+        headers=headers,
+        json={
+            'carNumber': car_number,
+            'plotNumber': '25',
+            'expiresAt': None,
+            'isPermanent': True,
+        },
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        '/passes',
+        headers=headers,
+        json={
+            'carNumber': car_number,
+            'plotNumber': '25',
+            'expiresAt': (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(),
+            'isPermanent': False,
+        },
+    )
+    assert second.status_code == 409
+    assert second.json()['detail']['code'] == 'duplicate_request'
 
 
 def test_gate_open_action(client):

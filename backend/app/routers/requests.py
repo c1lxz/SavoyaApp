@@ -33,7 +33,13 @@ async def create_request(
 ) -> RequestResponse:
     if not payload.is_permanent and payload.hours is None:
         payload.hours = 24
-    request = await request_service.create_request(session, user, payload)
+    try:
+        request = await request_service.create_request(session, user, payload)
+    except request_service.RequestConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
     return _to_response(request)
 
 
@@ -56,4 +62,3 @@ async def cancel_request(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Заявка не найдена")
     return _to_response(row)
-

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
@@ -12,6 +14,15 @@ from ..utils.datetime import ensure_utc_datetime, utcnow
 from .gate import gate_client
 
 settings = get_settings()
+
+_ACTIVE_REQUEST_STATUSES = ("active",)
+
+
+class RequestConflictError(Exception):
+    def __init__(self, *, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 def resolve_request_status(is_permanent: bool, expires_at: datetime | None) -> str:
@@ -23,7 +34,114 @@ def resolve_request_status(is_permanent: bool, expires_at: datetime | None) -> s
     return "active"
 
 
+async def ensure_active_request_unique_index(session: AsyncSession) -> None:
+    await session.execute(
+        text(
+            """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_requests_active_key
+        ON requests (key_type, key_value)
+        WHERE status = 'active'
+        """
+        )
+    )
+    await session.commit()
+
+
+async def cleanup_broken_requests(session: AsyncSession) -> int:
+    query = await session.execute(
+        select(Request).where(Request.status == "active").order_by(Request.key_type, Request.key_value, Request.id.desc())
+    )
+    active_rows = list(query.scalars().all())
+    if not active_rows:
+        return 0
+
+    grouped: dict[tuple[str, str], list[Request]] = defaultdict(list)
+    for item in active_rows:
+        grouped[(item.key_type, item.key_value)].append(item)
+
+    changed_rows: list[Request] = []
+    for rows in grouped.values():
+        valid_rows = [item for item in rows if item.gate_key_id is not None and item.gate_key_id > 0]
+        keep_id: int | None = valid_rows[0].id if valid_rows else None
+        for item in rows:
+            if keep_id is not None and item.id == keep_id:
+                continue
+            if item.gate_key_id is None and len(rows) == 1:
+                continue
+            if item.status != "active":
+                continue
+            item.status = "cancelled"
+            item.cancelled_at = utcnow()
+            changed_rows.append(item)
+
+    if not changed_rows:
+        return 0
+
+    await session.commit()
+    return len(changed_rows)
+
+
+async def cleanup_duplicate_requests(session: AsyncSession) -> int:
+    query = await session.execute(
+        select(Request).where(Request.status == "active").order_by(Request.key_type, Request.key_value, Request.id.desc())
+    )
+    active_rows = list(query.scalars().all())
+    if not active_rows:
+        return 0
+
+    grouped: dict[tuple[str, str], list[Request]] = defaultdict(list)
+    for item in active_rows:
+        grouped[(item.key_type, item.key_value)].append(item)
+
+    changed_rows: list[Request] = []
+    for rows in grouped.values():
+        if len(rows) < 2:
+            continue
+
+        valid_rows = [item for item in rows if item.gate_key_id is not None and item.gate_key_id > 0]
+        keep_id = valid_rows[0].id if valid_rows else None
+        for item in rows:
+            if keep_id is not None and item.id == keep_id:
+                continue
+            item.status = "cancelled"
+            item.cancelled_at = utcnow()
+            changed_rows.append(item)
+
+    if not changed_rows:
+        return 0
+
+    await session.commit()
+    return len(changed_rows)
+
+
+async def _ensure_no_duplicate_active_request(
+    session: AsyncSession,
+    *,
+    key_type: str,
+    key_value: str,
+) -> None:
+    query = await session.execute(
+        select(Request.id).where(
+            Request.key_type == key_type,
+            Request.key_value == key_value,
+            Request.status.in_(_ACTIVE_REQUEST_STATUSES),
+        )
+    )
+    existing_id = query.scalar_one_or_none()
+    if existing_id is not None:
+        raise RequestConflictError(
+            code="duplicate_request",
+            message=f"An active request already exists for {key_value}",
+        )
+
+
 async def create_request(session: AsyncSession, user: User, payload: CreateRequestRequest) -> Request:
+    await _ensure_no_duplicate_active_request(
+        session,
+        key_type=payload.key_type,
+        key_value=payload.key_value,
+    )
+
     is_permanent = payload.is_permanent
     request_hours = payload.hours
 
@@ -52,6 +170,9 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
             access_point_ids=payload.access_point_ids,
         )
 
+    if gate_key_id <= 0:
+        raise RuntimeError(f"Gate returned invalid key id: {gate_key_id}")
+
     request = Request(
         resident_id=user.id,
         key_type=payload.key_type,
@@ -64,7 +185,20 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
         plot_number=payload.plot_number,
     )
     session.add(request)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        gate_client.remove_key(gate_key_id)
+        raise RequestConflictError(
+            code="duplicate_request",
+            message=f"An active request already exists for {payload.key_value}",
+        ) from exc
+    except Exception:
+        await session.rollback()
+        gate_client.remove_key(gate_key_id)
+        raise
+
     await session.refresh(request)
     return request
 
