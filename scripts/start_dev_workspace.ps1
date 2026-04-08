@@ -9,6 +9,12 @@ param(
     [int]$BackendPort = 8000,
     [string]$BackendPythonLauncher = "py",
     [string]$BackendPythonVersion = "-3.12",
+    [bool]$BootstrapDemoUser = $true,
+    [string]$DemoLogin = "demo",
+    [string]$DemoPassword = "demo123",
+    [string]$DemoPhone = "+70000000000",
+    [string]$DemoFullName = "Demo User",
+    [string]$DemoPlotNumber = "25",
     [bool]$FrontendUseRealApi = $true,
     [string]$FrontendApiBaseUrl = "",
     [string]$GatePythonLauncher = "py",
@@ -228,9 +234,6 @@ $resolvedFrontendApiBaseUrl = Resolve-FrontendApiBaseUrl `
     -ApiHost $BackendHost `
     -Port $BackendPort `
     -ConfiguredBaseUrl $FrontendApiBaseUrl
-$resolvedAllowedHostsJson = Build-BackendAllowedHostsJson -PrimaryApiBaseUrl $resolvedFrontendApiBaseUrl
-$resolvedCorsOriginsJson = Build-BackendCorsOriginsJson -PrimaryApiBaseUrl $resolvedFrontendApiBaseUrl
-
 if (-not (Test-Path -LiteralPath (Join-Path $resolvedRepoRoot ".git"))) {
     throw "Git repository not found: $resolvedRepoRoot"
 }
@@ -297,8 +300,12 @@ if ($Bootstrap -or -not (Test-Path -LiteralPath $frontendNodeModules)) {
 }
 
 $backendBody = @(
-    "`$env:ALLOWED_HOSTS_JSON = $(Quote-PowerShellLiteral -Value $resolvedAllowedHostsJson)",
-    "`$env:CORS_ALLOW_ORIGINS_JSON = $(Quote-PowerShellLiteral -Value $resolvedCorsOriginsJson)",
+    "`$env:BOOTSTRAP_DEMO_USER = $(Quote-PowerShellLiteral -Value $BootstrapDemoUser.ToString().ToLower())",
+    "`$env:DEMO_LOGIN = $(Quote-PowerShellLiteral -Value $DemoLogin)",
+    "`$env:DEMO_PASSWORD = $(Quote-PowerShellLiteral -Value $DemoPassword)",
+    "`$env:DEMO_PHONE = $(Quote-PowerShellLiteral -Value $DemoPhone)",
+    "`$env:DEMO_FULL_NAME = $(Quote-PowerShellLiteral -Value $DemoFullName)",
+    "`$env:DEMO_PLOT_NUMBER = $(Quote-PowerShellLiteral -Value $DemoPlotNumber)",
     "`$pythonArgs = @()",
     $(if ($BackendPythonVersion) { "`$pythonArgs += $(Quote-PowerShellLiteral -Value $BackendPythonVersion)" } else { "`$pythonArgs += @()" }),
     "`$pythonArgs += @('-m', 'uvicorn', 'backend.app.main:app', '--host', $(Quote-PowerShellLiteral -Value $BackendHost), '--port', $(Quote-PowerShellLiteral -Value $BackendPort.ToString()))",
