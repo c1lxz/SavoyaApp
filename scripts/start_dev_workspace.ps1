@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$RepoRoot = $(Split-Path -Parent $PSScriptRoot),
+    [string]$RepoRoot = "",
     [switch]$SkipPull,
     [switch]$Bootstrap,
     [switch]$OpenToolShell,
@@ -16,6 +16,15 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $RepoRoot) {
+    if ($PSScriptRoot) {
+        $RepoRoot = Split-Path -Parent $PSScriptRoot
+    }
+    else {
+        $RepoRoot = (Get-Location).Path
+    }
+}
 
 function Quote-PowerShellLiteral {
     param([Parameter(Mandatory = $true)][string]$Value)
