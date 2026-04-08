@@ -111,6 +111,15 @@ function Start-WorkspaceWindow {
         -ArgumentList @("-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $command) | Out-Null
 }
 
+function Get-LocalIpv4Addresses {
+    $addresses = [System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) |
+        Where-Object { $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork } |
+        ForEach-Object { $_.IPAddressToString } |
+        Where-Object { $_ -and $_ -ne "127.0.0.1" }
+
+    return @($addresses | Select-Object -Unique)
+}
+
 function Resolve-FrontendApiBaseUrl {
     param(
         [Parameter(Mandatory = $true)][string]$ApiHost,
@@ -124,10 +133,81 @@ function Resolve-FrontendApiBaseUrl {
 
     $apiHost = $ApiHost.Trim()
     if ($apiHost -in @("0.0.0.0", "::", "[::]")) {
-        $apiHost = "127.0.0.1"
+        $apiHost = @((Get-LocalIpv4Addresses), "127.0.0.1")[0]
     }
 
     return "http://{0}:{1}/api" -f $apiHost, $Port
+}
+
+function Build-BackendAllowedHostsJson {
+    param([string]$PrimaryApiBaseUrl)
+
+    $hosts = New-Object System.Collections.Generic.List[string]
+    foreach ($value in @("localhost", "127.0.0.1", "testserver", $env:COMPUTERNAME)) {
+        if ($value -and -not $hosts.Contains($value)) {
+            $hosts.Add($value)
+        }
+    }
+
+    foreach ($ip in Get-LocalIpv4Addresses) {
+        if ($ip -and -not $hosts.Contains($ip)) {
+            $hosts.Add($ip)
+        }
+    }
+
+    if ($PrimaryApiBaseUrl) {
+        try {
+            $uri = [System.Uri]$PrimaryApiBaseUrl
+            if ($uri.Host -and -not $hosts.Contains($uri.Host)) {
+                $hosts.Add($uri.Host)
+            }
+        } catch {
+            # Keep the default host list when the custom API URL is not a valid absolute URI.
+        }
+    }
+
+    return ($hosts | ConvertTo-Json -Compress)
+}
+
+function Build-BackendCorsOriginsJson {
+    param([string]$PrimaryApiBaseUrl)
+
+    $hosts = New-Object System.Collections.Generic.List[string]
+    foreach ($value in @("localhost", "127.0.0.1", $env:COMPUTERNAME)) {
+        if ($value -and -not $hosts.Contains($value)) {
+            $hosts.Add($value)
+        }
+    }
+
+    foreach ($ip in Get-LocalIpv4Addresses) {
+        if ($ip -and -not $hosts.Contains($ip)) {
+            $hosts.Add($ip)
+        }
+    }
+
+    if ($PrimaryApiBaseUrl) {
+        try {
+            $uri = [System.Uri]$PrimaryApiBaseUrl
+            if ($uri.Host -and -not $hosts.Contains($uri.Host)) {
+                $hosts.Add($uri.Host)
+            }
+        } catch {
+            # Keep the default origin list when the custom API URL is not a valid absolute URI.
+        }
+    }
+
+    $ports = @($null, 80, 8081, 8082, 8083, 19006)
+    $origins = New-Object System.Collections.Generic.List[string]
+    foreach ($hostName in $hosts) {
+        foreach ($port in $ports) {
+            $origin = if ($null -eq $port) { "http://$hostName" } else { "http://{0}:{1}" -f $hostName, $port }
+            if (-not $origins.Contains($origin)) {
+                $origins.Add($origin)
+            }
+        }
+    }
+
+    return ($origins | ConvertTo-Json -Compress)
 }
 
 $resolvedRepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
@@ -136,6 +216,8 @@ $resolvedFrontendApiBaseUrl = Resolve-FrontendApiBaseUrl `
     -ApiHost $BackendHost `
     -Port $BackendPort `
     -ConfiguredBaseUrl $FrontendApiBaseUrl
+$resolvedAllowedHostsJson = Build-BackendAllowedHostsJson -PrimaryApiBaseUrl $resolvedFrontendApiBaseUrl
+$resolvedCorsOriginsJson = Build-BackendCorsOriginsJson -PrimaryApiBaseUrl $resolvedFrontendApiBaseUrl
 
 if (-not (Test-Path -LiteralPath (Join-Path $resolvedRepoRoot ".git"))) {
     throw "Git repository not found: $resolvedRepoRoot"
@@ -203,6 +285,8 @@ if ($Bootstrap -or -not (Test-Path -LiteralPath $frontendNodeModules)) {
 }
 
 $backendBody = @(
+    "`$env:ALLOWED_HOSTS_JSON = $(Quote-PowerShellLiteral -Value $resolvedAllowedHostsJson)",
+    "`$env:CORS_ALLOW_ORIGINS_JSON = $(Quote-PowerShellLiteral -Value $resolvedCorsOriginsJson)",
     "`$pythonArgs = @()",
     $(if ($BackendPythonVersion) { "`$pythonArgs += $(Quote-PowerShellLiteral -Value $BackendPythonVersion)" } else { "`$pythonArgs += @()" }),
     "`$pythonArgs += @('-m', 'uvicorn', 'backend.app.main:app', '--host', $(Quote-PowerShellLiteral -Value $BackendHost), '--port', $(Quote-PowerShellLiteral -Value $BackendPort.ToString()))",
