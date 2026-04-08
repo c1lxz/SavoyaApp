@@ -108,13 +108,15 @@ function Start-WorkspaceWindow {
     $command = New-PowerShellWindowCommand -Title $Title -WorkingDirectory $WorkingDirectory -Body $Body
     if ($Preview) {
         Write-Host "[preview] open $Title"
-        Write-Host "  powershell.exe -NoExit -ExecutionPolicy Bypass -Command $command"
+        Write-Host "  powershell.exe -NoExit -ExecutionPolicy Bypass -EncodedCommand <base64>"
+        Write-Host "  command: $command"
         return
     }
 
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     Start-Process -FilePath "powershell.exe" `
         -WorkingDirectory $WorkingDirectory `
-        -ArgumentList @("-NoExit", "-ExecutionPolicy", "Bypass", "-Command", $command) | Out-Null
+        -ArgumentList @("-NoExit", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encodedCommand) | Out-Null
 }
 
 function Get-LocalIpv4Addresses {
@@ -234,6 +236,8 @@ $resolvedFrontendApiBaseUrl = Resolve-FrontendApiBaseUrl `
     -ApiHost $BackendHost `
     -Port $BackendPort `
     -ConfiguredBaseUrl $FrontendApiBaseUrl
+$resolvedAllowedHostsJson = Build-BackendAllowedHostsJson -PrimaryApiBaseUrl $resolvedFrontendApiBaseUrl
+$resolvedCorsOriginsJson = Build-BackendCorsOriginsJson -PrimaryApiBaseUrl $resolvedFrontendApiBaseUrl
 if (-not (Test-Path -LiteralPath (Join-Path $resolvedRepoRoot ".git"))) {
     throw "Git repository not found: $resolvedRepoRoot"
 }
@@ -300,6 +304,8 @@ if ($Bootstrap -or -not (Test-Path -LiteralPath $frontendNodeModules)) {
 }
 
 $backendBody = @(
+    "`$env:ALLOWED_HOSTS_JSON = $(Quote-PowerShellLiteral -Value $resolvedAllowedHostsJson)",
+    "`$env:CORS_ALLOW_ORIGINS_JSON = $(Quote-PowerShellLiteral -Value $resolvedCorsOriginsJson)",
     "`$env:BOOTSTRAP_DEMO_USER = $(Quote-PowerShellLiteral -Value $BootstrapDemoUser.ToString().ToLower())",
     "`$env:DEMO_LOGIN = $(Quote-PowerShellLiteral -Value $DemoLogin)",
     "`$env:DEMO_PASSWORD = $(Quote-PowerShellLiteral -Value $DemoPassword)",
