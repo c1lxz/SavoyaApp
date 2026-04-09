@@ -1,134 +1,159 @@
-# Домен и следующий этап Gate/Wiegand
+# Домен, HTTPS и следующий этап Gate/Wiegand
 
-## 1. Что уже видно по домену
+## Что уже подтверждено
 
-На 2026-04-09 домен `шлагбаумсавоя.рф` уже делегирован на `ns1.reg.ru` и `ns2.reg.ru`, но его `A`-запись резолвится в `198.18.1.102`.
+- Домен `шлагбаумсавоя.рф` резолвится в `185.245.187.125`.
+- На сервере backend отвечает на `127.0.0.1:8000/health`.
+- `nginx` уже умеет проксировать `/health` и `/api`.
+- В проекте есть файлы сертификата: [`certificate.crt`](../certificate.crt) и [`certificate.key`](../certificate.key).
+- Сертификат выдан на `www.xn--80aaachc8cmu1au8c1f.xn--p1ai` и содержит SAN для `xn--80aaachc8cmu1au8c1f.xn--p1ai` и `www.xn--80aaachc8cmu1au8c1f.xn--p1ai`.
 
-При этом реальный внешний IP сервера: `185.245.187.125`.
+## Важное ограничение
 
-Значит проблема сейчас почти наверняка в DNS-зоне REG.RU: корневая `A`-запись домена указывает не на сервер, а на неверный адрес. Пока `A`-запись не будет указывать на `185.245.187.125`, сайт не заработает ни от правок backend, ни от Nginx.
+Пока HTTPS не подключён в `nginx`, домен должен работать только по `http`. Снаружи у тебя сейчас именно сетевой уровень отделяет доступ от рабочего backend.
 
-## 2. Что именно должно быть в REG.RU
+## Безопасный план включения HTTPS
 
-В DNS-зоне домена должны быть такие записи:
+1. Оставить backend как есть: `127.0.0.1:8000`.
+2. Положить `certificate.crt` и `certificate.key` в доступное nginx место на сервере.
+3. Включить в `nginx` два server block:
+   - `80` с редиректом на `https://$host$request_uri`
+   - `443 ssl` с проксированием `/health` и `/api`
+4. Проверить конфиг только командой `nginx -t`.
+5. Проверить локально `http://127.0.0.1/health` и `https://127.0.0.1/health -SkipCertificateCheck`.
+6. Только после этого открывать/проверять внешний доступ с другого устройства.
 
-```text
-@      A      185.245.187.125
-www    CNAME  xn--80aaachc8cmu1au8c1f.xn--p1ai
+## Рекомендуемый nginx-конфиг для Windows
+
+Ниже шаблон. На сервере замени пути на фактические пути своей установки.
+
+```nginx
+worker_processes 1;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include mime.types;
+    default_type application/octet-stream;
+    sendfile on;
+    keepalive_timeout 30;
+    server_tokens off;
+    client_max_body_size 2m;
+
+    upstream savoya_backend {
+        server 127.0.0.1:8000;
+        keepalive 16;
+    }
+
+    server {
+        listen 80 default_server;
+        server_name xn--80aaachc8cmu1au8c1f.xn--p1ai _;
+        return 301 https://$host$request_uri;
+    }
+
+    server {
+        listen 443 ssl default_server;
+        server_name xn--80aaachc8cmu1au8c1f.xn--p1ai _;
+
+        ssl_certificate     C:/Users/User/Desktop/SavoyaApp/SavoyaApp/certificate.crt;
+        ssl_certificate_key C:/Users/User/Desktop/SavoyaApp/SavoyaApp/certificate.key;
+
+        root C:/Users/User/Desktop/SavoyaApp/SavoyaApp/frontend/dist;
+        index index.html;
+
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+
+        location /api/ {
+            proxy_pass http://savoya_backend/api/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_connect_timeout 5s;
+            proxy_send_timeout 30s;
+            proxy_read_timeout 30s;
+        }
+
+        location ~ ^/(auth|user|passes|gates|access|requests)(/|$) {
+            proxy_pass http://savoya_backend;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_connect_timeout 5s;
+            proxy_send_timeout 30s;
+            proxy_read_timeout 30s;
+        }
+
+        location = /health {
+            proxy_pass http://savoya_backend/health;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+    }
+}
 ```
 
-Если `www` не нужен, можно не добавлять вторую запись.
+Если на сервере проект лежит не в `C:/Users/User/Desktop/SavoyaApp/SavoyaApp`, а в другом месте, меняй только `ssl_certificate`, `ssl_certificate_key` и `root`.
 
-Если сейчас для `@` стоит `198.18.1.102`, её нужно удалить и заменить на `185.245.187.125`.
+## Команды проверки
 
-## 3. Пошагово в REG.RU
-
-1. Откройте личный кабинет REG.RU.
-2. Перейдите в карточку домена `шлагбаумсавоя.рф`.
-3. Проверьте, что домен использует DNS-серверы `ns1.reg.ru` и `ns2.reg.ru`.
-4. Откройте раздел управления DNS-зоной.
-5. Найдите запись типа `A` для хоста `@`.
-6. Если там указан `198.18.1.102`, удалите эту запись.
-7. Создайте новую запись `A`:
-   `Хост`: `@`
-   `Значение`: `185.245.187.125`
-8. Сохраните изменения.
-9. Если нужен `www`, создайте запись:
-   `Тип`: `CNAME`
-   `Хост`: `www`
-   `Значение`: `xn--80aaachc8cmu1au8c1f.xn--p1ai`
-10. Подождите обновления DNS.
-
-## 4. Что проверить после замены A-записи
-
-После обновления DNS команда ниже должна возвращать `185.245.187.125`:
+Все команды ниже безопасны: они только читают состояние.
 
 ```powershell
-Resolve-DnsName xn--80aaachc8cmu1au8c1f.xn--p1ai -Type A
+Get-ChildItem . -File | Where-Object { $_.Name -match '^certificate\.(crt|key)$' }
+certutil -dump certificate.crt
+Get-Content certificate.key -TotalCount 5
+Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -in 80,443,8000 } | Format-Table -AutoSize
 ```
 
-После этого проверьте:
+Ожидаемый результат:
+- `certificate.crt` есть один блок `BEGIN CERTIFICATE`
+- `certificate.key` начинается с `BEGIN RSA PRIVATE KEY`
+- `nginx` слушает `80` и `443`
+- backend слушает `8000`
+
+Проверка после правки конфига:
 
 ```powershell
-curl http://xn--80aaachc8cmu1au8c1f.xn--p1ai/health
-```
-
-Если DNS уже правильный, а сайт всё ещё не открывается, тогда проверять нужно уже сервер:
-
-1. открыт ли входящий `80` на роутере или у провайдера,
-2. открыт ли `80` в Windows Firewall,
-3. слушает ли Nginx порт `80`,
-4. поднят ли backend на `127.0.0.1:8000`.
-
-## 5. Что должно быть на сервере
-
-1. Backend должен слушать `127.0.0.1:8000`.
-2. Nginx должен слушать `0.0.0.0:80`.
-3. В `deploy/nginx/savoyaapp-domain.conf` корень сайта должен указывать на собранный `frontend/dist`.
-4. Frontend должен быть пересобран командой из `deploy/windows/publish_frontend.ps1`.
-5. Backend должен запускаться через `deploy/windows/start_backend.ps1`.
-
-## 6. Безопасные PowerShell-команды для следующего этапа Wiegand/TCP
-
-Эти команды не должны физически открыть шлагбаум, если не переводить `GATE_WIEGAND_TRANSPORT` из `dry_run` в `tcp`.
-
-### DNS/HTTP
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\check_domain_setup.ps1 -ExpectedIp 185.245.187.125
-Resolve-DnsName xn--80aaachc8cmu1au8c1f.xn--p1ai -Type A
-Resolve-DnsName xn--80aaachc8cmu1au8c1f.xn--p1ai -Type NS
-curl http://xn--80aaachc8cmu1au8c1f.xn--p1ai/health
-```
-
-### Локальный backend/Nginx
-
-```powershell
-curl http://127.0.0.1:8000/health
+cd C:\Users\User\Downloads\nginx-1.29.8
+.\nginx.exe -t
 curl http://127.0.0.1/health
-curl http://127.0.0.1/api/gate/access-points
-Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -in 80,8000 }
+curl https://127.0.0.1/health -SkipCertificateCheck
+curl https://127.0.0.1/api/gate/access-points -SkipCertificateCheck
 ```
 
-### Проверка доступа до TCP-устройства без отправки Wiegand
+Если `https://127.0.0.1/health` отвечает, значит сертификат и TLS-конфиг в порядке. Если браузер потом ругается на цепочку сертификатов, значит нужен intermediate/fullchain от CA, а не правка backend.
 
-```powershell
-Test-NetConnection 192.168.0.65 -Port 5000
-arp -a | findstr 192.168.0.65
-route print
-```
+## Что уже готово для следующего этапа Gate/Wiegand
 
-### Проверка текущих Wiegand-настроек приложения
+- `py -3.12-32 backend\app\scripts\gate_bridge.py get_access_points "{}"` уже работает.
+- `pyodbc` и MDB-драйвер на машине есть.
+- `GATE_WIEGAND_TRANSPORT=dry_run` оставлен безопасным.
+- `GATE_WIEGAND_TCP_HOST=192.168.0.65` и `GATE_WIEGAND_TCP_PORT=5000` уже подготовлены.
+
+## Безопасные команды для Wiegand-диагностики
 
 ```powershell
 Get-Content .env | Select-String "GATE_WIEGAND_"
 Get-Content backend\app\scripts\gate_runtime.py | Select-String "_send_wiegand26|payload_format|GATE_WIEGAND_TCP"
+Test-NetConnection 192.168.0.65 -Port 5000
+py -3.12-32 backend\app\scripts\gate_bridge.py get_access_points '{}'
+py -3.12-32 backend\app\scripts\gate_bridge.py get_wiegand_credentials '{"external_key_id":"123"}'
 ```
 
-### Проверка реальных точек доступа Gate без открытия
-
-```powershell
-py -3.12 backend\app\scripts\gate_bridge.py get_access_points "{}"
-py -3.12 backend\app\scripts\gate_bridge.py get_wiegand_credentials "{""external_key_id"":""123""}"
-```
-
-Вторая команда безопасна только как чтение. Она не открывает проход, а пытается вычислить Wiegand-представление для уже существующего ключа.
-
-### Проверка, кто слушает порт 5000 на промежуточном сервисе
-
-```powershell
-Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -eq 5000 } | Format-Table -AutoSize
-Get-Process -Id (Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -eq 5000 }).OwningProcess
-```
-
-## 7. Что переключать только потом
-
-Пока диагностика не закончена, оставляйте:
-
-```env
-GATE_WIEGAND_TRANSPORT=dry_run
-GATE_WIEGAND_TCP_HOST=192.168.0.65
-GATE_WIEGAND_TCP_PORT=5000
-```
-
-Только после проверки формата полезной нагрузки и подтверждения сетевого тракта можно временно переключать `GATE_WIEGAND_TRANSPORT=tcp`.
+Ни одна из этих команд не открывает проход физически. Они только читают конфиг, сеть и уже существующие данные Gate.
