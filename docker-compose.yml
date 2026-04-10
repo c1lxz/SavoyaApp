@@ -32,8 +32,8 @@ services:
       DEBUG: "false"
       GATE_REAL_INTEGRATION_ENABLED: "false"
       CLEANUP_INTERVAL_SECONDS: "60"
-      ALLOWED_HOSTS_JSON: '["xn--80aaachc8cmu1au8c1f.xn--p1ai","шлагбаумсавоя.рф","localhost","127.0.0.1","testserver"]'
-      CORS_ALLOW_ORIGINS_JSON: '["http://xn--80aaachc8cmu1au8c1f.xn--p1ai","https://xn--80aaachc8cmu1au8c1f.xn--p1ai","http://шлагбаумсавоя.рф","https://шлагбаумсавоя.рф","http://localhost","http://127.0.0.1","http://localhost:80","http://127.0.0.1:80","http://localhost:8081","http://127.0.0.1:8081","http://localhost:19006","http://127.0.0.1:19006"]'
+      ALLOWED_HOSTS_JSON: '["xn--80aaachc8cmu1au8c1f.xn--p1ai","www.xn--80aaachc8cmu1au8c1f.xn--p1ai","localhost","127.0.0.1","testserver"]'
+      CORS_ALLOW_ORIGINS_JSON: '["http://xn--80aaachc8cmu1au8c1f.xn--p1ai","https://xn--80aaachc8cmu1au8c1f.xn--p1ai","http://www.xn--80aaachc8cmu1au8c1f.xn--p1ai","https://www.xn--80aaachc8cmu1au8c1f.xn--p1ai","http://localhost","http://127.0.0.1","http://localhost:80","http://127.0.0.1:80","http://localhost:8081","http://127.0.0.1:8081","http://localhost:19006","http://127.0.0.1:19006"]'
     ports:
       - "8000:8000"
 
@@ -47,6 +47,10 @@ services:
       - backend
     ports:
       - "80:80"
+      - "443:443"
+    volumes:
+      - ./certificate.crt:/etc/nginx/certs/certificate.crt:ro
+      - ./certificate.key:/etc/nginx/certs/certificate.key:ro
 
 volumes:
   pg_data:

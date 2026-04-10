@@ -17,5 +17,4 @@ config.mdb
 *.db
 backup_*.mdb
 backup_*.db
-certificate.crt
-certificate.key
+
