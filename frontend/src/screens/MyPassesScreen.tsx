@@ -13,6 +13,7 @@ import { RootStackParamList } from '@/navigation/types';
 import { usePassesStore } from '@/store/passesStore';
 import { theme } from '@/theme';
 import { PassItem } from '@/types';
+import { goBackOrHome } from '@/utils/backNavigation';
 import { getLayoutMetrics } from '@/utils/layout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'MyPasses'>;
@@ -40,7 +41,7 @@ export const MyPassesScreen = ({ navigation }: Props) => {
     <AppBackground>
       <SafeAreaView style={styles.safeArea}>
         <View style={[styles.content, { maxWidth: metrics.contentMaxWidth }]}>
-          <ScreenHeader title="Мои пропуски" onBack={() => navigation.goBack()} />
+          <ScreenHeader title="Мои пропуски" onBack={() => goBackOrHome(navigation)} />
 
           <FlatList
             data={passes}

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 
 from fastapi import Request
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import PlainTextResponse
 
 from .config import get_settings
 from .database import Base, SessionLocal, engine
@@ -22,6 +23,71 @@ from .services.requests import (
 settings = get_settings()
 logging.basicConfig(level=logging.INFO)
 
+
+def _split_host_and_port(raw_host: str | None) -> str:
+    if not raw_host:
+        return ""
+
+    host = raw_host.split(",", 1)[0].strip().rstrip(".")
+    if host.startswith("["):
+        closing_bracket = host.find("]")
+        if closing_bracket != -1:
+            return host[1:closing_bracket].lower()
+    if host.count(":") == 1:
+        host = host.rsplit(":", 1)[0]
+    return host.lower()
+
+
+def _host_aliases(host: str) -> set[str]:
+    normalized = host.strip().rstrip(".").lower()
+    aliases = {normalized}
+
+    try:
+        aliases.add(normalized.encode("idna").decode("ascii").lower())
+    except UnicodeError:
+        pass
+
+    try:
+        aliases.add(normalized.encode("ascii").decode("idna").lower().rstrip("."))
+    except UnicodeError:
+        pass
+
+    return {alias for alias in aliases if alias}
+
+
+@lru_cache
+def _compiled_allowed_hosts() -> tuple[bool, tuple[tuple[set[str], bool], ...]]:
+    if "*" in settings.allowed_hosts:
+        return True, ()
+
+    compiled_patterns: list[tuple[set[str], bool]] = []
+    for raw_pattern in settings.allowed_hosts:
+        is_subdomain_pattern = raw_pattern.startswith("*.")
+        base_pattern = raw_pattern[2:] if is_subdomain_pattern else raw_pattern
+        compiled_patterns.append((_host_aliases(base_pattern), is_subdomain_pattern))
+
+    return False, tuple(compiled_patterns)
+
+
+def _is_allowed_host(raw_host: str | None) -> bool:
+    host = _split_host_and_port(raw_host)
+    if not host:
+        return False
+
+    allow_all, compiled_patterns = _compiled_allowed_hosts()
+    if allow_all:
+        return True
+
+    host_candidates = _host_aliases(host)
+    for allowed_candidates, is_subdomain_pattern in compiled_patterns:
+        if host_candidates & allowed_candidates:
+            return True
+        if is_subdomain_pattern:
+            for candidate in host_candidates:
+                if any(candidate.endswith(f".{allowed}") for allowed in allowed_candidates):
+                    return True
+    return False
+
 app = FastAPI(
     title=settings.app_name,
     debug=settings.debug,
@@ -36,7 +102,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
 app.state.login_rate_limiter = LoginRateLimiter(
     attempts=settings.login_rate_limit_attempts,
     window_seconds=settings.login_rate_limit_window_seconds,
@@ -45,6 +110,9 @@ app.state.login_rate_limiter = LoginRateLimiter(
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
+    if not _is_allowed_host(request.headers.get("host")):
+        return PlainTextResponse("Invalid host header", status_code=400)
+
     response = await call_next(request)
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["X-Content-Type-Options"] = "nosniff"

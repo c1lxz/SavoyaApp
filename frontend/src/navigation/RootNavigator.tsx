@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { AuthScreen } from '@/screens/AuthScreen';
@@ -15,6 +15,21 @@ import { theme } from '@/theme';
 import { RootStackParamList } from './types';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+
+const linking: LinkingOptions<RootStackParamList> = {
+  prefixes: [],
+  config: {
+    screens: {
+      Auth: 'auth',
+      ProfileSetup: 'profile-setup',
+      Home: '',
+      CreatePass: 'create-pass',
+      OpenBarrier: 'open-barrier',
+      Wickets: 'wickets',
+      MyPasses: 'my-passes',
+    },
+  },
+};
 
 export const RootNavigator = () => {
   const user = useAuthStore((state) => state.user);
@@ -35,7 +50,7 @@ export const RootNavigator = () => {
   }
 
   return (
-    <NavigationContainer>
+    <NavigationContainer linking={linking}>
       <Stack.Navigator
         initialRouteName={user ? (requiresProfileCompletion ? 'ProfileSetup' : 'Home') : 'Auth'}
         screenOptions={{ headerShown: false, animation: 'fade' }}

@@ -9,6 +9,7 @@ import { ScreenHeader } from '@/components/ScreenHeader';
 import { RootStackParamList } from '@/navigation/types';
 import { useGateStore } from '@/store/gateStore';
 import { theme } from '@/theme';
+import { goBackOrHome } from '@/utils/backNavigation';
 import { getLayoutMetrics } from '@/utils/layout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'OpenBarrier'>;
@@ -55,7 +56,7 @@ export const OpenBarrierScreen = ({ navigation }: Props) => {
       <SafeAreaView style={styles.safeArea}>
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           <View style={[styles.panel, { maxWidth: metrics.formMaxWidth }]}>
-            <ScreenHeader title="Открыть шлагбаум" onBack={() => navigation.goBack()} />
+            <ScreenHeader title="Открыть шлагбаум" onBack={() => goBackOrHome(navigation)} />
 
             <View style={[styles.actions, { gap: metrics.panelGap }]}>
               <BarrierActionButton title="Въезд" onPress={openEntry} disabled={isLoading} iconSource={ENTRY_ICON} />

@@ -140,6 +140,37 @@ function Convert-ToJsonStringArrayLiteral {
     return "[" + ($escaped -join ",") + "]"
 }
 
+function Get-DotEnvJsonStringArray {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Key
+    )
+
+    $envPath = Join-Path $RepoRoot ".env"
+    if (-not (Test-Path -LiteralPath $envPath)) {
+        return @()
+    }
+
+    $pattern = '^\s*' + [regex]::Escape($Key) + '\s*=\s*(.+)\s*$'
+    $line = Get-Content -LiteralPath $envPath | Where-Object { $_ -match $pattern } | Select-Object -Last 1
+    if (-not $line) {
+        return @()
+    }
+
+    $rawValue = [regex]::Match($line, $pattern).Groups[1].Value.Trim()
+    if (-not $rawValue) {
+        return @()
+    }
+
+    try {
+        $parsed = ConvertFrom-Json -InputObject $rawValue
+        return @($parsed | ForEach-Object { [string]$_ })
+    }
+    catch {
+        return @()
+    }
+}
+
 function Resolve-FrontendApiBaseUrl {
     param(
         [Parameter(Mandatory = $true)][string]$ApiHost,
@@ -160,9 +191,18 @@ function Resolve-FrontendApiBaseUrl {
 }
 
 function Build-BackendAllowedHostsJson {
-    param([string]$PrimaryApiBaseUrl)
+    param(
+        [string]$PrimaryApiBaseUrl,
+        [string[]]$SeedHosts = @()
+    )
 
     $hosts = @()
+    foreach ($value in @($SeedHosts)) {
+        if ($value -and $value -notin $hosts) {
+            $hosts += $value
+        }
+    }
+
     foreach ($value in @("localhost", "127.0.0.1", "testserver", $env:COMPUTERNAME)) {
         if ($value -and $value -notin $hosts) {
             $hosts += $value
@@ -190,9 +230,29 @@ function Build-BackendAllowedHostsJson {
 }
 
 function Build-BackendCorsOriginsJson {
-    param([string]$PrimaryApiBaseUrl)
+    param(
+        [string]$PrimaryApiBaseUrl,
+        [string[]]$SeedOrigins = @()
+    )
 
     $hosts = @()
+    $origins = @()
+
+    foreach ($origin in @($SeedOrigins)) {
+        if ($origin -and $origin -notin $origins) {
+            $origins += $origin
+        }
+
+        try {
+            $uri = [System.Uri]$origin
+            if ($uri.Host -and $uri.Host -notin $hosts) {
+                $hosts += $uri.Host
+            }
+        } catch {
+            # Ignore malformed origins from .env and keep the generated defaults.
+        }
+    }
+
     foreach ($value in @("localhost", "127.0.0.1", $env:COMPUTERNAME)) {
         if ($value -and $value -notin $hosts) {
             $hosts += $value
@@ -217,7 +277,6 @@ function Build-BackendCorsOriginsJson {
     }
 
     $ports = @($null, 80, 8081, 8082, 8083, 19006)
-    $origins = @()
     foreach ($hostName in $hosts) {
         foreach ($port in $ports) {
             $origin = if ($null -eq $port) { "http://$hostName" } else { "http://{0}:{1}" -f $hostName, $port }
@@ -236,8 +295,14 @@ $resolvedFrontendApiBaseUrl = Resolve-FrontendApiBaseUrl `
     -ApiHost $BackendHost `
     -Port $BackendPort `
     -ConfiguredBaseUrl $FrontendApiBaseUrl
-$resolvedAllowedHostsJson = Build-BackendAllowedHostsJson -PrimaryApiBaseUrl $resolvedFrontendApiBaseUrl
-$resolvedCorsOriginsJson = Build-BackendCorsOriginsJson -PrimaryApiBaseUrl $resolvedFrontendApiBaseUrl
+$seedAllowedHosts = Get-DotEnvJsonStringArray -RepoRoot $resolvedRepoRoot -Key "ALLOWED_HOSTS_JSON"
+$seedCorsOrigins = Get-DotEnvJsonStringArray -RepoRoot $resolvedRepoRoot -Key "CORS_ALLOW_ORIGINS_JSON"
+$resolvedAllowedHostsJson = Build-BackendAllowedHostsJson `
+    -PrimaryApiBaseUrl $resolvedFrontendApiBaseUrl `
+    -SeedHosts $seedAllowedHosts
+$resolvedCorsOriginsJson = Build-BackendCorsOriginsJson `
+    -PrimaryApiBaseUrl $resolvedFrontendApiBaseUrl `
+    -SeedOrigins $seedCorsOrigins
 if (-not (Test-Path -LiteralPath (Join-Path $resolvedRepoRoot ".git"))) {
     throw "Git repository not found: $resolvedRepoRoot"
 }

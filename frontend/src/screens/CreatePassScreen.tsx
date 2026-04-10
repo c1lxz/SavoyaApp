@@ -14,6 +14,7 @@ import { loadCreatePassDraft, saveCreatePassDraft } from '@/services/formMemory'
 import { useAuthStore } from '@/store/authStore';
 import { usePassesStore } from '@/store/passesStore';
 import { theme } from '@/theme';
+import { goBackOrHome } from '@/utils/backNavigation';
 import { formatDate, toIsoDate } from '@/utils/date';
 import { getLayoutMetrics } from '@/utils/layout';
 
@@ -218,7 +219,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
       <SafeAreaView style={styles.safeArea}>
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           <View style={[styles.formWrap, { maxWidth: metrics.formMaxWidth }]}>
-            <ScreenHeader title="Создание пропуска" onBack={() => navigation.goBack()} />
+            <ScreenHeader title="Создание пропуска" onBack={() => goBackOrHome(navigation)} />
 
             <View style={[styles.form, { gap: metrics.panelGap }]}>
               <AppInput
