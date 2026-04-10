@@ -54,7 +54,13 @@ export const OpenBarrierScreen = ({ navigation }: Props) => {
   return (
     <AppBackground>
       <SafeAreaView style={styles.safeArea}>
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+          alwaysBounceVertical={false}
+        >
           <View style={[styles.panel, { maxWidth: metrics.formMaxWidth }]}>
             <ScreenHeader title="Открыть шлагбаум" onBack={() => goBackOrHome(navigation)} />
 
@@ -90,8 +96,13 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
+  scroll: {
+    flex: 1,
+    width: '100%',
+  },
   scrollContent: {
     flexGrow: 1,
+    width: '100%',
   },
   panel: {
     width: '100%',

@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
-import { NavigationContainer, type LinkingOptions } from '@react-navigation/native';
+import { DefaultTheme, NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { AuthScreen } from '@/screens/AuthScreen';
@@ -15,6 +15,19 @@ import { theme } from '@/theme';
 import { RootStackParamList } from './types';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+
+const navigationTheme = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    primary: theme.colors.textPrimary,
+    background: theme.colors.screenBackground,
+    card: theme.colors.screenBackground,
+    text: theme.colors.textPrimary,
+    border: theme.colors.border,
+    notification: theme.colors.success,
+  },
+};
 
 const linking: LinkingOptions<RootStackParamList> = {
   prefixes: [],
@@ -50,7 +63,7 @@ export const RootNavigator = () => {
   }
 
   return (
-    <NavigationContainer linking={linking}>
+    <NavigationContainer linking={linking} theme={navigationTheme}>
       <Stack.Navigator
         initialRouteName={user ? (requiresProfileCompletion ? 'ProfileSetup' : 'Home') : 'Auth'}
         screenOptions={{ headerShown: false, animation: 'fade' }}

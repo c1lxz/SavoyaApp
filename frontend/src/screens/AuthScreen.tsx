@@ -39,9 +39,12 @@ export const AuthScreen = ({ navigation }: Props) => {
     <AppBackground>
       <SafeAreaView style={styles.safeArea}>
         <ScrollView
+          style={styles.scroll}
           contentContainerStyle={[styles.scrollContent, { justifyContent: metrics.isShortHeight ? 'flex-start' : 'center' }]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
+          bounces={false}
+          alwaysBounceVertical={false}
         >
           <View style={[styles.formWrap, { maxWidth: metrics.formMaxWidth, gap: metrics.panelGap }]}>
             <ScreenHeader title="Вход" />
@@ -90,8 +93,13 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
+  scroll: {
+    flex: 1,
+    width: '100%',
+  },
   scrollContent: {
     flexGrow: 1,
+    width: '100%',
   },
   formWrap: {
     width: '100%',

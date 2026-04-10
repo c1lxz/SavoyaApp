@@ -1,12 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
-import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
+import React, { useEffect, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppBackground } from '@/components/AppBackground';
 import { AppButton } from '@/components/AppButton';
+import { DatePickerModal } from '@/components/DatePickerModal';
 import { AppInput } from '@/components/AppInput';
 import { ScreenHeader } from '@/components/ScreenHeader';
 import { RootStackParamList } from '@/navigation/types';
@@ -46,12 +46,11 @@ export const CreatePassScreen = ({ navigation }: Props) => {
   const [isPermanent, setIsPermanent] = useState(false);
   const [isCourier, setIsCourier] = useState(false);
   const [expiresAt, setExpiresAt] = useState(new Date());
-  const [dateInput, setDateInput] = useState(formatDate(new Date().toISOString()));
   const [showPicker, setShowPicker] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [draftLoaded, setDraftLoaded] = useState(false);
 
-  const dateLabel = useMemo(() => formatDate(expiresAt.toISOString()), [expiresAt]);
+  const dateLabel = formatDate(expiresAt.toISOString());
 
   useEffect(() => {
     let isCancelled = false;
@@ -74,7 +73,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     return () => {
       isCancelled = true;
     };
-  }, [user?.fullName, user?.id]);
+  }, [user?.fullName, user?.id, user?.phoneNumber]);
 
   useEffect(() => {
     if (!draftLoaded) {
@@ -87,67 +86,13 @@ export const CreatePassScreen = ({ navigation }: Props) => {
       phoneNumber,
       isCourier,
     });
-  }, [carNumber, draftLoaded, fullName, isCourier, phoneNumber, user?.id, user?.phoneNumber]);
-
-  const parseRuDate = (value: string): Date | null => {
-    const match = value.trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
-    if (!match) {
-      return null;
-    }
-
-    const day = Number(match[1]);
-    const month = Number(match[2]);
-    const year = Number(match[3]);
-    const parsed = new Date(year, month - 1, day);
-
-    if (
-      parsed.getFullYear() !== year ||
-      parsed.getMonth() !== month - 1 ||
-      parsed.getDate() !== day
-    ) {
-      return null;
-    }
-
-    return parsed;
-  };
-
-  const onDateChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
-    if (Platform.OS === 'android') {
-      setShowPicker(false);
-    }
-    if (selectedDate) {
-      setExpiresAt(selectedDate);
-      setDateInput(formatDate(selectedDate.toISOString()));
-    }
-  };
-
-  const onDateInputChange = (value: string) => {
-    const sanitized = value.replace(/[^\d.]/g, '').slice(0, 10);
-    setDateInput(sanitized);
-
-    const parsedDate = parseRuDate(sanitized);
-    if (parsedDate) {
-      setExpiresAt(parsedDate);
-    }
-  };
-
-  const onDateInputBlur = () => {
-    const parsedDate = parseRuDate(dateInput);
-    if (parsedDate) {
-      setExpiresAt(parsedDate);
-      setDateInput(formatDate(parsedDate.toISOString()));
-      return;
-    }
-
-    setDateInput(dateLabel);
-  };
+  }, [carNumber, draftLoaded, fullName, isCourier, phoneNumber, user?.id]);
 
   const onCreate = async () => {
     const normalizedFullName = fullName.trim();
     const normalizedCarNumber = carNumber.trim().toUpperCase();
     const normalizedPlotNumber = plotNumber.trim();
     const normalizedPhoneNumber = phoneNumber.trim();
-    const parsedDate = parseRuDate(dateInput);
 
     if (!normalizedFullName || !hasAtLeastTwoWords(normalizedFullName)) {
       setFormError('Введите фамилию и имя');
@@ -185,11 +130,6 @@ export const CreatePassScreen = ({ navigation }: Props) => {
       return;
     }
 
-    if (!isPermanent && !parsedDate) {
-      setFormError('Введите дату в формате ДД.ММ.ГГГГ');
-      return;
-    }
-
     setFormError(null);
 
     if (user && (normalizedFullName !== user.fullName || normalizedPlotNumber !== user.plotNumber)) {
@@ -204,7 +144,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
       carNumber: normalizedCarNumber,
       plotNumber: normalizedPlotNumber,
       phoneNumber: normalizedPhoneNumber,
-      expiresAt: isPermanent ? null : toIsoDate(parsedDate ?? expiresAt),
+      expiresAt: isPermanent ? null : toIsoDate(expiresAt),
       isPermanent,
       isCourier,
     });
@@ -217,7 +157,14 @@ export const CreatePassScreen = ({ navigation }: Props) => {
   return (
     <AppBackground>
       <SafeAreaView style={styles.safeArea}>
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+          alwaysBounceVertical={false}
+        >
           <View style={[styles.formWrap, { maxWidth: metrics.formMaxWidth }]}>
             <ScreenHeader title="Создание пропуска" onBack={() => goBackOrHome(navigation)} />
 
@@ -261,40 +208,30 @@ export const CreatePassScreen = ({ navigation }: Props) => {
 
               <View style={[styles.dateWrap, isPermanent && styles.dateDisabled]}>
                 <Text style={[styles.dateLabel, { fontSize: metrics.bodyFontSize }]}>Дата окончания</Text>
-                <View style={[styles.dateButton, { minHeight: metrics.isCompactHeight ? 56 : 62 }]}>
-                  <TextInput
-                    value={dateInput}
-                    onChangeText={onDateInputChange}
-                    onBlur={onDateInputBlur}
-                    editable={!isPermanent}
-                    placeholder="ДД.ММ.ГГГГ"
-                    placeholderTextColor={theme.colors.textMuted}
-                    style={styles.dateValue}
-                    keyboardType="number-pad"
-                    maxLength={10}
-                  />
-                  <Pressable
-                    onPress={() => setShowPicker(true)}
-                    disabled={isPermanent}
-                    hitSlop={8}
-                    style={styles.calendarButton}
-                  >
+                <Pressable
+                  style={[styles.dateButton, { minHeight: metrics.isCompactHeight ? 56 : 62 }]}
+                  onPress={() => setShowPicker(true)}
+                  disabled={isPermanent}
+                >
+                  <Text style={styles.dateValue}>{dateLabel}</Text>
+                  <View style={styles.dateIconWrap}>
                     <MaterialCommunityIcons
                       name="calendar-month-outline"
                       size={24}
                       color={theme.colors.textSecondary}
                     />
-                  </Pressable>
-                </View>
+                  </View>
+                </Pressable>
               </View>
 
               <Pressable
                 style={styles.checkboxRow}
                 onPress={() =>
-                  setIsPermanent((prev) => {
-                    const next = !prev;
+                  setIsPermanent((previous) => {
+                    const next = !previous;
                     if (next) {
                       setIsCourier(false);
+                      setShowPicker(false);
                     }
                     return next;
                   })
@@ -307,8 +244,8 @@ export const CreatePassScreen = ({ navigation }: Props) => {
               <Pressable
                 style={styles.checkboxRow}
                 onPress={() =>
-                  setIsCourier((prev) => {
-                    const next = !prev;
+                  setIsCourier((previous) => {
+                    const next = !previous;
                     if (next) {
                       setIsPermanent(false);
                     }
@@ -332,14 +269,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
           </View>
         </ScrollView>
 
-        {showPicker ? (
-          <DateTimePicker
-            value={expiresAt}
-            mode="date"
-            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-            onChange={onDateChange}
-          />
-        ) : null}
+        <DatePickerModal visible={showPicker} value={expiresAt} onChange={setExpiresAt} onClose={() => setShowPicker(false)} />
       </SafeAreaView>
     </AppBackground>
   );
@@ -349,8 +279,13 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
+  scroll: {
+    flex: 1,
+    width: '100%',
+  },
   scrollContent: {
     flexGrow: 1,
+    width: '100%',
   },
   formWrap: {
     width: '100%',
@@ -375,16 +310,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: theme.spacing.md,
+    paddingLeft: theme.spacing.md,
+    paddingRight: theme.spacing.sm,
+    gap: 12,
   },
   dateValue: {
+    flex: 1,
     color: theme.colors.textPrimary,
     fontSize: 19,
-    flex: 1,
-    paddingVertical: 0,
   },
-  calendarButton: {
-    marginLeft: 12,
+  dateIconWrap: {
+    minWidth: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingRight: 4,
   },
   checkboxRow: {
     flexDirection: 'row',

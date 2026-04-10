@@ -44,6 +44,7 @@ export const MyPassesScreen = ({ navigation }: Props) => {
           <ScreenHeader title="Мои пропуски" onBack={() => goBackOrHome(navigation)} />
 
           <FlatList
+            style={styles.list}
             data={passes}
             keyExtractor={keyExtractor}
             renderItem={renderItem}
@@ -53,6 +54,9 @@ export const MyPassesScreen = ({ navigation }: Props) => {
             removeClippedSubviews
             contentContainerStyle={styles.listContent}
             ListEmptyComponent={emptyState}
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+            alwaysBounceVertical={false}
           />
 
           <LoadingOverlay visible={loadState === 'loading'} />
@@ -72,7 +76,11 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
   },
+  list: {
+    flex: 1,
+  },
   listContent: {
+    flexGrow: 1,
     paddingBottom: theme.spacing.xl,
   },
   error: {

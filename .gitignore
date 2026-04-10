@@ -11,10 +11,11 @@ frontend/_expo/
 frontend/dist/
 frontend/index.html
 frontend/metadata.json
+frontend/.tmp-*.png
+frontend/*.pid
 **/__pycache__/
 config.mdb
 *.mdb
 *.db
 backup_*.mdb
 backup_*.db
-

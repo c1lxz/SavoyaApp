@@ -17,8 +17,8 @@ export const AppBackground = ({ children }: PropsWithChildren) => {
           styles.overlay,
           {
             paddingHorizontal: metrics.horizontalPadding,
-            paddingTop: metrics.isCompactHeight ? 8 : 16,
-            paddingBottom: metrics.isCompactHeight ? 12 : 20,
+            paddingTop: metrics.isHandset ? (metrics.isCompactHeight ? 4 : 10) : metrics.isCompactHeight ? 8 : 16,
+            paddingBottom: metrics.isHandset ? (metrics.isCompactHeight ? 8 : 12) : metrics.isCompactHeight ? 12 : 20,
           },
         ]}
       >
@@ -32,16 +32,20 @@ export const AppBackground = ({ children }: PropsWithChildren) => {
 const styles = StyleSheet.create({
   background: {
     flex: 1,
+    width: '100%',
     backgroundColor: theme.colors.screenBackground,
   },
   overlay: {
     flex: 1,
+    width: '100%',
     backgroundColor: theme.colors.overlay,
     alignItems: 'center',
+    overflow: 'hidden',
   },
   content: {
     flex: 1,
     width: '100%',
+    alignSelf: 'center',
   },
   vignette: {
     ...StyleSheet.absoluteFillObject,

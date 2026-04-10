@@ -56,7 +56,14 @@ export const ProfileSetupWebScreen = ({ navigation }: Props) => {
   return (
     <AppBackground>
       <SafeAreaView style={styles.safeArea}>
-        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+          alwaysBounceVertical={false}
+        >
           <View style={[styles.formWrap, { maxWidth: metrics.formMaxWidth }]}>
             <ScreenHeader title={TEXT.title} />
             <Text style={[styles.description, { fontSize: metrics.bodyFontSize }]}>{TEXT.description}</Text>
@@ -92,8 +99,13 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
+  scroll: {
+    flex: 1,
+    width: '100%',
+  },
   scrollContent: {
     flexGrow: 1,
+    width: '100%',
   },
   formWrap: {
     width: '100%',
