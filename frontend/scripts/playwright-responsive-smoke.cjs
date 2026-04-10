@@ -449,12 +449,20 @@ async function main() {
     { width: 393, height: 852 },
     { isMobile: true, hasTouch: true },
   );
+  const desktopCalendar = await evaluateCalendar(
+    chromium,
+    '1280-chromium-desktop',
+    { width: 1280, height: 900 },
+    { isMobile: false, hasTouch: false },
+  );
 
   assertResult(chromiumCalendar.modalInsideViewport, 'chromium: calendar modal still exits the viewport');
   assertResult(chromiumCalendar.swipeChangedMonth, 'chromium: calendar swipe did not change month');
   assertResult(chromiumCalendar.datePersisted, 'chromium: selected date was not saved');
   assertResult(webkitCalendar.modalInsideViewport, 'webkit: calendar modal still exits the viewport');
   assertResult(webkitCalendar.datePersisted, 'webkit: selected date was not saved');
+  assertResult(desktopCalendar.modalInsideViewport, 'desktop: calendar modal still exits the viewport');
+  assertResult(desktopCalendar.datePersisted, 'desktop: selected date was not saved');
 
   const report = {
     responsive: responsiveResults,
@@ -465,6 +473,7 @@ async function main() {
     calendar: {
       chromium: chromiumCalendar,
       webkit: webkitCalendar,
+      desktop: desktopCalendar,
     },
   };
 

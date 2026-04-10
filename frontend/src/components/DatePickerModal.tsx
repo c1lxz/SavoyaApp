@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Modal, PanResponder, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
+import { Modal, PanResponder, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { theme } from '@/theme';
@@ -117,25 +116,6 @@ export const DatePickerModal = ({ visible, value, onChange, onClose }: DatePicke
     }),
   ).current;
 
-  const handleAndroidChange = (event: DateTimePickerEvent, selectedDate?: Date) => {
-    if (event.type === 'dismissed') {
-      onClose();
-      return;
-    }
-
-    if (selectedDate) {
-      onChange(selectedDate);
-    }
-    onClose();
-  };
-
-  const handleAppleChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
-    if (selectedDate) {
-      setDraftDate(selectedDate);
-      setVisibleMonth(getMonthStart(selectedDate));
-    }
-  };
-
   const handleSelectDay = (selectedDay: Date) => {
     setDraftDate((current) => mergeCalendarDate(current, selectedDay));
     setVisibleMonth(getMonthStart(selectedDay));
@@ -148,10 +128,6 @@ export const DatePickerModal = ({ visible, value, onChange, onClose }: DatePicke
 
   if (!visible) {
     return null;
-  }
-
-  if (Platform.OS === 'android') {
-    return <DateTimePicker value={value} mode="date" display="default" onChange={handleAndroidChange} />;
   }
 
   const calendarDays = buildCalendarDays(visibleMonth, draftDate);
@@ -180,50 +156,36 @@ export const DatePickerModal = ({ visible, value, onChange, onClose }: DatePicke
             </Pressable>
           </View>
 
-          {Platform.OS === 'ios' ? (
-            <View style={styles.nativePickerWrap}>
-              <DateTimePicker
-                value={draftDate}
-                mode="date"
-                display="spinner"
-                locale="ru-RU"
-                onChange={handleAppleChange}
+          <View style={styles.monthRow}>
+            <Pressable onPress={() => setVisibleMonth((current) => moveMonth(current, -1))} hitSlop={8}>
+              <MaterialCommunityIcons name="chevron-left" size={28} color={theme.colors.textPrimary} />
+            </Pressable>
+            <Text style={styles.monthLabel}>{getMonthLabel(visibleMonth)}</Text>
+            <Pressable onPress={() => setVisibleMonth((current) => moveMonth(current, 1))} hitSlop={8}>
+              <MaterialCommunityIcons name="chevron-right" size={28} color={theme.colors.textPrimary} />
+            </Pressable>
+          </View>
+
+          <View style={styles.weekdaysRow}>
+            {WEEKDAY_LABELS.map((label) => (
+              <View key={label} style={styles.dayCell}>
+                <Text style={styles.weekdayLabel}>{label}</Text>
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.daysGrid} {...panResponder.panHandlers}>
+            {calendarDays.map((day) => (
+              <DayButton
+                key={day.toISOString()}
+                day={day}
+                inCurrentMonth={day.getMonth() === visibleMonth.getMonth()}
+                isSelected={isSameDay(day, draftDate)}
+                isToday={isSameDay(day, today)}
+                onPress={() => handleSelectDay(day)}
               />
-            </View>
-          ) : (
-            <>
-              <View style={styles.monthRow}>
-                <Pressable onPress={() => setVisibleMonth((current) => moveMonth(current, -1))} hitSlop={8}>
-                  <MaterialCommunityIcons name="chevron-left" size={28} color={theme.colors.textPrimary} />
-                </Pressable>
-                <Text style={styles.monthLabel}>{getMonthLabel(visibleMonth)}</Text>
-                <Pressable onPress={() => setVisibleMonth((current) => moveMonth(current, 1))} hitSlop={8}>
-                  <MaterialCommunityIcons name="chevron-right" size={28} color={theme.colors.textPrimary} />
-                </Pressable>
-              </View>
-
-              <View style={styles.weekdaysRow}>
-                {WEEKDAY_LABELS.map((label) => (
-                  <View key={label} style={styles.dayCell}>
-                    <Text style={styles.weekdayLabel}>{label}</Text>
-                  </View>
-                ))}
-              </View>
-
-              <View style={styles.daysGrid} {...panResponder.panHandlers}>
-                {calendarDays.map((day) => (
-                  <DayButton
-                    key={day.toISOString()}
-                    day={day}
-                    inCurrentMonth={day.getMonth() === visibleMonth.getMonth()}
-                    isSelected={isSameDay(day, draftDate)}
-                    isToday={isSameDay(day, today)}
-                    onPress={() => handleSelectDay(day)}
-                  />
-                ))}
-              </View>
-            </>
-          )}
+            ))}
+          </View>
 
           <View style={styles.footer}>
             <Pressable onPress={onClose} style={[styles.footerButton, styles.footerButtonSecondary]}>
@@ -327,12 +289,6 @@ const styles = StyleSheet.create({
   dayLabelSelected: {
     color: theme.colors.textPrimary,
     fontWeight: '700',
-  },
-  nativePickerWrap: {
-    borderRadius: 20,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(31, 47, 39, 0.88)',
-    alignItems: 'center',
   },
   footer: {
     flexDirection: 'row',
