@@ -94,6 +94,31 @@ def _runtime_default_access_point_ids() -> list[int]:
     return [int(item["id"]) for item in points] or configured
 
 
+def _runtime_gsm_access_point_ids() -> list[int]:
+    if not settings.gate_real_integration_enabled:
+        return []
+
+    points = gate_client.get_access_points()
+    gsm_ids: list[int] = []
+    for item in points:
+        name = str(item["name"] or "").lower()
+        if "gsm" in name:
+            gsm_ids.append(int(item["id"]))
+    return gsm_ids
+
+
+def _merge_access_point_ids(*groups: list[int]) -> list[int]:
+    merged: list[int] = []
+    seen: set[int] = set()
+    for group in groups:
+        for point_id in group:
+            if point_id in seen:
+                continue
+            seen.add(point_id)
+            merged.append(point_id)
+    return merged
+
+
 @router.post("/auth/login", response_model=CompatAuthResult)
 async def compat_login(
     payload: CompatLoginPayload,
@@ -187,11 +212,15 @@ async def compat_create_pass(
             detail={"code": "missing_pass_identifier", "message": "Provide either car number or phone number"},
         )
 
+    access_point_ids = _runtime_default_access_point_ids()
+    if payload.phoneNumber:
+        access_point_ids = _merge_access_point_ids(access_point_ids, _runtime_gsm_access_point_ids())
+
     create_payload = CreateRequestRequest(
         key_type=key_type,
         key_value=key_value,
         phone_number=payload.phoneNumber,
-        access_point_ids=_runtime_default_access_point_ids(),
+        access_point_ids=access_point_ids,
         is_permanent=payload.isPermanent,
         is_courier=payload.isCourier,
         hours=None if payload.isPermanent else (hours or 24),
