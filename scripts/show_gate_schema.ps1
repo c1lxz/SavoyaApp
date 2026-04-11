@@ -86,15 +86,20 @@ import sys
 
 import pyodbc
 
-mdb_path = sys.argv[1]
-systemdb_path = sys.argv[2]
-uid = sys.argv[3]
-pwd = sys.argv[4]
-top = int(sys.argv[5])
-preferred_driver = sys.argv[6]
-tables_arg = sys.argv[7]
-name_pattern = sys.argv[8].strip().lower()
-include_samples = sys.argv[9].lower() == "true"
+
+def arg(index: int, default: str = "") -> str:
+    return sys.argv[index] if len(sys.argv) > index else default
+
+
+mdb_path = arg(1)
+systemdb_path = arg(2)
+uid = arg(3)
+pwd = arg(4)
+top = int(arg(5, "5"))
+preferred_driver = arg(6)
+tables_arg = arg(7)
+name_pattern = arg(8).strip().lower()
+include_samples = arg(9, "false").lower() == "true"
 
 
 def pick_driver(preferred: str) -> str:
