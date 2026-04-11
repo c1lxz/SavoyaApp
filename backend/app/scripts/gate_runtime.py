@@ -370,6 +370,8 @@ def _find_existing_user_ptr(cursor: pyodbc.Cursor, key_type: str, normalized_key
     for row in rows:
         if bool(row.Deleted):
             continue
+        if int(row.UserPtr) <= 0:
+            continue
         if key_type == "Phone":
             if _normalize_optional_phone(row.Phone) == normalized_key_value:
                 return int(row.UserPtr)
@@ -390,6 +392,8 @@ def _find_reusable_deleted_user_ptr(cursor: pyodbc.Cursor, key_type: str, normal
     for row in rows:
         if not bool(row.Deleted):
             continue
+        if int(row.UserPtr) <= 0:
+            continue
         if key_type == "Phone":
             if _normalize_optional_phone(row.Phone) == normalized_key_value:
                 return int(row.UserPtr)
@@ -397,6 +401,34 @@ def _find_reusable_deleted_user_ptr(cursor: pyodbc.Cursor, key_type: str, normal
         if _normalize_optional_text(row.Number) == normalized_key_value:
             return int(row.UserPtr)
     return None
+
+
+def _resolve_inserted_user_ptr(cursor: pyodbc.Cursor, *, number_u: str) -> int:
+    identity_value = cursor.execute("SELECT @@IDENTITY").fetchval()
+    try:
+        resolved_identity = int(identity_value)
+    except (TypeError, ValueError):
+        resolved_identity = 0
+
+    if resolved_identity > 0:
+        return resolved_identity
+
+    row = cursor.execute(
+        """
+        SELECT TOP 1 UserPtr
+        FROM Users
+        WHERE NumberU = ?
+        ORDER BY UserPtr DESC
+        """,
+        (number_u,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("Inserted Gate user was not found by NumberU")
+
+    resolved_user_ptr = int(row.UserPtr)
+    if resolved_user_ptr <= 0:
+        raise RuntimeError(f"Inserted Gate user has invalid UserPtr: {resolved_user_ptr}")
+    return resolved_user_ptr
 
 
 def _to_access_datetime(value: datetime | None) -> datetime | None:
@@ -451,7 +483,7 @@ def _insert_real_user(
 
     sql = f"INSERT INTO Users ({', '.join(columns)}) VALUES ({', '.join(['?'] * len(params))})"
     cursor.execute(sql, params)
-    return int(cursor.execute("SELECT @@IDENTITY").fetchval())
+    return _resolve_inserted_user_ptr(cursor, number_u=identity.number_u)
 
 
 def _reactivate_real_user(
@@ -875,7 +907,9 @@ def _resolve_user_ptr(cursor: pyodbc.Cursor, external_key_id: str | None) -> int
         )
         row = cursor.fetchone()
         if row is not None:
-            return int(row.UserPtr)
+            resolved_user_ptr = int(row.UserPtr)
+            if resolved_user_ptr > 0:
+                return resolved_user_ptr
 
     normalized_phone = "".join(ch for ch in value if ch.isdigit())
     normalized_text = "".join(value.upper().split())
@@ -888,6 +922,8 @@ def _resolve_user_ptr(cursor: pyodbc.Cursor, external_key_id: str | None) -> int
     ).fetchall()
     for row in rows:
         if bool(row.Deleted):
+            continue
+        if int(row.UserPtr) <= 0:
             continue
         if normalized_phone and _normalize_optional_phone(row.Phone) == normalized_phone:
             return int(row.UserPtr)

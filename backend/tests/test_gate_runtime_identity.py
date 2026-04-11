@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from backend.app.scripts import gate_runtime
 
 
@@ -10,6 +12,38 @@ class _FakeCursor:
     def execute(self, sql: str, params=None):
         self.commands.append((sql, tuple(params) if params is not None else None))
         return self
+
+
+class _RowCursor:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def execute(self, sql: str, params=None):
+        return self
+
+    def fetchall(self):
+        return list(self._rows)
+
+
+class _InsertedUserCursor:
+    def __init__(self) -> None:
+        self.commands: list[tuple[str, tuple | None]] = []
+        self._last_sql = ""
+
+    def execute(self, sql: str, params=None):
+        self._last_sql = sql
+        self.commands.append((sql, tuple(params) if params is not None else None))
+        return self
+
+    def fetchval(self):
+        if self._last_sql == "SELECT @@IDENTITY":
+            return 0
+        raise AssertionError(f"Unexpected fetchval() for SQL: {self._last_sql}")
+
+    def fetchone(self):
+        if "WHERE NumberU = ?" in self._last_sql:
+            return SimpleNamespace(UserPtr=55)
+        raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
 
 
 def test_build_identity_for_phone_populates_required_number(monkeypatch):
@@ -46,3 +80,36 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
         and params == ("0079991234567", "0079991234567", 42)
         for sql, params in cursor.commands
     )
+
+
+def test_find_existing_user_ptr_skips_zero_user_ptr():
+    cursor = _RowCursor(
+        [
+            SimpleNamespace(UserPtr=0, Phone="0079991234567", Number="0079991234567", Deleted=False),
+            SimpleNamespace(UserPtr=17, Phone="0079991234567", Number="0079991234567", Deleted=False),
+        ]
+    )
+
+    user_ptr = gate_runtime._find_existing_user_ptr(cursor, "Phone", "0079991234567")
+
+    assert user_ptr == 17
+
+
+def test_resolve_inserted_user_ptr_falls_back_when_identity_is_zero():
+    cursor = _InsertedUserCursor()
+
+    user_ptr = gate_runtime._resolve_inserted_user_ptr(cursor, number_u="ABC123NUMBER")
+
+    assert user_ptr == 55
+    assert cursor.commands == [
+        ("SELECT @@IDENTITY", None),
+        (
+            """
+        SELECT TOP 1 UserPtr
+        FROM Users
+        WHERE NumberU = ?
+        ORDER BY UserPtr DESC
+        """,
+            ("ABC123NUMBER",),
+        ),
+    ]
