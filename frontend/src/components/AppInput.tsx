@@ -61,9 +61,10 @@ const styles = StyleSheet.create({
     paddingRight: theme.spacing.sm,
   },
   rightSlot: {
-    minWidth: 28,
+    minWidth: 40,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingRight: 4,
+    paddingLeft: 4,
+    paddingRight: 8,
   },
 });

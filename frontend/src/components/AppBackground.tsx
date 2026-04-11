@@ -22,7 +22,7 @@ export const AppBackground = ({ children }: PropsWithChildren) => {
           },
         ]}
       >
-        <View style={styles.vignette} />
+        <View pointerEvents="none" style={styles.vignette} />
         <View style={[styles.content, { maxWidth: metrics.contentMaxWidth }]}>{children}</View>
       </View>
     </ImageBackground>
@@ -33,18 +33,21 @@ const styles = StyleSheet.create({
   background: {
     flex: 1,
     width: '100%',
+    minHeight: '100%',
     backgroundColor: theme.colors.screenBackground,
   },
   overlay: {
     flex: 1,
     width: '100%',
+    minHeight: '100%',
     backgroundColor: theme.colors.overlay,
     alignItems: 'center',
     overflow: 'hidden',
   },
   content: {
-    flex: 1,
+    flexGrow: 1,
     width: '100%',
+    minHeight: '100%',
     alignSelf: 'center',
   },
   vignette: {

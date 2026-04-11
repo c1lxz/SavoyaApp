@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import socket
 import tempfile
 import uuid
 from contextlib import contextmanager
@@ -12,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import pyodbc
+from backend.app.services.gate_controller import GateController
 
 try:
     from dotenv import load_dotenv
@@ -34,6 +34,7 @@ class GateOpenResponse:
     success: bool
     message: str
     error_code: str | None = None
+    details: dict[str, Any] | None = None
 
 
 @dataclass
@@ -961,12 +962,10 @@ def _build_synthetic_wiegand_credential(user_ptr: int, access_point_id: int) -> 
         user_id=user_ptr,
         access_point_id=access_point_id,
     )
+    packet = GateController.build_wiegand26_packet(facility_code=facility_code, card_number=card_number)
     return {
         "access_point_id": access_point_id,
-        "bit_length": WIEGAND_BITS,
-        "facility_code": facility_code,
-        "card_number": card_number,
-        "payload_hex": _encode_wiegand26(facility_code, card_number),
+        **packet.as_dict(),
     }
 
 
@@ -987,137 +986,24 @@ def get_wiegand_credentials(external_key_id: str) -> list[dict[str, Any]]:
         return [_build_synthetic_wiegand_credential(user_ptr=user_ptr, access_point_id=int(row.RdrPtr)) for row in rows]
 
 
-def _send_wiegand26(access_point_id: int, credential: dict[str, Any]) -> GateOpenResponse:
-    transport = os.getenv("GATE_WIEGAND_TRANSPORT", "dry_run").strip().lower()
-    timeout_seconds = float(os.getenv("GATE_WIEGAND_TIMEOUT_SECONDS", "2.0"))
-
-    payload = {
-        "access_point_id": access_point_id,
-        "wiegand": {
-            "bit_length": WIEGAND_BITS,
-            "facility_code": credential["facility_code"],
-            "card_number": credential["card_number"],
-            "payload_hex": credential["payload_hex"],
-        },
+def _send_wiegand26(access_point_id: int, credential: dict[str, Any], external_key_id: str | None = None) -> GateOpenResponse:
+    controller = GateController.from_env()
+    result = controller.open_gate(
+        gate_id=str(access_point_id),
+        access_point_id=access_point_id,
+        facility_code=int(credential["facility_code"]),
+        card_number=int(credential["card_number"]),
+    )
+    details = {
+        "external_key_id": external_key_id,
+        **(result.details or {}),
     }
-
-    if transport in {"", "dry_run", "mock", "simulate", "disabled"}:
-        return GateOpenResponse(
-            success=True,
-            message=(
-                f"Wiegand-26 dry-run sent: AP={access_point_id}, FC={credential['facility_code']}, "
-                f"CN={credential['card_number']}, HEX={credential['payload_hex']}"
-            ),
-        )
-
-    if transport in {"tcp", "tcp_ip", "socket"}:
-        host = os.getenv("GATE_WIEGAND_TCP_HOST", "").strip()
-        raw_port = os.getenv("GATE_WIEGAND_TCP_PORT", "").strip()
-        if not host:
-            return GateOpenResponse(
-                success=False,
-                error_code="integration_unavailable",
-                message="GATE_WIEGAND_TCP_HOST is not configured",
-            )
-        if not raw_port:
-            return GateOpenResponse(
-                success=False,
-                error_code="integration_unavailable",
-                message="GATE_WIEGAND_TCP_PORT is not configured",
-            )
-        try:
-            port = int(raw_port)
-        except ValueError:
-            return GateOpenResponse(
-                success=False,
-                error_code="integration_unavailable",
-                message=f"Invalid GATE_WIEGAND_TCP_PORT: {raw_port}",
-            )
-
-        payload_format = os.getenv("GATE_WIEGAND_TCP_PAYLOAD_FORMAT", "json").strip().lower()
-        if payload_format == "json":
-            import json
-
-            body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        elif payload_format in {"payload_hex", "hex"}:
-            body = str(credential["payload_hex"])
-        elif payload_format in {"fc_cn", "facility_card"}:
-            body = f"{credential['facility_code']}:{credential['card_number']}"
-        else:
-            return GateOpenResponse(
-                success=False,
-                error_code="transport_not_supported",
-                message=f"Unknown GATE_WIEGAND_TCP_PAYLOAD_FORMAT: {payload_format}",
-            )
-
-        append_newline = os.getenv("GATE_WIEGAND_TCP_APPEND_NEWLINE", "true").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-        encoding = os.getenv("GATE_WIEGAND_TCP_ENCODING", "utf-8").strip() or "utf-8"
-        wire_data = (body + ("\n" if append_newline else "")).encode(encoding)
-
-        try:
-            with socket.create_connection((host, port), timeout=timeout_seconds) as conn:
-                conn.sendall(wire_data)
-            return GateOpenResponse(success=True, message=f"Wiegand-26 sent via TCP to {host}:{port}")
-        except Exception as exc:
-            return GateOpenResponse(
-                success=False,
-                error_code="transport_error",
-                message=f"Wiegand TCP transport failed: {exc}",
-            )
-
-    if transport != "http":
-        return GateOpenResponse(success=False, error_code="transport_not_supported", message=f"Unknown transport: {transport}")
-
-    url = os.getenv("GATE_WIEGAND_HTTP_URL", "").strip()
-    if not url:
-        return GateOpenResponse(
-            success=False,
-            error_code="integration_unavailable",
-            message="GATE_WIEGAND_HTTP_URL is not configured",
-        )
-
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    token = os.getenv("GATE_WIEGAND_HTTP_TOKEN", "").strip()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    try:
-        import httpx
-    except ImportError:
-        return GateOpenResponse(
-            success=False,
-            error_code="integration_unavailable",
-            message="httpx is not installed for HTTP transport",
-        )
-
-    try:
-        response = httpx.post(url, json=payload, headers=headers, timeout=timeout_seconds)
-        if response.status_code >= 400:
-            return GateOpenResponse(
-                success=False,
-                error_code="transport_http_error",
-                message=f"Wiegand transport HTTP {response.status_code}",
-            )
-
-        try:
-            data = response.json()
-        except ValueError:
-            data = {}
-
-        if isinstance(data, dict):
-            success = bool(data.get("success", True))
-            message = str(data.get("message") or "Wiegand-26 command accepted")
-            error_code = str(data.get("error_code")) if data.get("error_code") else None
-            return GateOpenResponse(success=success, message=message, error_code=error_code)
-
-        return GateOpenResponse(success=True, message="Wiegand-26 command accepted")
-    except Exception as exc:
-        return GateOpenResponse(success=False, error_code="transport_error", message=f"Wiegand transport failed: {exc}")
+    return GateOpenResponse(
+        success=result.success,
+        message=result.message,
+        error_code=result.error_code,
+        details=details,
+    )
 
 
 def open_access_point(access_point_id: int, external_key_id: str | None = None) -> dict[str, Any]:
@@ -1132,7 +1018,12 @@ def open_access_point(access_point_id: int, external_key_id: str | None = None) 
                 error_code="access_point_not_found",
                 message="Access point not found in GATE database",
             )
-            return {"success": result.success, "error_code": result.error_code, "message": result.message}
+            return {
+                "success": result.success,
+                "error_code": result.error_code,
+                "message": result.message,
+                "details": result.details,
+            }
 
         user_ptr = _resolve_user_ptr(cursor, external_key_id)
         if external_key_id is not None and user_ptr is None:
@@ -1141,26 +1032,46 @@ def open_access_point(access_point_id: int, external_key_id: str | None = None) 
                 error_code="key_not_found",
                 message="Active key is not found in GATE database",
             )
-            return {"success": result.success, "error_code": result.error_code, "message": result.message}
+            return {
+                "success": result.success,
+                "error_code": result.error_code,
+                "message": result.message,
+                "details": result.details,
+            }
         if user_ptr is None:
             result = GateOpenResponse(
                 success=False,
                 error_code="key_not_found",
                 message="Open by key requires external_key_id",
             )
-            return {"success": result.success, "error_code": result.error_code, "message": result.message}
+            return {
+                "success": result.success,
+                "error_code": result.error_code,
+                "message": result.message,
+                "details": result.details,
+            }
         if not _has_user_permission(cursor, user_ptr, access_point_id):
             result = GateOpenResponse(
                 success=False,
                 error_code="access_denied",
                 message="Key has no permission for access point",
             )
-            return {"success": result.success, "error_code": result.error_code, "message": result.message}
+            return {
+                "success": result.success,
+                "error_code": result.error_code,
+                "message": result.message,
+                "details": result.details,
+            }
 
         credential = _build_synthetic_wiegand_credential(user_ptr=user_ptr, access_point_id=access_point_id)
-        transport_result = _send_wiegand26(access_point_id=access_point_id, credential=credential)
+        transport_result = _send_wiegand26(
+            access_point_id=access_point_id,
+            credential=credential,
+            external_key_id=external_key_id,
+        )
         return {
             "success": transport_result.success,
             "error_code": transport_result.error_code,
             "message": transport_result.message,
+            "details": transport_result.details,
         }

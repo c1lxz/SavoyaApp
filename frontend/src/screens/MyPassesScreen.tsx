@@ -82,6 +82,7 @@ const styles = StyleSheet.create({
   listContent: {
     flexGrow: 1,
     paddingBottom: theme.spacing.xl,
+    minHeight: '100%',
   },
   error: {
     color: theme.colors.danger,

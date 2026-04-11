@@ -232,4 +232,5 @@ class AccessEventItem(BaseModel):
     action: str
     error_code: str | None = None
     error_message: str | None = None
+    details: dict | None = None
     created_at: datetime

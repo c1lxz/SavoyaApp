@@ -185,6 +185,30 @@ def test_access_events_are_logged(client):
     assert any(item["request_id"] == request_id for item in rows)
 
 
+def test_access_events_include_gate_diagnostics(client):
+    headers, _ = _create_user_and_login(client)
+    _create_permanent_request(client, headers, [1])
+
+    original = gate_client.open_access_point
+    gate_client.open_access_point = lambda access_point_id, key_external_id=None: GateOpenResult(
+        success=True,
+        message="Prepared in dry-run",
+        details={"transport": "dry_run", "packet": {"frame_hex": "2026073"}},
+    )
+    try:
+        opened = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
+        assert opened.status_code == 200
+        request_id = opened.json()["request_id"]
+
+        events = client.get("/api/access/events/my", headers=headers)
+        assert events.status_code == 200
+        row = next(item for item in events.json() if item["request_id"] == request_id)
+        assert row["details"]["gate_result"]["transport"] == "dry_run"
+        assert row["details"]["gate_result"]["packet"]["frame_hex"] == "2026073"
+    finally:
+        gate_client.open_access_point = original
+
+
 def test_access_open_exit_completes_courier_request_and_removes_gate_key(client):
     headers, user_id = _create_user_and_login(client)
     request_id = asyncio.run(_insert_active_courier_request(user_id, 2, 200501))

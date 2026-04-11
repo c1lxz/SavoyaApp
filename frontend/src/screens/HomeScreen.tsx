@@ -17,10 +17,13 @@ const LOGO_IMAGE_RATIO = 711 / 586;
 export const HomeScreen = ({ navigation }: Props) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
+
   const logoWidth = Math.min(metrics.heroLogoWidth, width - metrics.horizontalPadding * 2);
-  const logoMaxHeight = metrics.isDesktop ? 248 : metrics.isTablet ? 220 : metrics.isCompactHeight ? 132 : 164;
-  const contentGap = metrics.isCompactHeight ? 10 : metrics.isDesktop ? metrics.panelGap + 2 : metrics.panelGap;
+  const logoMaxHeight = metrics.isDesktop ? 248 : metrics.isTablet ? 220 : metrics.isCompactHeight ? 124 : 150;
+  const contentGap = metrics.isHandset ? (metrics.isCompactHeight ? 8 : 12) : metrics.isDesktop ? metrics.panelGap + 2 : metrics.panelGap;
   const subtitleFontSize = metrics.isDesktop ? 22 : metrics.isTablet ? 20 : metrics.isMobile ? 16 : 18;
+  const pagePaddingTop = metrics.isHandset ? (metrics.isCompactHeight ? 8 : 18) : metrics.isCompactHeight ? 2 : 12;
+  const pagePaddingBottom = metrics.isHandset ? (metrics.isCompactHeight ? 10 : 14) : metrics.isCompactHeight ? 4 : 12;
 
   return (
     <AppBackground>
@@ -30,8 +33,9 @@ export const HomeScreen = ({ navigation }: Props) => {
             styles.page,
             {
               gap: contentGap,
-              paddingTop: metrics.isCompactHeight ? 2 : metrics.isHandset ? 6 : 12,
-              paddingBottom: metrics.isCompactHeight ? 4 : metrics.isHandset ? 8 : 12,
+              paddingTop: pagePaddingTop,
+              paddingBottom: pagePaddingBottom,
+              justifyContent: metrics.isHandset ? 'flex-start' : 'center',
             },
           ]}
         >
@@ -51,10 +55,10 @@ export const HomeScreen = ({ navigation }: Props) => {
           </View>
 
           <View style={[styles.actions, { maxWidth: metrics.formMaxWidth, gap: contentGap }]}>
-            <AppButton title="Создать пропуск" onPress={() => navigation.navigate('CreatePass')} />
-            <AppButton title="Открыть шлагбаум" onPress={() => navigation.navigate('OpenBarrier')} />
-            <AppButton title="Калитки" onPress={() => navigation.navigate('Wickets')} />
-            <AppButton title="Мои пропуски" onPress={() => navigation.navigate('MyPasses')} />
+            <AppButton title="Создать пропуск" onPress={() => navigation.push('CreatePass')} />
+            <AppButton title="Открыть шлагбаум" onPress={() => navigation.push('OpenBarrier')} />
+            <AppButton title="Калитки" onPress={() => navigation.push('Wickets')} />
+            <AppButton title="Мои пропуски" onPress={() => navigation.push('MyPasses')} />
           </View>
         </View>
       </SafeAreaView>
@@ -69,8 +73,8 @@ const styles = StyleSheet.create({
   page: {
     flex: 1,
     width: '100%',
+    minHeight: '100%',
     alignItems: 'center',
-    justifyContent: 'center',
   },
   logoBlock: {
     width: '100%',

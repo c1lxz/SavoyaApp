@@ -38,7 +38,13 @@ const AppButtonComponent = ({
       <View
         style={[
           styles.content,
-          { paddingHorizontal: metrics.isCompactHeight ? theme.spacing.md : theme.spacing.lg },
+          {
+            paddingHorizontal: metrics.isHandset
+              ? theme.spacing.md
+              : metrics.isCompactHeight
+                ? theme.spacing.md
+                : theme.spacing.lg,
+          },
         ]}
       >
         {loading ? (
@@ -46,7 +52,9 @@ const AppButtonComponent = ({
         ) : (
           <View style={styles.row}>
             {leftIcon ? <View style={styles.iconWrap}>{leftIcon}</View> : null}
-            <Text style={[styles.label, { fontSize: metrics.isCompactHeight ? 17 : 18 }]}>{title}</Text>
+            <Text style={[styles.label, { fontSize: metrics.isHandset ? 16 : metrics.isCompactHeight ? 17 : 18 }]}>
+              {title}
+            </Text>
           </View>
         )}
       </View>

@@ -1,4 +1,5 @@
 import React from 'react';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { theme } from '@/theme';
@@ -12,14 +13,24 @@ type ScreenHeaderProps = {
 export const ScreenHeader = ({ title, onBack }: ScreenHeaderProps) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
-  const backControlWidth = metrics.isDesktop ? 104 : 64;
+  const backControlWidth = metrics.isDesktop ? 124 : 64;
 
   return (
     <View style={[styles.root, { marginBottom: metrics.panelGap + 2 }]}>
       <View style={styles.topRow}>
         {onBack ? (
-          <Pressable onPress={onBack} hitSlop={10} style={[styles.backButton, { minWidth: backControlWidth }]}>
-            <Text style={styles.backArrow}>←</Text>
+          <Pressable
+            onPress={onBack}
+            hitSlop={12}
+            style={[styles.backButton, { minWidth: backControlWidth }]}
+            accessibilityRole="button"
+            accessibilityLabel="Назад"
+          >
+            <MaterialCommunityIcons
+              name="arrow-left"
+              size={metrics.isDesktop ? 30 : 28}
+              color={theme.colors.textSecondary}
+            />
             {metrics.isDesktop ? <Text style={styles.backLabel}>Назад</Text> : null}
           </Pressable>
         ) : (
@@ -52,12 +63,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-  },
-  backArrow: {
-    color: theme.colors.textSecondary,
-    fontSize: 28,
-    lineHeight: 28,
-    fontWeight: '500',
+    paddingVertical: 6,
   },
   backLabel: {
     color: theme.colors.textSecondary,

@@ -20,6 +20,7 @@ class GateOpenResult:
     success: bool
     message: str
     code: str | None = None
+    details: dict[str, Any] | None = None
 
 
 class GateClient:
@@ -133,6 +134,7 @@ class GateClient:
                 success=bool(response.get("success")),
                 message=str(response.get("message", "")),
                 code=str(response.get("error_code")) if response.get("error_code") else None,
+                details=dict(response.get("details") or {}) or None,
             )
 
         if settings.gate_open_mode == "simulate":

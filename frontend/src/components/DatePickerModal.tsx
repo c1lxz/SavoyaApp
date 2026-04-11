@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Modal, PanResponder, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { Modal, PanResponder, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { theme } from '@/theme';
 import { getLayoutMetrics } from '@/utils/layout';
@@ -67,19 +67,9 @@ const DayButton = ({
   <View style={styles.dayCell}>
     <Pressable
       onPress={onPress}
-      style={[
-        styles.dayButton,
-        isSelected && styles.dayButtonSelected,
-        isToday && !isSelected && styles.dayButtonToday,
-      ]}
+      style={[styles.dayButton, isSelected && styles.dayButtonSelected, isToday && !isSelected && styles.dayButtonToday]}
     >
-      <Text
-        style={[
-          styles.dayLabel,
-          !inCurrentMonth && styles.dayLabelMuted,
-          isSelected && styles.dayLabelSelected,
-        ]}
-      >
+      <Text style={[styles.dayLabel, !inCurrentMonth && styles.dayLabelMuted, isSelected && styles.dayLabelSelected]}>
         {day.getDate()}
       </Text>
     </Pressable>
@@ -132,6 +122,7 @@ export const DatePickerModal = ({ visible, value, onChange, onClose }: DatePicke
 
   const calendarDays = buildCalendarDays(visibleMonth, draftDate);
   const today = new Date();
+  const cardMaxHeight = metrics.isHandset ? Math.min(height - 24, 640) : Math.min(height - 48, 700);
 
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
@@ -148,20 +139,26 @@ export const DatePickerModal = ({ visible, value, onChange, onClose }: DatePicke
       >
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
 
-        <View style={[styles.card, metrics.isHandset ? styles.cardMobile : styles.cardDesktop]}>
+        <View
+          style={[
+            styles.card,
+            metrics.isHandset ? styles.cardMobile : styles.cardDesktop,
+            { maxHeight: cardMaxHeight },
+          ]}
+        >
           <View style={styles.header}>
             <Text style={[styles.title, { fontSize: metrics.isHandset ? 18 : 20 }]}>Выберите дату</Text>
-            <Pressable onPress={onClose} hitSlop={8}>
+            <Pressable onPress={onClose} hitSlop={12} accessibilityRole="button" accessibilityLabel="Закрыть календарь">
               <MaterialCommunityIcons name="close" size={24} color={theme.colors.textSecondary} />
             </Pressable>
           </View>
 
           <View style={styles.monthRow}>
-            <Pressable onPress={() => setVisibleMonth((current) => moveMonth(current, -1))} hitSlop={8}>
+            <Pressable onPress={() => setVisibleMonth((current) => moveMonth(current, -1))} hitSlop={12}>
               <MaterialCommunityIcons name="chevron-left" size={28} color={theme.colors.textPrimary} />
             </Pressable>
             <Text style={styles.monthLabel}>{getMonthLabel(visibleMonth)}</Text>
-            <Pressable onPress={() => setVisibleMonth((current) => moveMonth(current, 1))} hitSlop={8}>
+            <Pressable onPress={() => setVisibleMonth((current) => moveMonth(current, 1))} hitSlop={12}>
               <MaterialCommunityIcons name="chevron-right" size={28} color={theme.colors.textPrimary} />
             </Pressable>
           </View>
@@ -208,7 +205,6 @@ const styles = StyleSheet.create({
   card: {
     alignSelf: 'center',
     width: '100%',
-    maxWidth: 420,
     borderRadius: 24,
     borderWidth: 1,
     borderColor: theme.colors.border,
@@ -217,10 +213,10 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   cardDesktop: {
-    maxWidth: 420,
+    maxWidth: 440,
   },
   cardMobile: {
-    maxWidth: 380,
+    maxWidth: 400,
   },
   header: {
     flexDirection: 'row',

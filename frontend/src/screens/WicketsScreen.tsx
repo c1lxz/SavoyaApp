@@ -126,10 +126,12 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     width: '100%',
+    minHeight: '100%',
   },
   panel: {
     width: '100%',
     alignSelf: 'center',
+    minHeight: '100%',
   },
   actions: {
     marginTop: 8,

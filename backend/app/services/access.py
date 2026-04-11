@@ -109,7 +109,7 @@ async def _get_or_create_access_key(session: AsyncSession, request_item: Request
     key = AccessKey(
         user_id=request_item.resident_id,
         external_id=external_id,
-        protocol_type="unknown",
+        protocol_type="gate_mdb_user",
         is_active=True,
         valid_from=request_item.created_at,
         valid_to=request_item.expires_at,
@@ -308,6 +308,10 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
     event.status = STATUS_SUCCESS if result.success else STATUS_FAILED
     event.error_code = result.code if not result.success else None
     event.error_message = result.message if not result.success else None
+    event.details = {
+        **(event.details or {}),
+        **({"gate_result": result.details} if result.details else {}),
+    }
     cleanup_error: str | None = None
     if result.success and access_point.type == "barrier_exit" and bool(getattr(request_item, "is_courier", False)):
         try:

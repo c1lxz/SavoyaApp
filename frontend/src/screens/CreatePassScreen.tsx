@@ -23,7 +23,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'CreatePass'>;
 const hasAtLeastTwoWords = (value: string) => value.trim().split(/\s+/).filter(Boolean).length >= 2;
 
 const renderClearButton = (onPress: () => void) => (
-  <Pressable onPress={onPress} hitSlop={8}>
+  <Pressable onPress={onPress} hitSlop={12}>
     <MaterialCommunityIcons name="close-circle-outline" size={24} color={theme.colors.textSecondary} />
   </Pressable>
 );
@@ -50,7 +50,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
   const [formError, setFormError] = useState<string | null>(null);
   const [draftLoaded, setDraftLoaded] = useState(false);
 
-  const dateLabel = formatDate(expiresAt.toISOString());
+  const dateLabel = formatDate(expiresAt);
 
   useEffect(() => {
     let isCancelled = false;
@@ -286,10 +286,12 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     width: '100%',
+    minHeight: '100%',
   },
   formWrap: {
     width: '100%',
     alignSelf: 'center',
+    minHeight: '100%',
   },
   form: {},
   dateWrap: {
@@ -311,8 +313,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingLeft: theme.spacing.md,
-    paddingRight: theme.spacing.sm,
-    gap: 12,
+    paddingRight: theme.spacing.md,
+    gap: 14,
   },
   dateValue: {
     flex: 1,
@@ -320,10 +322,10 @@ const styles = StyleSheet.create({
     fontSize: 19,
   },
   dateIconWrap: {
-    minWidth: 28,
+    minWidth: 34,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingRight: 4,
+    paddingRight: 6,
   },
   checkboxRow: {
     flexDirection: 'row',

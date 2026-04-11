@@ -82,6 +82,7 @@ async def list_my_access_events(
             action=row.action,
             error_code=row.error_code,
             error_message=row.error_message,
+            details=row.details,
             created_at=row.created_at,
         )
         for row in rows

@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, View } from 'react-native';
 import { DefaultTheme, NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
@@ -66,7 +66,12 @@ export const RootNavigator = () => {
     <NavigationContainer linking={linking} theme={navigationTheme}>
       <Stack.Navigator
         initialRouteName={user ? (requiresProfileCompletion ? 'ProfileSetup' : 'Home') : 'Auth'}
-        screenOptions={{ headerShown: false, animation: 'fade' }}
+        screenOptions={{
+          headerShown: false,
+          animation: Platform.OS === 'ios' ? 'slide_from_right' : Platform.OS === 'web' ? 'none' : 'fade',
+          gestureEnabled: Platform.OS === 'ios',
+          fullScreenGestureEnabled: Platform.OS === 'ios',
+        }}
       >
         {user ? (
           requiresProfileCompletion ? (

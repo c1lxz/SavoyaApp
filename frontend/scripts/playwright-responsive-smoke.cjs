@@ -229,6 +229,7 @@ const evaluateHomeViewport = async (browserType, name, viewport, options = {}) =
     const firstButtonBox = await pressableByText(page, TEXT.createPass).boundingBox();
     const lastButtonBox = await pressableByText(page, TEXT.myPasses).boundingBox();
     const screenshotPath = path.join(ARTIFACT_PREFIX, `.tmp-home-${name}.png`);
+    const homeContentTop = firstButtonBox ? Math.round(firstButtonBox.y) : null;
 
     await page.screenshot({ path: screenshotPath, fullPage: false });
     const pixelSamples = await sampleScreenshot(screenshotPath);
@@ -249,12 +250,47 @@ const evaluateHomeViewport = async (browserType, name, viewport, options = {}) =
       allHomeButtonsVisible: Boolean(lastButtonBox) && lastButtonBox.y + lastButtonBox.height <= viewport.height,
       logoToButtonGap:
         subtitleBox && firstButtonBox ? Math.round(firstButtonBox.y - (subtitleBox.y + subtitleBox.height)) : null,
+      homeContentTop,
       backgroundCovered:
         !isNearWhite(pixelSamples.bottomCenter) &&
         !isNearWhite(pixelSamples.bottomRight) &&
         !isNearWhite(pixelSamples.midRight),
       screenshotPath,
       pixelSamples,
+    };
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+};
+
+const evaluateWebBackHistory = async (browserType, name, viewport, options = {}) => {
+  const browser = await browserType.launch({ headless: true });
+  const context = await browser.newContext({
+    viewport,
+    isMobile: Boolean(options.isMobile),
+    hasTouch: Boolean(options.hasTouch),
+    deviceScaleFactor: 1,
+  });
+  const page = await context.newPage();
+
+  try {
+    await installApiMock(page);
+    await loginToHome(page);
+    await openCreatePass(page);
+
+    const createPassUrl = page.url();
+    await page.goBack({ waitUntil: 'load' });
+    const homeUrlAfterBack = page.url();
+    const homeVisibleAfterBack = await pressableByText(page, TEXT.createPass).isVisible();
+
+    return {
+      name,
+      browser: browserType.name(),
+      viewport,
+      createPassUrl,
+      homeUrlAfterBack,
+      historyWorked: createPassUrl.endsWith('/create-pass') && homeUrlAfterBack.endsWith('/') && homeVisibleAfterBack,
     };
   } finally {
     await context.close();
@@ -419,7 +455,27 @@ async function main() {
       result.logoToButtonGap !== null && result.logoToButtonGap <= (result.viewport.width <= 480 ? 40 : 72),
       `${result.name}: gap between logo and buttons is too large`,
     );
+    assertResult(
+      !result.viewport.width || result.viewport.width > 768 || (result.homeContentTop !== null && result.homeContentTop <= 260),
+      `${result.name}: home content still starts too low on handset screens`,
+    );
   }
+
+  const chromiumBackHistory = await evaluateWebBackHistory(
+    chromium,
+    'history-chromium',
+    { width: 1280, height: 900 },
+    { isMobile: false, hasTouch: false },
+  );
+  const webkitBackHistory = await evaluateWebBackHistory(
+    webkit,
+    'history-webkit',
+    { width: 393, height: 852 },
+    { isMobile: true, hasTouch: true },
+  );
+
+  assertResult(chromiumBackHistory.historyWorked, 'chromium: browser back did not return from CreatePass to Home');
+  assertResult(webkitBackHistory.historyWorked, 'webkit: browser back did not return from CreatePass to Home');
 
   const mobileCrosses = await evaluateInputCrosses(
     chromium,
@@ -469,6 +525,10 @@ async function main() {
     crosses: {
       mobile: mobileCrosses,
       desktop: desktopCrosses,
+    },
+    history: {
+      chromium: chromiumBackHistory,
+      webkit: webkitBackHistory,
     },
     calendar: {
       chromium: chromiumCalendar,
