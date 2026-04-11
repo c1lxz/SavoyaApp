@@ -3,6 +3,7 @@ param(
     [string]$RepoRoot = "",
     [string]$NginxExePath = "C:\nginx\nginx.exe",
     [string]$NginxConfPath = "C:\nginx\conf\nginx.conf",
+    [string]$NginxServerName = "xn--80aaachc8cmu1au8c1f.xn--p1ai",
     [switch]$SkipPull,
     [switch]$Bootstrap,
     [switch]$OpenToolShell,
@@ -132,9 +133,70 @@ function Select-FirstExistingPath {
     return ""
 }
 
+function Invoke-CurlRequest {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [switch]$AllowFailure
+    )
+
+    $curl = Get-Command "curl.exe" -ErrorAction SilentlyContinue
+    if (-not $curl) {
+        throw "curl.exe is required for nginx verification"
+    }
+
+    $output = & $curl.Source @Arguments 2>&1
+    $exitCode = $LASTEXITCODE
+
+    if (-not $AllowFailure -and $exitCode -ne 0) {
+        throw "curl.exe failed with exit code $exitCode`n$output"
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = ($output | Out-String).Trim()
+    }
+}
+
+function Wait-ForHttpSuccess {
+    param(
+        [Parameter(Mandatory = $true)][string]$Description,
+        [Parameter(Mandatory = $true)][scriptblock]$Probe,
+        [int]$TimeoutSeconds = 25,
+        [int]$DelayMilliseconds = 1000
+    )
+
+    if ($Preview) {
+        Write-Host "[preview] waiting for $Description"
+        return
+    }
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $lastError = ""
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $result = & $Probe
+            if ($result) {
+                return
+            }
+        }
+        catch {
+            $lastError = $_.Exception.Message
+        }
+
+        Start-Sleep -Milliseconds $DelayMilliseconds
+    }
+
+    if ($lastError) {
+        throw "Timed out waiting for $Description. Last error: $lastError"
+    }
+
+    throw "Timed out waiting for $Description."
+}
+
 $resolvedRepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $frontendRoot = Join-Path $resolvedRepoRoot "frontend"
 $frontendNodeModules = Join-Path $frontendRoot "node_modules"
+$frontendDistRoot = Join-Path $frontendRoot "dist"
 $backendRequirements = Join-Path $resolvedRepoRoot "backend\requirements.txt"
 
 $nginxCommand = Get-Command nginx -ErrorAction SilentlyContinue
@@ -263,6 +325,13 @@ finally {
     }
 }
 
+if ($Preview) {
+    Write-Host "[preview] verify frontend build output at $(Join-Path $frontendDistRoot 'index.html')"
+}
+elseif (-not (Test-Path -LiteralPath (Join-Path $frontendDistRoot "index.html"))) {
+    throw "Frontend build is missing frontend/dist/index.html"
+}
+
 $backendBody = @(
     "Remove-Item Env:ALLOWED_HOSTS_JSON -ErrorAction SilentlyContinue",
     "Remove-Item Env:CORS_ALLOW_ORIGINS_JSON -ErrorAction SilentlyContinue",
@@ -273,6 +342,14 @@ $backendBody = @(
 )
 
 Start-WorkspaceWindow -Title "Savoya Backend" -WorkingDirectory $resolvedRepoRoot -Body $backendBody
+
+Wait-ForHttpSuccess -Description "backend health endpoint" -Probe {
+    $result = Invoke-CurlRequest -Arguments @(
+        "-sS",
+        "http://127.0.0.1:$BackendPort/health"
+    ) -AllowFailure
+    return $result.ExitCode -eq 0 -and $result.Output -match '"status"\s*:\s*"ok"'
+}
 
 Invoke-ExternalCommand `
     -Executable $resolvedNginxExePath `
@@ -301,6 +378,27 @@ else {
     }
 }
 
+Wait-ForHttpSuccess -Description "nginx frontend root page" -Probe {
+    $result = Invoke-CurlRequest -Arguments @(
+        "-k",
+        "-sS",
+        "-I",
+        "-H", "Host: $NginxServerName",
+        "https://127.0.0.1/"
+    ) -AllowFailure
+    return $result.ExitCode -eq 0 -and $result.Output -match "200 OK"
+}
+
+Wait-ForHttpSuccess -Description "nginx health proxy" -Probe {
+    $result = Invoke-CurlRequest -Arguments @(
+        "-k",
+        "-sS",
+        "-H", "Host: $NginxServerName",
+        "https://127.0.0.1/health"
+    ) -AllowFailure
+    return $result.ExitCode -eq 0 -and $result.Output -match '"status"\s*:\s*"ok"'
+}
+
 if ($OpenToolShell) {
     Start-WorkspaceWindow `
         -Title "Savoya Shell" `
@@ -317,3 +415,4 @@ else {
 
 Write-Host "Frontend should be served by nginx on ports 80/443." -ForegroundColor Green
 Write-Host "Backend should be reachable only from nginx at http://127.0.0.1:$BackendPort." -ForegroundColor Green
+Write-Host "Verified: frontend/dist exists, backend health is OK, nginx / and /health respond through HTTPS." -ForegroundColor Green
