@@ -329,7 +329,15 @@ def _sample_user_defaults(cursor: pyodbc.Cursor, key_type: str) -> dict[str, Any
 def _build_identity(cursor: pyodbc.Cursor, key_type: str, normalized_key_value: str) -> RealGateIdentity:
     number_u = _generate_unique_number_u(cursor)
     if key_type == "Phone":
-        return RealGateIdentity(number=None, phone=normalized_key_value, number_u=number_u, number_mifare=None)
+        # Some real Gate MDB schemas mark Users.Number as required even for
+        # phone-based identities. Mirror the normalized phone into Number so
+        # inserts work on those deployments.
+        return RealGateIdentity(
+            number=normalized_key_value,
+            phone=normalized_key_value,
+            number_u=number_u,
+            number_mifare=None,
+        )
     return RealGateIdentity(number=normalized_key_value, phone=None, number_u=number_u, number_mifare=None)
 
 
@@ -475,6 +483,8 @@ def _reactivate_real_user(
     ]
     if key_type == "Phone":
         assignments.append("[Phone] = ?")
+        params.append(normalized_key_value)
+        assignments.append("[Number] = ?")
         params.append(normalized_key_value)
     else:
         assignments.append("[Number] = ?")
@@ -660,6 +670,13 @@ def _upsert_real_user(
                 existing_user_ptr,
             ),
         )
+        if key_type == "Phone":
+            cursor.execute(
+                "UPDATE Users SET Phone = ?, [Number] = ? WHERE UserPtr = ?",
+                (normalized_key_value, normalized_key_value, existing_user_ptr),
+            )
+        else:
+            cursor.execute("UPDATE Users SET [Number] = ? WHERE UserPtr = ?", (normalized_key_value, existing_user_ptr))
         if phone_number is not None and key_type != "Phone":
             cursor.execute("UPDATE Users SET Phone = ? WHERE UserPtr = ?", (_normalize_contact_phone(phone_number), existing_user_ptr))
         _ensure_access_permissions(cursor, existing_user_ptr, access_point_ids)

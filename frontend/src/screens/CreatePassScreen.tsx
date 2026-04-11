@@ -35,6 +35,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
   const user = useAuthStore((state) => state.user);
   const updateProfile = useAuthStore((state) => state.updateProfile);
   const profileState = useAuthStore((state) => state.profileState);
+  const authError = useAuthStore((state) => state.error);
   const createPass = usePassesStore((state) => state.createPass);
   const createState = usePassesStore((state) => state.createState);
   const createError = usePassesStore((state) => state.createError);
@@ -129,7 +130,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     if (user && (normalizedFullName !== user.fullName || normalizedPlotNumber !== user.plotNumber)) {
       const saved = await updateProfile(normalizedFullName, normalizedPlotNumber);
       if (!saved) {
-        setFormError('Не удалось сохранить фамилию и имя');
+        setFormError(authError ?? 'Не удалось сохранить фамилию и имя');
         return;
       }
     }
