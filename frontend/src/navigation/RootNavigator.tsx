@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { ActivityIndicator, Platform, StyleSheet, View } from 'react-native';
+import React from 'react';
+import { Platform } from 'react-native';
 import { DefaultTheme, NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
@@ -47,20 +47,6 @@ const linking: LinkingOptions<RootStackParamList> = {
 export const RootNavigator = () => {
   const user = useAuthStore((state) => state.user);
   const requiresProfileCompletion = useAuthStore((state) => state.requiresProfileCompletion);
-  const restoreState = useAuthStore((state) => state.restoreState);
-  const restoreSession = useAuthStore((state) => state.restoreSession);
-
-  useEffect(() => {
-    void restoreSession();
-  }, [restoreSession]);
-
-  if (restoreState === 'idle' || restoreState === 'loading') {
-    return (
-      <View style={styles.bootstrap}>
-        <ActivityIndicator size="large" color={theme.colors.textPrimary} />
-      </View>
-    );
-  }
 
   return (
     <NavigationContainer linking={linking} theme={navigationTheme}>
@@ -92,12 +78,3 @@ export const RootNavigator = () => {
     </NavigationContainer>
   );
 };
-
-const styles = StyleSheet.create({
-  bootstrap: {
-    flex: 1,
-    backgroundColor: theme.colors.screenBackground,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});

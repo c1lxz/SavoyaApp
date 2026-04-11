@@ -184,6 +184,12 @@ def _normalize_phone(value: str) -> str:
     digits = "".join(ch for ch in (value or "") if ch.isdigit())
     if not digits:
         raise ValueError("Phone key_value must contain digits")
+    if digits.startswith("00"):
+        return digits
+    if digits.startswith("8") and len(digits) == 11:
+        return f"007{digits[1:]}"
+    if digits.startswith("7"):
+        return f"00{digits}"
     return digits
 
 
@@ -336,8 +342,7 @@ def _normalize_optional_phone(value: Any) -> str:
 def _normalize_contact_phone(value: str | None) -> str | None:
     if value is None:
         return None
-    digits = "".join(ch for ch in str(value) if ch.isdigit())
-    return digits or None
+    return _normalize_phone(str(value))
 
 
 def _normalize_optional_text(value: Any) -> str:

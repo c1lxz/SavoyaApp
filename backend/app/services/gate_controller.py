@@ -436,7 +436,7 @@ class GateController:
             logger.info("Gate TCP send completed host=%s port=%s bytes=%s", host, port, len(wire_data))
             return GateSendResult(
                 success=True,
-                message=f"Gate command sent via {self.config.transport} to {host}:{port}",
+                message=f"Gate command sent via {self.config.transport} to {host}:{port}. Physical opening is not confirmed.",
                 details=details,
             )
         except Exception as exc:

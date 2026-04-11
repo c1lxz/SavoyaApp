@@ -1,6 +1,7 @@
 ﻿import { create } from 'zustand';
 
 import { mockAuthService } from '@/services/authService';
+import { usePassesStore } from '@/store/passesStore';
 import { RequestState, User } from '@/types';
 
 type AuthStore = {
@@ -33,6 +34,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
       const result = await mockAuthService.login(login, password);
 
       if (result.success && result.user) {
+        usePassesStore.getState().resetPasses(result.user.id);
         set({
           user: result.user,
           loginState: 'success',
@@ -69,6 +71,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
     set({ logoutState: 'loading', error: null });
     try {
       await mockAuthService.logout();
+      usePassesStore.getState().resetPasses(null);
       set({ user: null, logoutState: 'success', requiresProfileCompletion: false });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Ошибка сети';
@@ -78,7 +81,8 @@ export const useAuthStore = create<AuthStore>((set) => ({
   async restoreSession() {
     set({ restoreState: 'loading', error: null });
     try {
-      const user = await mockAuthService.getCurrentUser();
+      const user = null;
+      usePassesStore.getState().resetPasses(null);
       set({
         user,
         restoreState: 'success',

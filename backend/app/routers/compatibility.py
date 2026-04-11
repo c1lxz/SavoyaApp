@@ -143,11 +143,15 @@ def _to_compat_pass(item) -> CompatPassItem:
     status = resolve_request_status(item.is_permanent, item.expires_at)
     expires = to_utc_isoformat(item.expires_at)
     created = to_utc_isoformat(item.created_at) or utcnow().isoformat()
+    key_type = str(item.key_type or "VehicleNumber")
+    key_value = str(item.key_value or "")
     return CompatPassItem(
         id=str(item.id),
-        carNumber=item.key_value,
+        keyType=key_type,
+        keyValue=key_value,
+        carNumber=key_value if key_type == "VehicleNumber" else None,
         plotNumber=item.plot_number or "",
-        phoneNumber=item.contact_phone,
+        phoneNumber=key_value if key_type == "Phone" else item.contact_phone,
         expiresAt=expires,
         isPermanent=item.is_permanent,
         isCourier=bool(getattr(item, "is_courier", False)),
@@ -171,9 +175,21 @@ async def compat_create_pass(
         except ValueError:
             hours = 24
 
+    if payload.carNumber:
+        key_type = "VehicleNumber"
+        key_value = payload.carNumber
+    elif payload.phoneNumber:
+        key_type = "Phone"
+        key_value = payload.phoneNumber
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "missing_pass_identifier", "message": "Provide either car number or phone number"},
+        )
+
     create_payload = CreateRequestRequest(
-        key_type="VehicleNumber",
-        key_value=payload.carNumber,
+        key_type=key_type,
+        key_value=key_value,
         phone_number=payload.phoneNumber,
         access_point_ids=_runtime_default_access_point_ids(),
         is_permanent=payload.isPermanent,

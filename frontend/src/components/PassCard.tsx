@@ -20,12 +20,15 @@ const PassCardComponent = ({ item }: PassCardProps) => {
     <View style={styles.card}>
       <View style={[styles.row, metrics.isShortHeight && styles.rowCompact]}>
         <View style={styles.content}>
-          <Text style={[styles.car, { fontSize: metrics.isCompactHeight ? 22 : 24 }]}>{item.carNumber}</Text>
+          <Text style={[styles.car, { fontSize: metrics.isCompactHeight ? 22 : 24 }]}>{item.keyValue}</Text>
+          <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>
+            {item.keyType === 'Phone' ? 'Телефонный пропуск' : 'Пропуск по номеру ТС'}
+          </Text>
           <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>Участок №{item.plotNumber}</Text>
           {item.isCourier ? (
             <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>Курьерский пропуск</Text>
           ) : null}
-          {item.phoneNumber ? (
+          {item.phoneNumber && item.keyType !== 'Phone' ? (
             <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>Телефон: {item.phoneNumber}</Text>
           ) : null}
           <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>

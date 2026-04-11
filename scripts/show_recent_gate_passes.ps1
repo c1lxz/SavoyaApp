@@ -12,6 +12,35 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$envFile = Join-Path $projectRoot ".env"
+
+if (Test-Path -LiteralPath $envFile) {
+    Get-Content -LiteralPath $envFile |
+        Where-Object { $_ -match '^\s*[^#].*=.*$' } |
+        ForEach-Object {
+            $name, $value = $_ -split '=', 2
+            $name = $name.Trim()
+            $value = $value.Trim().Trim('"')
+            if (-not (Test-Path "Env:$name")) {
+                Set-Item -Path "Env:$name" -Value $value
+            }
+        }
+}
+
+if (-not $MdbPath) {
+    $MdbPath = $env:GATE_MDB_PATH
+}
+if (-not $SystemDbPath) {
+    $SystemDbPath = $(if ($env:GATE_SYSTEMDB_PATH) { $env:GATE_SYSTEMDB_PATH } else { $env:GATE_MDW_PATH })
+}
+if (-not $Uid) {
+    $Uid = $(if ($env:GATE_MDB_UID) { $env:GATE_MDB_UID } else { $env:GATE_UID })
+}
+if (-not $PSBoundParameters.ContainsKey("Pwd")) {
+    $Pwd = $(if ($null -ne $env:GATE_MDB_PWD) { $env:GATE_MDB_PWD } else { $env:GATE_PWD })
+}
+
 if (-not $MdbPath) {
     throw "GATE_MDB_PATH is not set. Pass -MdbPath or set GATE_MDB_PATH in the environment."
 }

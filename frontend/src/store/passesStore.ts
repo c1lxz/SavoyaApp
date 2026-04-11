@@ -5,6 +5,7 @@ import { CreatePassPayload, PassItem, RequestState } from '@/types';
 
 type PassesStore = {
   passes: PassItem[];
+  ownerUserId: string | null;
   loadState: RequestState;
   createState: RequestState;
   cancelState: RequestState;
@@ -13,6 +14,7 @@ type PassesStore = {
   loadError: string | null;
   createError: string | null;
   cancelError: string | null;
+  resetPasses: (ownerUserId?: string | null) => void;
   loadMyPasses: (options?: { force?: boolean }) => Promise<void>;
   createPass: (payload: CreatePassPayload) => Promise<boolean>;
   // Roadmap: wire cancelPass to UI action in MyPasses list.
@@ -21,6 +23,7 @@ type PassesStore = {
 
 export const usePassesStore = create<PassesStore>((set, get) => ({
   passes: [],
+  ownerUserId: null,
   loadState: 'idle',
   createState: 'idle',
   cancelState: 'idle',
@@ -29,6 +32,19 @@ export const usePassesStore = create<PassesStore>((set, get) => ({
   loadError: null,
   createError: null,
   cancelError: null,
+  resetPasses(ownerUserId = null) {
+    set({
+      passes: [],
+      ownerUserId,
+      loadState: 'idle',
+      createState: 'idle',
+      cancelState: 'idle',
+      passesLastLoadedAt: null,
+      loadError: null,
+      createError: null,
+      cancelError: null,
+    });
+  },
   async loadMyPasses(options) {
     const force = options?.force ?? false;
     const { passesLastLoadedAt, passesCacheTtlMs } = get();

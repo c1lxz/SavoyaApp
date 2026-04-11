@@ -157,16 +157,36 @@ class CompatLoginPayload(BaseModel):
 
 
 class CompatCreatePassPayload(BaseModel):
-    carNumber: str
+    carNumber: str | None = None
     plotNumber: str
-    phoneNumber: str
+    phoneNumber: str | None = None
     expiresAt: str | None
     isPermanent: bool
     isCourier: bool = False
 
+    @field_validator("carNumber", mode="before")
+    @classmethod
+    def normalize_optional_car_number(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("phoneNumber", mode="before")
+    @classmethod
+    def normalize_optional_phone_number(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("carNumber")
     @classmethod
-    def validate_car_number(cls, value: str) -> str:
+    def validate_car_number(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         return normalize_vehicle_number(value)
 
     @field_validator("plotNumber")
@@ -176,13 +196,23 @@ class CompatCreatePassPayload(BaseModel):
 
     @field_validator("phoneNumber")
     @classmethod
-    def validate_phone_number(cls, value: str) -> str:
+    def validate_phone_number(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         return normalize_phone_key(value)
+
+    @model_validator(mode="after")
+    def validate_key_presence(self) -> "CompatCreatePassPayload":
+        if not self.carNumber and not self.phoneNumber:
+            raise ValueError("Either carNumber or phoneNumber must be provided")
+        return self
 
 
 class CompatPassItem(BaseModel):
     id: str
-    carNumber: str
+    keyType: Literal["Phone", "VehicleNumber"]
+    keyValue: str
+    carNumber: str | None = None
     plotNumber: str
     phoneNumber: str | None = None
     expiresAt: str | None

@@ -16,9 +16,9 @@ export type AuthResult = {
 };
 
 export type CreatePassPayload = {
-  carNumber: string;
+  carNumber?: string;
   plotNumber: string;
-  phoneNumber: string;
+  phoneNumber?: string;
   expiresAt: string | null;
   isPermanent: boolean;
   isCourier: boolean;
@@ -28,7 +28,9 @@ export type PassStatus = 'active' | 'expired' | 'permanent';
 
 export type PassItem = {
   id: string;
-  carNumber: string;
+  keyType: 'Phone' | 'VehicleNumber';
+  keyValue: string;
+  carNumber?: string | null;
   plotNumber: string;
   phoneNumber?: string | null;
   expiresAt: string | null;

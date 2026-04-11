@@ -28,11 +28,16 @@ export const mockPassService: PassService = {
       return apiPassService.createPass(payload);
     }
 
+    const keyType = payload.carNumber ? 'VehicleNumber' : 'Phone';
+    const keyValue = payload.carNumber ?? payload.phoneNumber ?? '';
+
     const draft = {
       id: Date.now().toString(36),
-      carNumber: payload.carNumber.toUpperCase(),
+      keyType,
+      keyValue,
+      carNumber: payload.carNumber?.toUpperCase() ?? null,
       plotNumber: payload.plotNumber,
-      phoneNumber: payload.phoneNumber,
+      phoneNumber: payload.phoneNumber ?? null,
       expiresAt: payload.expiresAt,
       isPermanent: payload.isPermanent,
       isCourier: payload.isCourier,

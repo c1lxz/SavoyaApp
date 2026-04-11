@@ -92,19 +92,14 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     const normalizedFullName = fullName.trim();
     const normalizedCarNumber = carNumber.trim().toUpperCase();
     const normalizedPlotNumber = plotNumber.trim();
-    const normalizedPhoneNumber = phoneNumber.trim();
+    const normalizedPhoneNumber = phoneNumber.replace(/\D/g, '');
 
     if (!normalizedFullName || !hasAtLeastTwoWords(normalizedFullName)) {
       setFormError('Введите фамилию и имя');
       return;
     }
 
-    if (!normalizedCarNumber) {
-      setFormError('Введите номер автомобиля');
-      return;
-    }
-
-    if (!/^[A-ZА-Я0-9\s-]{6,12}$/i.test(normalizedCarNumber)) {
+    if (normalizedCarNumber && !/^[A-ZА-Я0-9\s-]{6,12}$/i.test(normalizedCarNumber)) {
       setFormError('Проверьте формат номера автомобиля');
       return;
     }
@@ -119,13 +114,12 @@ export const CreatePassScreen = ({ navigation }: Props) => {
       return;
     }
 
-    if (!normalizedPhoneNumber) {
-      setFormError('Введите номер телефона');
+    if (!normalizedCarNumber && !normalizedPhoneNumber) {
+      setFormError('Введите номер телефона или номер автомобиля');
       return;
     }
 
-    const phoneDigits = normalizedPhoneNumber.replace(/\D/g, '');
-    if (phoneDigits.length < 7 || phoneDigits.length > 15) {
+    if (normalizedPhoneNumber && (normalizedPhoneNumber.length < 7 || normalizedPhoneNumber.length > 15)) {
       setFormError('Проверьте номер телефона');
       return;
     }
@@ -141,9 +135,9 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     }
 
     const success = await createPass({
-      carNumber: normalizedCarNumber,
+      carNumber: normalizedCarNumber || undefined,
       plotNumber: normalizedPlotNumber,
-      phoneNumber: normalizedPhoneNumber,
+      phoneNumber: normalizedPhoneNumber || undefined,
       expiresAt: isPermanent ? null : toIsoDate(expiresAt),
       isPermanent,
       isCourier,
@@ -199,12 +193,12 @@ export const CreatePassScreen = ({ navigation }: Props) => {
               />
 
               <AppInput
-                label="Номер телефона"
+                label="Номер телефона без +"
                 icon="phone"
                 value={phoneNumber}
                 onChangeText={setPhoneNumber}
                 keyboardType="phone-pad"
-                placeholder="+7 999 123-45-67"
+                placeholder="79991234567"
                 rightSlot={phoneNumber ? renderClearButton(() => setPhoneNumber('')) : null}
               />
 
