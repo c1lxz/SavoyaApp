@@ -95,6 +95,37 @@ def test_temporary_pass_create_and_list_with_sqlite_datetimes(client):
     assert any(item['carNumber'] == car_number for item in rows)
 
 
+def test_passes_create_creates_vehicle_and_phone_requests_when_both_provided(client):
+    login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
+    token = login['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    car_number = f'K{uuid4().hex[:5]}'.upper()
+    phone_number = '79991230011'
+
+    create_response = client.post(
+        '/passes',
+        headers=headers,
+        json={
+            'carNumber': car_number,
+            'plotNumber': '25',
+            'phoneNumber': phone_number,
+            'expiresAt': None,
+            'isPermanent': True,
+            'isCourier': False,
+        },
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created['keyType'] == 'VehicleNumber'
+    assert created['keyValue'] == car_number
+
+    list_response = client.get('/passes/my', headers=headers)
+    assert list_response.status_code == 200
+    rows = list_response.json()
+    assert any(item['keyType'] == 'VehicleNumber' and item['keyValue'] == car_number for item in rows)
+    assert any(item['keyType'] == 'Phone' and item['keyValue'] == phone_number for item in rows)
+
+
 def test_passes_create_rejects_duplicate_active_car_number(client):
     login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
     token = login['access_token']

@@ -27,6 +27,7 @@ from ..services.gate import gate_client
 from ..services.requests import (
     RequestConflictError,
     RequestIntegrationError,
+    cancel_request as cancel_created_request,
     create_request,
     list_my_requests,
     resolve_request_status,
@@ -119,6 +120,50 @@ def _merge_access_point_ids(*groups: list[int]) -> list[int]:
     return merged
 
 
+def _build_compat_create_payloads(payload: CompatCreatePassPayload) -> list[CreateRequestRequest]:
+    hours: int | None = None
+    if not payload.isPermanent and payload.expiresAt:
+        try:
+            expires_at = datetime.fromisoformat(payload.expiresAt.replace("Z", "+00:00"))
+            diff = expires_at - datetime.now(timezone.utc)
+            hours = max(1, int(diff.total_seconds() // 3600))
+        except ValueError:
+            hours = 24
+
+    default_access_point_ids = _runtime_default_access_point_ids()
+    phone_access_point_ids = _merge_access_point_ids(default_access_point_ids, _runtime_gsm_access_point_ids())
+
+    requests: list[CreateRequestRequest] = []
+    if payload.carNumber:
+        requests.append(
+            CreateRequestRequest(
+                key_type="VehicleNumber",
+                key_value=payload.carNumber,
+                phone_number=payload.phoneNumber,
+                access_point_ids=default_access_point_ids,
+                is_permanent=payload.isPermanent,
+                is_courier=payload.isCourier,
+                hours=None if payload.isPermanent else (hours or 24),
+                plot_number=payload.plotNumber,
+            )
+        )
+    if payload.phoneNumber:
+        requests.append(
+            CreateRequestRequest(
+                key_type="Phone",
+                key_value=payload.phoneNumber,
+                phone_number=payload.phoneNumber,
+                access_point_ids=phone_access_point_ids,
+                is_permanent=payload.isPermanent,
+                is_courier=payload.isCourier,
+                hours=None if payload.isPermanent else (hours or 24),
+                plot_number=payload.plotNumber,
+            )
+        )
+
+    return requests
+
+
 @router.post("/auth/login", response_model=CompatAuthResult)
 async def compat_login(
     payload: CompatLoginPayload,
@@ -191,54 +236,32 @@ async def compat_create_pass(
     session: AsyncSession = Depends(get_db_session),
     user: User = Depends(get_current_user),
 ) -> CompatPassItem:
-    hours: int | None = None
-    if not payload.isPermanent and payload.expiresAt:
-        try:
-            expires_at = datetime.fromisoformat(payload.expiresAt.replace("Z", "+00:00"))
-            diff = expires_at - datetime.now(timezone.utc)
-            hours = max(1, int(diff.total_seconds() // 3600))
-        except ValueError:
-            hours = 24
-
-    if payload.carNumber:
-        key_type = "VehicleNumber"
-        key_value = payload.carNumber
-    elif payload.phoneNumber:
-        key_type = "Phone"
-        key_value = payload.phoneNumber
-    else:
+    create_payloads = _build_compat_create_payloads(payload)
+    if not create_payloads:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "missing_pass_identifier", "message": "Provide either car number or phone number"},
         )
 
-    access_point_ids = _runtime_default_access_point_ids()
-    if payload.phoneNumber:
-        access_point_ids = _merge_access_point_ids(access_point_ids, _runtime_gsm_access_point_ids())
-
-    create_payload = CreateRequestRequest(
-        key_type=key_type,
-        key_value=key_value,
-        phone_number=payload.phoneNumber,
-        access_point_ids=access_point_ids,
-        is_permanent=payload.isPermanent,
-        is_courier=payload.isCourier,
-        hours=None if payload.isPermanent else (hours or 24),
-        plot_number=payload.plotNumber,
-    )
+    created_requests = []
     try:
-        request = await create_request(session, user, create_payload)
+        for create_payload in create_payloads:
+            created_requests.append(await create_request(session, user, create_payload))
     except RequestConflictError as exc:
+        for created in reversed(created_requests):
+            await cancel_created_request(session, user.id, created.id)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": exc.code, "message": exc.message},
         ) from exc
     except RequestIntegrationError as exc:
+        for created in reversed(created_requests):
+            await cancel_created_request(session, user.id, created.id)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail={"code": exc.code, "message": exc.message},
         ) from exc
-    return _to_compat_pass(request)
+    return _to_compat_pass(created_requests[0])
 
 
 @router.get("/passes/my", response_model=list[CompatPassItem])
