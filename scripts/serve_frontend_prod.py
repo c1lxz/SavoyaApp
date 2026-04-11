@@ -20,6 +20,16 @@ HOP_BY_HOP_HEADERS = {
     "upgrade",
 }
 
+PROXIED_PREFIXES = (
+    "/api",
+    "/auth",
+    "/user",
+    "/passes",
+    "/gates",
+    "/access",
+    "/requests",
+)
+
 
 class FrontendRequestHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, directory: str, proxy_target: str | None = None, **kwargs):
@@ -35,7 +45,13 @@ class FrontendRequestHandler(http.server.SimpleHTTPRequestHandler):
 
     def _should_proxy(self) -> bool:
         request_path = urllib.parse.urlsplit(self.path).path
-        return request_path == "/health" or request_path == "/api" or request_path.startswith("/api/")
+        if request_path == "/health":
+            return True
+
+        return any(
+            request_path == prefix or request_path.startswith(f"{prefix}/")
+            for prefix in PROXIED_PREFIXES
+        )
 
     def _read_request_body(self) -> bytes:
         content_length = self.headers.get("Content-Length")
