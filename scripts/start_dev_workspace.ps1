@@ -7,6 +7,8 @@ param(
     [switch]$Preview,
     [string]$BackendHost = "0.0.0.0",
     [int]$BackendPort = 8000,
+    [string]$FrontendHost = "0.0.0.0",
+    [int]$FrontendPort = 8081,
     [string]$BackendPythonLauncher = "py",
     [string]$BackendPythonVersion = "-3.12",
     [bool]$BootstrapDemoUser = $true,
@@ -173,6 +175,8 @@ function Get-DotEnvJsonStringArray {
 
 function Resolve-FrontendApiBaseUrl {
     param(
+        [Parameter(Mandatory = $true)][string]$ApiHost,
+        [Parameter(Mandatory = $true)][int]$Port,
         [string]$ConfiguredBaseUrl
     )
 
@@ -180,7 +184,12 @@ function Resolve-FrontendApiBaseUrl {
         return $ConfiguredBaseUrl.Trim()
     }
 
-    return "/api"
+    $apiHost = $ApiHost.Trim()
+    if ($apiHost -in @("0.0.0.0", "::", "[::]")) {
+        $apiHost = @((Get-LocalIpv4Addresses), "127.0.0.1")[0]
+    }
+
+    return "http://{0}:{1}/api" -f $apiHost, $Port
 }
 
 function Build-BackendAllowedHostsJson {
@@ -285,6 +294,8 @@ function Build-BackendCorsOriginsJson {
 $resolvedRepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $frontendRoot = Join-Path $resolvedRepoRoot "frontend"
 $resolvedFrontendApiBaseUrl = Resolve-FrontendApiBaseUrl `
+    -ApiHost $BackendHost `
+    -Port $BackendPort `
     -ConfiguredBaseUrl $FrontendApiBaseUrl
 $seedAllowedHosts = Get-DotEnvJsonStringArray -RepoRoot $resolvedRepoRoot -Key "ALLOWED_HOSTS_JSON"
 $seedCorsOrigins = Get-DotEnvJsonStringArray -RepoRoot $resolvedRepoRoot -Key "CORS_ALLOW_ORIGINS_JSON"
@@ -403,7 +414,15 @@ $backendBody = @(
     "& $(Quote-PowerShellLiteral -Value $BackendPythonLauncher) @pythonArgs"
 )
 
+$frontendBody = @(
+    "`$pythonArgs = @()",
+    $(if ($BackendPythonVersion) { "`$pythonArgs += $(Quote-PowerShellLiteral -Value $BackendPythonVersion)" } else { "`$pythonArgs += @()" }),
+    "`$pythonArgs += @($(Quote-PowerShellLiteral -Value (Join-Path $resolvedRepoRoot 'scripts\serve_frontend_prod.py')), '--host', $(Quote-PowerShellLiteral -Value $FrontendHost), '--port', $(Quote-PowerShellLiteral -Value $FrontendPort.ToString()), '--root', $(Quote-PowerShellLiteral -Value (Join-Path $frontendRoot 'dist')))",
+    "& $(Quote-PowerShellLiteral -Value $BackendPythonLauncher) @pythonArgs"
+)
+
 Start-WorkspaceWindow -Title "Savoya Backend" -WorkingDirectory $resolvedRepoRoot -Body $backendBody
+Start-WorkspaceWindow -Title "Savoya Frontend" -WorkingDirectory $frontendRoot -Body $frontendBody
 
 if ($OpenToolShell) {
     Start-WorkspaceWindow `
@@ -419,8 +438,8 @@ else {
     Write-Host "Current shell is ready for project commands: $resolvedRepoRoot" -ForegroundColor Green
 }
 
-$accessHosts = @()
-foreach ($accessHost in @($BackendHost, (Get-LocalIpv4Addresses), "127.0.0.1")) {
+$frontendAccessHosts = @()
+foreach ($accessHost in @($FrontendHost, (Get-LocalIpv4Addresses), "127.0.0.1")) {
     if (-not $accessHost) {
         continue
     }
@@ -429,14 +448,14 @@ foreach ($accessHost in @($BackendHost, (Get-LocalIpv4Addresses), "127.0.0.1")) 
         continue
     }
 
-    if ($accessHost -notin $accessHosts) {
-        $accessHosts += $accessHost
+    if ($accessHost -notin $frontendAccessHosts) {
+        $frontendAccessHosts += $accessHost
     }
 }
 
-if ($accessHosts.Count -gt 0) {
+if ($frontendAccessHosts.Count -gt 0) {
     Write-Host "Production frontend will be available at:" -ForegroundColor Green
-    foreach ($accessHost in $accessHosts) {
-        Write-Host ("  http://{0}:{1}/" -f $accessHost, $BackendPort) -ForegroundColor Green
+    foreach ($accessHost in $frontendAccessHosts) {
+        Write-Host ("  http://{0}:{1}/" -f $accessHost, $FrontendPort) -ForegroundColor Green
     }
 }

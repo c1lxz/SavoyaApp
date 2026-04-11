@@ -174,14 +174,26 @@ def _serve_frontend_asset(relative_path: str) -> FileResponse:
     requested_path = _resolve_frontend_path(relative_path)
 
     if requested_path.is_file():
-        return FileResponse(requested_path)
+        response = FileResponse(requested_path)
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
 
     nested_index = requested_path / "index.html"
     if nested_index.is_file():
-        return FileResponse(nested_index)
+        response = FileResponse(nested_index)
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
 
     if index_path.is_file():
-        return FileResponse(index_path)
+        response = FileResponse(index_path)
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
 
     raise HTTPException(status_code=404)
 
