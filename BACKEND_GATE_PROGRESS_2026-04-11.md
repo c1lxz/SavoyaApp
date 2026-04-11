@@ -145,3 +145,13 @@ Because of that, the existing direct TCP Wiegand sender in `gate_runtime.py` sho
 - Still unconfirmed before a real opening attempt:
   - exact production payload format for the real live transport
   - whether the final live path should be `gateserv_tcp` or another server-side bridge/protocol
+
+## Live-test handoff
+
+- The current real-server live-test runbook is fixed in:
+  - `GATE_LIVE_TEST_RUNBOOK_2026-04-11.md`
+- `.env` is now switched to the first real test hypothesis:
+  - `gateserv_tcp`
+  - `127.0.0.1:1917`
+  - payload format `frame_hex`
+  - `DRY_RUN=false`
