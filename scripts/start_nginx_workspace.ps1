@@ -62,10 +62,10 @@ function Invoke-ExternalCommand {
         [Parameter(Mandatory = $true)][string]$Description
     )
 
-    $preview = Format-CommandPreview -Executable $Executable -Arguments $Arguments
+    $commandPreview = Format-CommandPreview -Executable $Executable -Arguments $Arguments
     if ($Preview) {
         Write-Host "[preview] $Description"
-        Write-Host "  $preview"
+        Write-Host "  $commandPreview"
         return
     }
 

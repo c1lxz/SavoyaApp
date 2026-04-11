@@ -66,10 +66,10 @@ function Invoke-ExternalCommand {
         [Parameter(Mandatory = $true)][string]$Description
     )
 
-    $preview = Format-CommandPreview -Executable $Executable -Arguments $Arguments
+    $commandPreview = Format-CommandPreview -Executable $Executable -Arguments $Arguments
     if ($Preview) {
         Write-Host "[preview] $Description"
-        Write-Host "  $preview"
+        Write-Host "  $commandPreview"
         return
     }
 
@@ -297,6 +297,8 @@ $resolvedFrontendApiBaseUrl = Resolve-FrontendApiBaseUrl `
     -ApiHost $BackendHost `
     -Port $BackendPort `
     -ConfiguredBaseUrl $FrontendApiBaseUrl
+$resolvedFrontendProxyHost = if ($BackendHost.Trim() -in @("0.0.0.0", "::", "[::]")) { "127.0.0.1" } else { $BackendHost.Trim() }
+$resolvedFrontendProxyTarget = "http://{0}:{1}" -f $resolvedFrontendProxyHost, $BackendPort
 $seedAllowedHosts = Get-DotEnvJsonStringArray -RepoRoot $resolvedRepoRoot -Key "ALLOWED_HOSTS_JSON"
 $seedCorsOrigins = Get-DotEnvJsonStringArray -RepoRoot $resolvedRepoRoot -Key "CORS_ALLOW_ORIGINS_JSON"
 $resolvedAllowedHostsJson = Build-BackendAllowedHostsJson `
@@ -417,7 +419,7 @@ $backendBody = @(
 $frontendBody = @(
     "`$pythonArgs = @()",
     $(if ($BackendPythonVersion) { "`$pythonArgs += $(Quote-PowerShellLiteral -Value $BackendPythonVersion)" } else { "`$pythonArgs += @()" }),
-    "`$pythonArgs += @($(Quote-PowerShellLiteral -Value (Join-Path $resolvedRepoRoot 'scripts\serve_frontend_prod.py')), '--host', $(Quote-PowerShellLiteral -Value $FrontendHost), '--port', $(Quote-PowerShellLiteral -Value $FrontendPort.ToString()), '--root', $(Quote-PowerShellLiteral -Value (Join-Path $frontendRoot 'dist')))",
+    "`$pythonArgs += @($(Quote-PowerShellLiteral -Value (Join-Path $resolvedRepoRoot 'scripts\serve_frontend_prod.py')), '--host', $(Quote-PowerShellLiteral -Value $FrontendHost), '--port', $(Quote-PowerShellLiteral -Value $FrontendPort.ToString()), '--root', $(Quote-PowerShellLiteral -Value (Join-Path $frontendRoot 'dist')), '--proxy-target', $(Quote-PowerShellLiteral -Value $resolvedFrontendProxyTarget))",
     "& $(Quote-PowerShellLiteral -Value $BackendPythonLauncher) @pythonArgs"
 )
 
@@ -459,3 +461,6 @@ if ($frontendAccessHosts.Count -gt 0) {
         Write-Host ("  http://{0}:{1}/" -f $accessHost, $FrontendPort) -ForegroundColor Green
     }
 }
+
+Write-Host ("Frontend API base URL: {0}" -f $resolvedFrontendApiBaseUrl) -ForegroundColor Green
+Write-Host ("Frontend proxy target: {0}" -f $resolvedFrontendProxyTarget) -ForegroundColor Green
