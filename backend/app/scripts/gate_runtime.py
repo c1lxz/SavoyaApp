@@ -185,11 +185,9 @@ def _normalize_phone(value: str) -> str:
     if not digits:
         raise ValueError("Phone key_value must contain digits")
     if digits.startswith("00"):
-        return digits
+        digits = digits[2:]
     if digits.startswith("8") and len(digits) == 11:
-        return f"007{digits[1:]}"
-    if digits.startswith("7"):
-        return f"00{digits}"
+        return f"7{digits[1:]}"
     return digits
 
 
@@ -344,7 +342,10 @@ def _build_identity(cursor: pyodbc.Cursor, key_type: str, normalized_key_value: 
 def _normalize_optional_phone(value: Any) -> str:
     if value is None:
         return ""
-    return "".join(ch for ch in str(value) if ch.isdigit())
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    if not digits:
+        return ""
+    return _normalize_phone(digits)
 
 
 def _normalize_contact_phone(value: str | None) -> str | None:
