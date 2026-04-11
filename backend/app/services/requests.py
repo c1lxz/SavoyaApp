@@ -177,22 +177,28 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
         hours = request_hours if request_hours is not None else 24
         expires_at = utcnow() + timedelta(hours=hours)
 
-    if is_permanent:
-        gate_key_id = gate_client.add_permanent_key(
-            key_type=payload.key_type,
-            key_value=payload.key_value,
-            phone_number=payload.phone_number,
-            access_point_ids=payload.access_point_ids,
-            resident_name=user.name or user.login or "Resident",
-        )
-    else:
-        gate_key_id = gate_client.add_temporary_key(
-            key_type=payload.key_type,
-            key_value=payload.key_value,
-            phone_number=payload.phone_number,
-            expires_at=expires_at,
-            access_point_ids=payload.access_point_ids,
-        )
+    try:
+        if is_permanent:
+            gate_key_id = gate_client.add_permanent_key(
+                key_type=payload.key_type,
+                key_value=payload.key_value,
+                phone_number=payload.phone_number,
+                access_point_ids=payload.access_point_ids,
+                resident_name=user.name or user.login or "Resident",
+            )
+        else:
+            gate_key_id = gate_client.add_temporary_key(
+                key_type=payload.key_type,
+                key_value=payload.key_value,
+                phone_number=payload.phone_number,
+                expires_at=expires_at,
+                access_point_ids=payload.access_point_ids,
+            )
+    except Exception as exc:
+        raise RequestIntegrationError(
+            code="gate_bridge_error",
+            message=str(exc) or "Gate integration failed",
+        ) from exc
 
     if gate_key_id <= 0:
         raise RequestIntegrationError(

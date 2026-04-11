@@ -256,6 +256,38 @@ def test_passes_create_returns_502_when_gate_returns_invalid_key_id(client):
     assert response.json()['detail']['code'] == 'invalid_gate_key'
 
 
+def test_passes_create_returns_502_when_gate_bridge_raises(client):
+    login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
+    token = login['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+
+    original_add_permanent_key = gate_client.add_permanent_key
+
+    def _raise_gate_error(**kwargs):
+        raise RuntimeError('Gate bridge failed with exit code 1')
+
+    gate_client.add_permanent_key = _raise_gate_error
+    try:
+        response = client.post(
+            '/passes',
+            headers=headers,
+            json={
+                'carNumber': f'G{uuid4().hex[:5]}'.upper(),
+                'plotNumber': '25',
+                'phoneNumber': '+79995550011',
+                'expiresAt': None,
+                'isPermanent': True,
+                'isCourier': False,
+            },
+        )
+    finally:
+        gate_client.add_permanent_key = original_add_permanent_key
+
+    assert response.status_code == 502
+    assert response.json()['detail']['code'] == 'gate_bridge_error'
+    assert 'Gate bridge failed' in response.json()['detail']['message']
+
+
 def test_passes_create_courier_flow_sets_flag(client):
     login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
     token = login['access_token']

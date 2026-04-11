@@ -231,3 +231,29 @@ def test_create_request_returns_502_when_gate_returns_invalid_key_id(client):
 
     assert response.status_code == 502
     assert response.json()["detail"]["code"] == "invalid_gate_key"
+
+
+def test_create_request_returns_502_when_gate_bridge_raises(client):
+    headers, _ = _create_user_and_login(client)
+    original_add_permanent_key = gate_client.add_permanent_key
+
+    def _raise_gate_error(**kwargs):
+        raise RuntimeError("Gate bridge failed with exit code 1")
+
+    gate_client.add_permanent_key = _raise_gate_error
+    try:
+        response = client.post(
+            "/api/requests/",
+            headers=headers,
+            json={
+                "key_type": "VehicleNumber",
+                "key_value": f"Q{uuid4().hex[:6]}",
+                "access_point_ids": [1],
+                "is_permanent": True,
+            },
+        )
+    finally:
+        gate_client.add_permanent_key = original_add_permanent_key
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "gate_bridge_error"
