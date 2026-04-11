@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppBackground } from '@/components/AppBackground';
 import { AppButton } from '@/components/AppButton';
 import { RootStackParamList } from '@/navigation/types';
+import { useAuthStore } from '@/store/authStore';
 import { theme } from '@/theme';
 import { getLayoutMetrics } from '@/utils/layout';
 
@@ -17,6 +18,7 @@ const LOGO_IMAGE_RATIO = 711 / 586;
 export const HomeScreen = ({ navigation }: Props) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
+  const logout = useAuthStore((state) => state.logout);
 
   const logoWidth = Math.min(metrics.heroLogoWidth, width - metrics.horizontalPadding * 2);
   const logoMaxHeight = metrics.isDesktop ? 248 : metrics.isTablet ? 220 : metrics.isCompactHeight ? 124 : 150;
@@ -59,6 +61,7 @@ export const HomeScreen = ({ navigation }: Props) => {
             <AppButton title="Открыть шлагбаум" onPress={() => navigation.push('OpenBarrier')} />
             <AppButton title="Калитки" onPress={() => navigation.push('Wickets')} />
             <AppButton title="Мои пропуски" onPress={() => navigation.push('MyPasses')} />
+            <AppButton title="Выход" onPress={logout} />
           </View>
         </View>
       </SafeAreaView>

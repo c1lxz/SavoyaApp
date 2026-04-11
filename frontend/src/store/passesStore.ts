@@ -65,8 +65,9 @@ export const usePassesStore = create<PassesStore>((set, get) => ({
     try {
       const passes = await mockPassService.getMyPasses();
       set({ passes, loadState: 'success', passesLastLoadedAt: Date.now(), loadError: null });
-    } catch {
-      set({ loadState: 'error', loadError: 'Ошибка загрузки пропусков' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Ошибка загрузки пропусков';
+      set({ loadState: 'error', loadError: message });
     }
   },
   async createPass(payload) {
@@ -81,8 +82,9 @@ export const usePassesStore = create<PassesStore>((set, get) => ({
         createError: null,
       }));
       return true;
-    } catch {
-      set({ createState: 'error', createError: 'Не удалось создать пропуск' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Не удалось создать пропуск';
+      set({ createState: 'error', createError: message });
       return false;
     }
   },
@@ -97,8 +99,9 @@ export const usePassesStore = create<PassesStore>((set, get) => ({
         passesLastLoadedAt: Date.now(),
         cancelError: null,
       }));
-    } catch {
-      set({ cancelState: 'error', cancelError: 'Не удалось отменить пропуск' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Не удалось отменить пропуск';
+      set({ cancelState: 'error', cancelError: message });
     }
   },
 }));
