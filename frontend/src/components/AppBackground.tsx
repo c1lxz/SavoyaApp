@@ -33,22 +33,24 @@ const styles = StyleSheet.create({
   background: {
     flex: 1,
     width: '100%',
-    minHeight: '100%',
+    height: '100%',
     backgroundColor: theme.colors.screenBackground,
+    overflow: 'hidden',
   },
   overlay: {
     flex: 1,
     width: '100%',
-    minHeight: '100%',
+    height: '100%',
     backgroundColor: theme.colors.overlay,
     alignItems: 'center',
     overflow: 'hidden',
   },
   content: {
-    flexGrow: 1,
+    flex: 1,
     width: '100%',
-    minHeight: '100%',
+    height: '100%',
     alignSelf: 'center',
+    overflow: 'hidden',
   },
   vignette: {
     ...StyleSheet.absoluteFillObject,

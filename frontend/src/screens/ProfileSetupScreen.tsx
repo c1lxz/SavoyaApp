@@ -49,10 +49,12 @@ export const ProfileSetupScreen = ({ navigation }: Props) => {
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
+          scrollEnabled={false}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           bounces={false}
           alwaysBounceVertical={false}
+          overScrollMode="never"
         >
           <View style={[styles.formWrap, { maxWidth: metrics.formMaxWidth }]}>
             <ScreenHeader title="Ваш профиль" />
@@ -98,12 +100,10 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     width: '100%',
-    minHeight: '100%',
   },
   formWrap: {
     width: '100%',
     alignSelf: 'center',
-    minHeight: '100%',
   },
   description: {
     color: theme.colors.textSecondary,

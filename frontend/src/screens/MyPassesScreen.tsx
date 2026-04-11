@@ -48,6 +48,7 @@ export const MyPassesScreen = ({ navigation }: Props) => {
             data={passes}
             keyExtractor={keyExtractor}
             renderItem={renderItem}
+            scrollEnabled={false}
             initialNumToRender={8}
             maxToRenderPerBatch={8}
             windowSize={7}
@@ -57,6 +58,7 @@ export const MyPassesScreen = ({ navigation }: Props) => {
             showsVerticalScrollIndicator={false}
             bounces={false}
             alwaysBounceVertical={false}
+            overScrollMode="never"
           />
 
           <LoadingOverlay visible={loadState === 'loading'} />
@@ -82,7 +84,6 @@ const styles = StyleSheet.create({
   listContent: {
     flexGrow: 1,
     paddingBottom: theme.spacing.xl,
-    minHeight: '100%',
   },
   error: {
     color: theme.colors.danger,

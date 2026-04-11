@@ -41,10 +41,12 @@ export const AuthScreen = ({ navigation }: Props) => {
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={[styles.scrollContent, { justifyContent: metrics.isShortHeight ? 'flex-start' : 'center' }]}
+          scrollEnabled={false}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           bounces={false}
           alwaysBounceVertical={false}
+          overScrollMode="never"
         >
           <View style={[styles.formWrap, { maxWidth: metrics.formMaxWidth, gap: metrics.panelGap }]}>
             <ScreenHeader title="Вход" />
@@ -100,12 +102,10 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     width: '100%',
-    minHeight: '100%',
   },
   formWrap: {
     width: '100%',
     alignSelf: 'center',
-    minHeight: '100%',
   },
   description: {
     color: theme.colors.textSecondary,

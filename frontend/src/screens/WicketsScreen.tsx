@@ -58,9 +58,11 @@ export const WicketsScreen = ({ navigation }: Props) => {
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
+          scrollEnabled={false}
           showsVerticalScrollIndicator={false}
           bounces={false}
           alwaysBounceVertical={false}
+          overScrollMode="never"
         >
           <View style={[styles.panel, { maxWidth: metrics.formMaxWidth }]}>
             <ScreenHeader title="Калитки" onBack={() => goBackOrHome(navigation)} />
@@ -126,12 +128,10 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     width: '100%',
-    minHeight: '100%',
   },
   panel: {
     width: '100%',
     alignSelf: 'center',
-    minHeight: '100%',
   },
   actions: {
     marginTop: 8,
