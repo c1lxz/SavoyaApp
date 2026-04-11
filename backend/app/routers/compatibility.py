@@ -58,10 +58,10 @@ def _infer_action_from_access_point_name(name: str) -> str | None:
         return "exit"
     if "север" in value or "north" in value:
         return "wicket_north"
+    if "калитка 1" in value or "admin" in value or "админ" in value or "администрац" in value:
+        return "wicket_admin"
     if "озер" in value or "lake" in value:
         return "wicket_lake"
-    if "админ" in value or "администрац" in value or "admin" in value:
-        return "wicket_admin"
     if "лес" in value or "forest" in value:
         return "wicket_forest"
     return None

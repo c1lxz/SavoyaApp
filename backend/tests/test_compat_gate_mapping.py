@@ -47,3 +47,21 @@ def test_runtime_default_access_point_ids_fallbacks_to_real_points(monkeypatch):
     )
 
     assert compatibility._runtime_default_access_point_ids() == [15, 17, 19]
+
+
+def test_runtime_gate_action_map_detects_admin_wicket_from_kalitka_1(monkeypatch):
+    monkeypatch.setattr(compatibility.settings, "gate_real_integration_enabled", True)
+    monkeypatch.setattr(
+        compatibility.settings,
+        "gate_action_map_json",
+        '{"entry":19,"exit":20,"wicket_north":15,"wicket_lake":23,"wicket_admin":17,"wicket_forest":21}',
+    )
+    monkeypatch.setattr(
+        compatibility.gate_client,
+        "get_access_points",
+        lambda: [
+            {"id": 17, "name": "Считыватель калитка 1"},
+        ],
+    )
+
+    assert compatibility._runtime_gate_action_map()["wicket_admin"] == 17

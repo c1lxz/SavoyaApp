@@ -75,6 +75,7 @@ async def sync_access_points(session: AsyncSession) -> None:
     for point in points:
         point_id = int(point["id"])
         point_name = str(point["name"])
+        point_type = _normalize_access_point_type(point_name)
         existing = await session.get(AccessPoint, point_id)
         if existing is None:
             session.add(
@@ -82,15 +83,36 @@ async def sync_access_points(session: AsyncSession) -> None:
                     id=point_id,
                     name=point_name,
                     code=f"gate_{point_id}",
-                    type=_infer_access_point_type(point_name),
+                    type=point_type,
                     is_active=True,
                 )
             )
             continue
         existing.name = point_name
-        existing.type = _infer_access_point_type(point_name)
+        existing.type = point_type
         existing.is_active = True
     await session.commit()
+
+
+def _normalize_access_point_type(name: str) -> str:
+    value = (name or "").lower()
+    if "камера" in value or "шлагбаум" in value or "gsm" in value or "транспондер" in value:
+        if "въезд" in value or "entry" in value:
+            return "barrier_entry"
+        if "выезд" in value or "exit" in value:
+            return "barrier_exit"
+    if (
+        "калит" in value
+        or "вход " in value
+        or value.startswith("вход")
+        or "выход " in value
+        or value.startswith("выход")
+        or "север" in value
+        or "лес" in value
+        or "озер" in value
+    ):
+        return "wicket"
+    return _infer_access_point_type(name)
 
 
 async def _get_or_create_access_key(session: AsyncSession, request_item: Request) -> AccessKey:
