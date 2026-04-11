@@ -128,7 +128,12 @@ conn = pyodbc.connect(
 )
 cur = conn.cursor()
 
-requested_tables = {item.strip() for item in tables_arg.split("|") if item.strip()}
+requested_tables = set()
+for chunk in tables_arg.split("|"):
+    for item in chunk.split(","):
+        normalized = item.strip().lower()
+        if normalized:
+            requested_tables.add(normalized)
 
 all_tables = []
 for row in cur.tables():
@@ -137,7 +142,7 @@ for row in cur.tables():
 
 table_names = sorted(set(all_tables))
 if requested_tables:
-    table_names = [name for name in table_names if name in requested_tables]
+    table_names = [name for name in table_names if name.lower() in requested_tables]
 elif name_pattern:
     table_names = [name for name in table_names if name_pattern in name.lower()]
 
@@ -147,6 +152,15 @@ for name in table_names:
 print()
 
 if not table_names:
+    if requested_tables:
+        print("Requested tables:")
+        for name in sorted(requested_tables):
+            print(name)
+        print()
+        print("Available tables:")
+        for name in sorted(set(all_tables)):
+            print(name)
+        print()
     print("(no matching tables)")
     cur.close()
     conn.close()
