@@ -1,0 +1,319 @@
+[CmdletBinding()]
+param(
+    [string]$RepoRoot = "",
+    [string]$NginxExePath = "C:\nginx\nginx.exe",
+    [string]$NginxConfPath = "C:\nginx\conf\nginx.conf",
+    [switch]$SkipPull,
+    [switch]$Bootstrap,
+    [switch]$OpenToolShell,
+    [switch]$Preview,
+    [string]$BackendHost = "127.0.0.1",
+    [int]$BackendPort = 8000,
+    [string]$BackendPythonLauncher = "py",
+    [string]$BackendPythonVersion = "-3.12",
+    [bool]$FrontendUseRealApi = $true,
+    [string]$FrontendApiBaseUrl = "/api",
+    [string]$GatePythonLauncher = "py",
+    [string]$GatePythonVersion = "-3.12-32"
+)
+
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+
+if (-not $RepoRoot) {
+    if ($PSScriptRoot) {
+        $RepoRoot = Split-Path -Parent $PSScriptRoot
+    }
+    else {
+        $RepoRoot = (Get-Location).Path
+    }
+}
+
+function Quote-PowerShellLiteral {
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    return "'" + $Value.Replace("'", "''") + "'"
+}
+
+function Format-CommandPreview {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    $parts = @($Executable)
+    foreach ($argument in $Arguments) {
+        if ($argument -match '\s') {
+            $parts += '"' + $argument.Replace('"', '\"') + '"'
+        }
+        else {
+            $parts += $argument
+        }
+    }
+    return ($parts -join ' ')
+}
+
+function Invoke-ExternalCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [Parameter(Mandatory = $true)][string]$Description
+    )
+
+    $preview = Format-CommandPreview -Executable $Executable -Arguments $Arguments
+    if ($Preview) {
+        Write-Host "[preview] $Description"
+        Write-Host "  $preview"
+        return
+    }
+
+    Push-Location -LiteralPath $WorkingDirectory
+    try {
+        & $Executable @Arguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "$Description failed with exit code $LASTEXITCODE"
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function New-PowerShellWindowCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$Title,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [Parameter(Mandatory = $true)][string[]]$Body
+    )
+
+    $parts = @(
+        "`$Host.UI.RawUI.WindowTitle = $(Quote-PowerShellLiteral -Value $Title)",
+        "Set-Location -LiteralPath $(Quote-PowerShellLiteral -Value $WorkingDirectory)"
+    ) + $Body
+
+    return ($parts -join "; ")
+}
+
+function Start-WorkspaceWindow {
+    param(
+        [Parameter(Mandatory = $true)][string]$Title,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [Parameter(Mandatory = $true)][string[]]$Body
+    )
+
+    $command = New-PowerShellWindowCommand -Title $Title -WorkingDirectory $WorkingDirectory -Body $Body
+    if ($Preview) {
+        Write-Host "[preview] open $Title"
+        Write-Host "  powershell.exe -NoExit -ExecutionPolicy Bypass -EncodedCommand <base64>"
+        Write-Host "  command: $command"
+        return
+    }
+
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    Start-Process -FilePath "powershell.exe" `
+        -WorkingDirectory $WorkingDirectory `
+        -ArgumentList @("-NoExit", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encodedCommand) | Out-Null
+}
+
+function Select-FirstExistingPath {
+    param([string[]]$Candidates)
+
+    foreach ($candidate in $Candidates) {
+        if (-not $candidate) {
+            continue
+        }
+
+        if (Test-Path -LiteralPath $candidate) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+
+    return ""
+}
+
+$resolvedRepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+$frontendRoot = Join-Path $resolvedRepoRoot "frontend"
+$frontendNodeModules = Join-Path $frontendRoot "node_modules"
+$backendRequirements = Join-Path $resolvedRepoRoot "backend\requirements.txt"
+
+$nginxCommand = Get-Command nginx -ErrorAction SilentlyContinue
+$candidateNginxExePaths = @(
+    $NginxExePath,
+    $(if ($nginxCommand) { $nginxCommand.Source }),
+    "C:\nginx\nginx.exe",
+    "C:\Program Files\nginx\nginx.exe",
+    "C:\Program Files (x86)\nginx\nginx.exe"
+)
+$resolvedNginxExePath = Select-FirstExistingPath -Candidates $candidateNginxExePaths
+
+if (-not $resolvedNginxExePath) {
+    if ($Preview) {
+        $resolvedNginxExePath = $NginxExePath
+    }
+    else {
+        throw "nginx.exe not found. Pass -NginxExePath with the real nginx.exe path."
+    }
+}
+
+$candidateNginxConfPaths = @(
+    $NginxConfPath,
+    $(if ($resolvedNginxExePath -and (Test-Path -LiteralPath $resolvedNginxExePath)) { Join-Path (Split-Path -Parent $resolvedNginxExePath) "conf\nginx.conf" })
+)
+$resolvedNginxConfPath = Select-FirstExistingPath -Candidates $candidateNginxConfPaths
+
+if (-not $resolvedNginxConfPath) {
+    if ($Preview) {
+        $resolvedNginxConfPath = $NginxConfPath
+    }
+    else {
+        throw "nginx.conf not found. Pass -NginxConfPath with the real nginx.conf path."
+    }
+}
+
+$nginxWorkingDirectory = Split-Path -Parent $resolvedNginxExePath
+
+if (-not (Test-Path -LiteralPath (Join-Path $resolvedRepoRoot ".git"))) {
+    throw "Git repository not found: $resolvedRepoRoot"
+}
+
+if (-not (Test-Path -LiteralPath $frontendRoot)) {
+    throw "Frontend directory not found: $frontendRoot"
+}
+
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    throw "git is not available in PATH"
+}
+
+if (-not $SkipPull) {
+    $gitStatus = & git -C $resolvedRepoRoot status --porcelain
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to read git status for $resolvedRepoRoot"
+    }
+
+    if ($gitStatus) {
+        Write-Warning "Repository has local changes. Skipping git pull to avoid merge conflicts."
+    }
+    else {
+        Invoke-ExternalCommand `
+            -Executable "git" `
+            -Arguments @("-C", $resolvedRepoRoot, "pull", "--ff-only") `
+            -WorkingDirectory $resolvedRepoRoot `
+            -Description "Updating repository"
+    }
+}
+
+if ($Bootstrap) {
+    $backendInstallArgs = @()
+    if ($BackendPythonVersion) {
+        $backendInstallArgs += $BackendPythonVersion
+    }
+    $backendInstallArgs += @("-m", "pip", "install", "-r", $backendRequirements)
+    Invoke-ExternalCommand `
+        -Executable $BackendPythonLauncher `
+        -Arguments $backendInstallArgs `
+        -WorkingDirectory $resolvedRepoRoot `
+        -Description "Installing backend dependencies"
+
+    $gateInstallArgs = @()
+    if ($GatePythonVersion) {
+        $gateInstallArgs += $GatePythonVersion
+    }
+    $gateInstallArgs += @("-m", "pip", "install", "pyodbc", "python-dotenv")
+    Invoke-ExternalCommand `
+        -Executable $GatePythonLauncher `
+        -Arguments $gateInstallArgs `
+        -WorkingDirectory $resolvedRepoRoot `
+        -Description "Installing Gate diagnostic dependencies"
+}
+
+if ($Bootstrap -or -not (Test-Path -LiteralPath $frontendNodeModules)) {
+    Invoke-ExternalCommand `
+        -Executable "npm" `
+        -Arguments @("install") `
+        -WorkingDirectory $frontendRoot `
+        -Description "Installing frontend dependencies"
+}
+
+$previousUseRealApi = $env:EXPO_PUBLIC_USE_REAL_API
+$previousApiBaseUrl = $env:EXPO_PUBLIC_API_BASE_URL
+
+try {
+    $env:EXPO_PUBLIC_USE_REAL_API = $FrontendUseRealApi.ToString().ToLower()
+    $env:EXPO_PUBLIC_API_BASE_URL = $FrontendApiBaseUrl
+    Invoke-ExternalCommand `
+        -Executable "npx" `
+        -Arguments @("expo", "export", "--platform", "web", "--output-dir", "dist") `
+        -WorkingDirectory $frontendRoot `
+        -Description "Building frontend production bundle"
+}
+finally {
+    if ($null -eq $previousUseRealApi) {
+        Remove-Item Env:EXPO_PUBLIC_USE_REAL_API -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:EXPO_PUBLIC_USE_REAL_API = $previousUseRealApi
+    }
+
+    if ($null -eq $previousApiBaseUrl) {
+        Remove-Item Env:EXPO_PUBLIC_API_BASE_URL -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:EXPO_PUBLIC_API_BASE_URL = $previousApiBaseUrl
+    }
+}
+
+$backendBody = @(
+    "Remove-Item Env:ALLOWED_HOSTS_JSON -ErrorAction SilentlyContinue",
+    "Remove-Item Env:CORS_ALLOW_ORIGINS_JSON -ErrorAction SilentlyContinue",
+    "`$pythonArgs = @()",
+    $(if ($BackendPythonVersion) { "`$pythonArgs += $(Quote-PowerShellLiteral -Value $BackendPythonVersion)" } else { "`$pythonArgs += @()" }),
+    "`$pythonArgs += @('-m', 'uvicorn', 'backend.app.main:app', '--host', $(Quote-PowerShellLiteral -Value $BackendHost), '--port', $(Quote-PowerShellLiteral -Value $BackendPort.ToString()))",
+    "& $(Quote-PowerShellLiteral -Value $BackendPythonLauncher) @pythonArgs"
+)
+
+Start-WorkspaceWindow -Title "Savoya Backend" -WorkingDirectory $resolvedRepoRoot -Body $backendBody
+
+Invoke-ExternalCommand `
+    -Executable $resolvedNginxExePath `
+    -Arguments @("-t", "-c", $resolvedNginxConfPath) `
+    -WorkingDirectory $nginxWorkingDirectory `
+    -Description "Testing nginx configuration"
+
+$nginxProcess = Get-Process -Name "nginx" -ErrorAction SilentlyContinue
+if ($nginxProcess) {
+    Invoke-ExternalCommand `
+        -Executable $resolvedNginxExePath `
+        -Arguments @("-s", "reload", "-c", $resolvedNginxConfPath) `
+        -WorkingDirectory $nginxWorkingDirectory `
+        -Description "Reloading nginx"
+}
+else {
+    $nginxStartPreview = Format-CommandPreview -Executable $resolvedNginxExePath -Arguments @("-c", $resolvedNginxConfPath)
+    if ($Preview) {
+        Write-Host "[preview] starting nginx"
+        Write-Host "  $nginxStartPreview"
+    }
+    else {
+        Start-Process -FilePath $resolvedNginxExePath `
+            -WorkingDirectory $nginxWorkingDirectory `
+            -ArgumentList @("-c", $resolvedNginxConfPath) | Out-Null
+    }
+}
+
+if ($OpenToolShell) {
+    Start-WorkspaceWindow `
+        -Title "Savoya Shell" `
+        -WorkingDirectory $resolvedRepoRoot `
+        -Body @("Write-Host 'Savoya shell is ready.' -ForegroundColor Green")
+}
+elseif ($Preview) {
+    Write-Host "[preview] current shell remains available at $resolvedRepoRoot"
+}
+else {
+    Set-Location -LiteralPath $resolvedRepoRoot
+    Write-Host "Current shell is ready for project commands: $resolvedRepoRoot" -ForegroundColor Green
+}
+
+Write-Host "Frontend should be served by nginx on ports 80/443." -ForegroundColor Green
+Write-Host "Backend should be reachable only from nginx at http://127.0.0.1:$BackendPort." -ForegroundColor Green
