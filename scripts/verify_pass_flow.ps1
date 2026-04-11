@@ -164,6 +164,17 @@ def normalize_digits(value) -> str:
     return "".join(ch for ch in str(value) if ch.isdigit())
 
 
+def normalize_phone_key(value) -> str:
+    digits = normalize_digits(value)
+    if not digits:
+        return ""
+    if digits.startswith("00"):
+        digits = digits[2:]
+    if digits.startswith("8") and len(digits) == 11:
+        return f"7{digits[1:]}"
+    return digits
+
+
 def normalize_text(value) -> str:
     if value is None:
         return ""
@@ -225,6 +236,7 @@ def load_gate_users(gate_cursor):
         """
         SELECT
             UserPtr,
+            KeyType,
             Phone,
             Number,
             NumberU,
@@ -259,7 +271,7 @@ def find_gate_user(users, request_row):
     target_text = normalize_text(key_value)
     for row in users:
         if key_type == "Phone":
-            if target_digits and normalize_digits(row.Phone) == target_digits:
+            if target_digits and normalize_phone_key(row.Phone) == normalize_phone_key(target_digits):
                 return "phone", row
         else:
             if target_text and normalize_text(row.Number) == target_text:
@@ -349,7 +361,7 @@ else:
         print(
             "GateMatch: FOUND "
             f"(by {match_kind}) UserPtr={gate_user.UserPtr} Deleted={gate_user.Deleted!r} Visitor={gate_user.Visitor!r} "
-            f"Number={gate_user.Number!r} Phone={gate_user.Phone!r}"
+            f"KeyType={gate_user.KeyType!r} Number={gate_user.Number!r} Phone={gate_user.Phone!r}"
         )
         print(
             f"GateName: LastName={gate_user.LastName!r} FirstName={gate_user.FirstName!r} FatherName={gate_user.FatherName!r}"
@@ -368,6 +380,8 @@ else:
                     f"  RdrPtr={access_row.RdrPtr} Name={access_row.Name!r} "
                     f"Always={access_row.Always!r} NoEntry={access_row.NoEntry!r} NoExit={access_row.NoExit!r}"
                 )
+            gsm_rows = [access_row for access_row in access_rows if "gsm" in str(access_row.Name or "").lower()]
+            print(f"GsmAccess: {'YES' if gsm_rows else 'NO'}")
         print("-" * 60)
 
 gate_cursor.close()
