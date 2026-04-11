@@ -5,7 +5,7 @@ param(
     [switch]$Bootstrap,
     [switch]$OpenToolShell,
     [switch]$Preview,
-    [string]$BackendHost = "127.0.0.1",
+    [string]$BackendHost = "0.0.0.0",
     [int]$BackendPort = 8000,
     [string]$BackendPythonLauncher = "py",
     [string]$BackendPythonVersion = "-3.12",
@@ -16,7 +16,7 @@ param(
     [string]$DemoFullName = "Demo User",
     [string]$DemoPlotNumber = "25",
     [bool]$FrontendUseRealApi = $true,
-    [string]$FrontendApiBaseUrl = "",
+    [string]$FrontendApiBaseUrl = "/api",
     [string]$GatePythonLauncher = "py",
     [string]$GatePythonVersion = "-3.12-32"
 )
@@ -173,8 +173,6 @@ function Get-DotEnvJsonStringArray {
 
 function Resolve-FrontendApiBaseUrl {
     param(
-        [Parameter(Mandatory = $true)][string]$ApiHost,
-        [Parameter(Mandatory = $true)][int]$Port,
         [string]$ConfiguredBaseUrl
     )
 
@@ -182,12 +180,7 @@ function Resolve-FrontendApiBaseUrl {
         return $ConfiguredBaseUrl.Trim()
     }
 
-    $apiHost = $ApiHost.Trim()
-    if ($apiHost -in @("0.0.0.0", "::", "[::]")) {
-        $apiHost = @((Get-LocalIpv4Addresses), "127.0.0.1")[0]
-    }
-
-    return "http://{0}:{1}/api" -f $apiHost, $Port
+    return "/api"
 }
 
 function Build-BackendAllowedHostsJson {
@@ -292,8 +285,6 @@ function Build-BackendCorsOriginsJson {
 $resolvedRepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $frontendRoot = Join-Path $resolvedRepoRoot "frontend"
 $resolvedFrontendApiBaseUrl = Resolve-FrontendApiBaseUrl `
-    -ApiHost $BackendHost `
-    -Port $BackendPort `
     -ConfiguredBaseUrl $FrontendApiBaseUrl
 $seedAllowedHosts = Get-DotEnvJsonStringArray -RepoRoot $resolvedRepoRoot -Key "ALLOWED_HOSTS_JSON"
 $seedCorsOrigins = Get-DotEnvJsonStringArray -RepoRoot $resolvedRepoRoot -Key "CORS_ALLOW_ORIGINS_JSON"
@@ -368,6 +359,35 @@ if ($Bootstrap -or -not (Test-Path -LiteralPath $frontendNodeModules)) {
         -Description "Installing frontend dependencies"
 }
 
+$frontendBuildArgs = @("expo", "export", "--platform", "web", "--output-dir", "dist")
+$previousUseRealApi = $env:EXPO_PUBLIC_USE_REAL_API
+$previousApiBaseUrl = $env:EXPO_PUBLIC_API_BASE_URL
+
+try {
+    $env:EXPO_PUBLIC_USE_REAL_API = $FrontendUseRealApi.ToString().ToLower()
+    $env:EXPO_PUBLIC_API_BASE_URL = $resolvedFrontendApiBaseUrl
+    Invoke-ExternalCommand `
+        -Executable "npx" `
+        -Arguments $frontendBuildArgs `
+        -WorkingDirectory $frontendRoot `
+        -Description "Building frontend production bundle"
+}
+finally {
+    if ($null -eq $previousUseRealApi) {
+        Remove-Item Env:EXPO_PUBLIC_USE_REAL_API -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:EXPO_PUBLIC_USE_REAL_API = $previousUseRealApi
+    }
+
+    if ($null -eq $previousApiBaseUrl) {
+        Remove-Item Env:EXPO_PUBLIC_API_BASE_URL -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:EXPO_PUBLIC_API_BASE_URL = $previousApiBaseUrl
+    }
+}
+
 $backendBody = @(
     "`$env:ALLOWED_HOSTS_JSON = $(Quote-PowerShellLiteral -Value $resolvedAllowedHostsJson)",
     "`$env:CORS_ALLOW_ORIGINS_JSON = $(Quote-PowerShellLiteral -Value $resolvedCorsOriginsJson)",
@@ -383,15 +403,7 @@ $backendBody = @(
     "& $(Quote-PowerShellLiteral -Value $BackendPythonLauncher) @pythonArgs"
 )
 
-$frontendBody = @(
-    "`$env:EXPO_PUBLIC_USE_REAL_API = $(Quote-PowerShellLiteral -Value $FrontendUseRealApi.ToString().ToLower())",
-    "`$env:EXPO_PUBLIC_API_BASE_URL = $(Quote-PowerShellLiteral -Value $resolvedFrontendApiBaseUrl)",
-    "if (-not (Test-Path -LiteralPath 'node_modules')) { npm install }",
-    "npm run web"
-)
-
 Start-WorkspaceWindow -Title "Savoya Backend" -WorkingDirectory $resolvedRepoRoot -Body $backendBody
-Start-WorkspaceWindow -Title "Savoya Frontend" -WorkingDirectory $frontendRoot -Body $frontendBody
 
 if ($OpenToolShell) {
     Start-WorkspaceWindow `
@@ -405,4 +417,26 @@ elseif ($Preview) {
 else {
     Set-Location -LiteralPath $resolvedRepoRoot
     Write-Host "Current shell is ready for project commands: $resolvedRepoRoot" -ForegroundColor Green
+}
+
+$accessHosts = @()
+foreach ($accessHost in @($BackendHost, (Get-LocalIpv4Addresses), "127.0.0.1")) {
+    if (-not $accessHost) {
+        continue
+    }
+
+    if ($accessHost -in @("0.0.0.0", "::", "[::]")) {
+        continue
+    }
+
+    if ($accessHost -notin $accessHosts) {
+        $accessHosts += $accessHost
+    }
+}
+
+if ($accessHosts.Count -gt 0) {
+    Write-Host "Production frontend will be available at:" -ForegroundColor Green
+    foreach ($accessHost in $accessHosts) {
+        Write-Host ("  http://{0}:{1}/" -f $accessHost, $BackendPort) -ForegroundColor Green
+    }
 }

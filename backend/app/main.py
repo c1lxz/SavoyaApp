@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
+from pathlib import Path
 
+from fastapi import HTTPException
 from fastapi import Request
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 
 from .config import get_settings
 from .database import Base, SessionLocal, engine
@@ -22,6 +24,7 @@ from .services.requests import (
 
 settings = get_settings()
 logging.basicConfig(level=logging.INFO)
+_FRONTEND_DIST_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
 
 def _split_host_and_port(raw_host: str | None) -> str:
@@ -151,3 +154,43 @@ app.include_router(compatibility.router)
 @app.get("/health")
 async def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def _resolve_frontend_path(relative_path: str) -> Path:
+    requested_path = (relative_path or "").strip().replace("\\", "/").strip("/")
+    target_path = (_FRONTEND_DIST_DIR / requested_path).resolve()
+
+    if target_path != _FRONTEND_DIST_DIR and _FRONTEND_DIST_DIR not in target_path.parents:
+        raise HTTPException(status_code=404)
+
+    return target_path
+
+
+def _serve_frontend_asset(relative_path: str) -> FileResponse:
+    if not _FRONTEND_DIST_DIR.is_dir():
+        raise HTTPException(status_code=404)
+
+    index_path = _FRONTEND_DIST_DIR / "index.html"
+    requested_path = _resolve_frontend_path(relative_path)
+
+    if requested_path.is_file():
+        return FileResponse(requested_path)
+
+    nested_index = requested_path / "index.html"
+    if nested_index.is_file():
+        return FileResponse(nested_index)
+
+    if index_path.is_file():
+        return FileResponse(index_path)
+
+    raise HTTPException(status_code=404)
+
+
+@app.get("/")
+async def frontend_index() -> FileResponse:
+    return _serve_frontend_asset("")
+
+
+@app.api_route("/{full_path:path}", methods=["GET", "HEAD"])
+async def frontend_spa(full_path: str) -> FileResponse:
+    return _serve_frontend_asset(full_path)
