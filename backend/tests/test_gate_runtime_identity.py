@@ -68,7 +68,7 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
         key_type="Phone",
         normalized_key_value="79991234567",
         phone_number=None,
-        resident_name="Ivanov Ivan",
+        resident_name="79991234567",
         is_visitor=True,
         expires_at=None,
         access_point_ids=[15],
@@ -78,6 +78,11 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
     assert any(
         sql == "UPDATE Users SET Phone = ?, [Number] = ? WHERE UserPtr = ?"
         and params == ("79991234567", "79991234567", 42)
+        for sql, params in cursor.commands
+    )
+    assert any(
+        sql == "UPDATE Users SET [LastName] = ? WHERE UserPtr = ?"
+        and params == ("79991234567", 42)
         for sql, params in cursor.commands
     )
 

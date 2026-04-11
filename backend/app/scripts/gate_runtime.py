@@ -688,6 +688,7 @@ def _upsert_real_user(
     existing_user_ptr = _find_existing_user_ptr(cursor, key_type, normalized_key_value)
     if existing_user_ptr is not None:
         access_expires_at = _to_access_datetime(expires_at)
+        last_name, first_name, father_name = _split_name(resident_name)
         cursor.execute(
             """
             UPDATE Users
@@ -712,6 +713,12 @@ def _upsert_real_user(
             cursor.execute("UPDATE Users SET [Number] = ? WHERE UserPtr = ?", (normalized_key_value, existing_user_ptr))
         if phone_number is not None and key_type != "Phone":
             cursor.execute("UPDATE Users SET Phone = ? WHERE UserPtr = ?", (_normalize_contact_phone(phone_number), existing_user_ptr))
+        if last_name is not None:
+            cursor.execute("UPDATE Users SET [LastName] = ? WHERE UserPtr = ?", (last_name, existing_user_ptr))
+        if first_name is not None:
+            cursor.execute("UPDATE Users SET [FirstName] = ? WHERE UserPtr = ?", (first_name, existing_user_ptr))
+        if father_name is not None:
+            cursor.execute("UPDATE Users SET [FatherName] = ? WHERE UserPtr = ?", (father_name, existing_user_ptr))
         _ensure_access_permissions(cursor, existing_user_ptr, access_point_ids)
         return existing_user_ptr
 
