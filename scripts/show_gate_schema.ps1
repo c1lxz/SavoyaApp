@@ -79,6 +79,7 @@ catch {
 }
 
 $tablesArg = if ($Tables) { ($Tables -join "|") } else { "" }
+$namePatternArg = if ($null -ne $NamePattern) { [string]$NamePattern } else { "" }
 
 $pythonScript = @'
 import sys
@@ -193,7 +194,7 @@ try {
         $Top.ToString(),
         $Driver,
         $tablesArg,
-        $NamePattern,
+        $namePatternArg,
         $IncludeSamples.IsPresent.ToString()
     )
     & $PythonLauncher @pythonArgs
