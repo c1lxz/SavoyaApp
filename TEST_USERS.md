@@ -1,8 +1,6 @@
 # Test Users
 
-При старте backend с локальной SQLite-базой `backend_test_local.db` аккаунт `demo` создаётся автоматически, потому что в `.env` включён `BOOTSTRAP_DEMO_USER=True`.
-
-Логины `user01`...`user05` не bootstrap'ятся кодом приложения: они работают только если уже присутствуют в локальной SQLite-базе или были добавлены отдельным сидированием.
+При старте backend с локальной SQLite-базой `backend_test_local.db` bootstrap создаёт `demo` и дополнительных тестовых пользователей из `BOOTSTRAP_TEST_USERS_JSON`.
 
 | Login | Password |
 | --- | --- |

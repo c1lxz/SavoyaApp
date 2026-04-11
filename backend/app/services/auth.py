@@ -41,6 +41,30 @@ async def ensure_demo_user(session: AsyncSession) -> None:
     await session.commit()
 
 
+async def ensure_bootstrap_test_users(session: AsyncSession) -> None:
+    bootstrap_users = settings.bootstrap_test_users
+    if not bootstrap_users:
+        return
+
+    for payload in bootstrap_users:
+        query = await session.execute(select(User).where(User.login == payload["login"]))
+        user = query.scalar_one_or_none()
+        if user is None:
+            user = User(login=payload["login"])
+            session.add(user)
+
+        user.phone = payload["phone"]
+        user.name = payload["name"] or f"Test User {payload['login']}"
+        user.apartment = payload["plot_number"] or None
+        user.is_admin = False
+        user.is_active = True
+        user.login = payload["login"]
+        user.password_hash = hash_password(payload["password"])
+        user.plot_number = payload["plot_number"] or None
+
+    await session.commit()
+
+
 async def login_with_password(session: AsyncSession, login: str, password: str) -> tuple[User | None, str | None, str | None]:
     query = await session.execute(select(User).where(User.login == login))
     user = query.scalar_one_or_none()

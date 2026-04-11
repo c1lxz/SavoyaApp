@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     demo_full_name: str = "\u0414\u0435\u043c\u043e \u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c"
     demo_plot_number: str = "25"
     bootstrap_demo_user: bool = True
+    bootstrap_test_users_json: str = "[]"
 
     # Gate integration controls
     gate_real_integration_enabled: bool = False
@@ -76,6 +77,29 @@ class Settings(BaseSettings):
     def allowed_hosts(self) -> list[str]:
         raw = json.loads(self.allowed_hosts_json)
         return [str(value).strip() for value in raw if str(value).strip()]
+
+    @property
+    def bootstrap_test_users(self) -> list[dict[str, str]]:
+        raw = json.loads(self.bootstrap_test_users_json)
+        users: list[dict[str, str]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            login = str(item.get("login", "")).strip()
+            password = str(item.get("password", "")).strip()
+            phone = str(item.get("phone", "")).strip()
+            if not login or not password or not phone:
+                continue
+            users.append(
+                {
+                    "login": login,
+                    "password": password,
+                    "phone": phone,
+                    "name": str(item.get("name", "")).strip(),
+                    "plot_number": str(item.get("plot_number", "")).strip(),
+                }
+            )
+        return users
 
 
 @lru_cache
