@@ -186,8 +186,10 @@ def _normalize_phone(value: str) -> str:
         raise ValueError("Phone key_value must contain digits")
     if digits.startswith("00"):
         digits = digits[2:]
-    if digits.startswith("8") and len(digits) == 11:
-        return f"7{digits[1:]}"
+    if len(digits) == 11 and digits.startswith(("7", "8")):
+        return f"00{digits[1:]}"
+    if len(digits) == 10 and digits.startswith("9"):
+        return f"00{digits}"
     return digits
 
 

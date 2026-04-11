@@ -49,10 +49,10 @@ class _InsertedUserCursor:
 def test_build_identity_for_phone_populates_required_number(monkeypatch):
     monkeypatch.setattr(gate_runtime, "_generate_unique_number_u", lambda cursor: "ABC123NUMBER")
 
-    identity = gate_runtime._build_identity(object(), "Phone", "79991234567")
+    identity = gate_runtime._build_identity(object(), "Phone", "009991234567")
 
-    assert identity.number == "79991234567"
-    assert identity.phone == "79991234567"
+    assert identity.number == "009991234567"
+    assert identity.phone == "009991234567"
     assert identity.number_u == "ABC123NUMBER"
 
 
@@ -66,9 +66,9 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
     user_ptr = gate_runtime._upsert_real_user(
         cursor,
         key_type="Phone",
-        normalized_key_value="79991234567",
+        normalized_key_value="009991234567",
         phone_number=None,
-        resident_name="79991234567",
+        resident_name="009991234567",
         is_visitor=True,
         expires_at=None,
         access_point_ids=[15],
@@ -77,31 +77,32 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
     assert user_ptr == 42
     assert any(
         sql == "UPDATE Users SET Phone = ?, [Number] = ? WHERE UserPtr = ?"
-        and params == ("79991234567", "79991234567", 42)
+        and params == ("009991234567", "009991234567", 42)
         for sql, params in cursor.commands
     )
     assert any(
         sql == "UPDATE Users SET [LastName] = ? WHERE UserPtr = ?"
-        and params == ("79991234567", 42)
+        and params == ("009991234567", 42)
         for sql, params in cursor.commands
     )
 
 
 def test_normalize_phone_keeps_legacy_formats_compatible():
-    assert gate_runtime._normalize_phone("8 (999) 123-45-67") == "79991234567"
-    assert gate_runtime._normalize_phone("+7 999 123-45-67") == "79991234567"
-    assert gate_runtime._normalize_phone("0079991234567") == "79991234567"
+    assert gate_runtime._normalize_phone("8 (999) 123-45-67") == "009991234567"
+    assert gate_runtime._normalize_phone("+7 999 123-45-67") == "009991234567"
+    assert gate_runtime._normalize_phone("0079991234567") == "009991234567"
+    assert gate_runtime._normalize_phone("9991234567") == "009991234567"
 
 
 def test_find_existing_user_ptr_skips_zero_user_ptr():
     cursor = _RowCursor(
         [
             SimpleNamespace(UserPtr=0, Phone="0079991234567", Number="0079991234567", Deleted=False),
-            SimpleNamespace(UserPtr=17, Phone="79991234567", Number="79991234567", Deleted=False),
+            SimpleNamespace(UserPtr=17, Phone="009991234567", Number="009991234567", Deleted=False),
         ]
     )
 
-    user_ptr = gate_runtime._find_existing_user_ptr(cursor, "Phone", "79991234567")
+    user_ptr = gate_runtime._find_existing_user_ptr(cursor, "Phone", "009991234567")
 
     assert user_ptr == 17
 
@@ -113,7 +114,7 @@ def test_find_existing_user_ptr_matches_legacy_007_phone_value():
         ]
     )
 
-    user_ptr = gate_runtime._find_existing_user_ptr(cursor, "Phone", "79991234567")
+    user_ptr = gate_runtime._find_existing_user_ptr(cursor, "Phone", "009991234567")
 
     assert user_ptr == 18
 
