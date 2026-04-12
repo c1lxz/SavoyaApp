@@ -527,7 +527,12 @@ def _sample_key_type(cursor: pyodbc.Cursor, key_type: str, access_point_ids: Ite
     return row.KeyType if hasattr(row, "KeyType") else row[0]
 
 
-def _sample_user_defaults(cursor: pyodbc.Cursor, key_type: str) -> dict[str, Any]:
+def _sample_user_defaults(
+    cursor: pyodbc.Cursor,
+    key_type: str,
+    *,
+    exclude_user_ptr: int | None = None,
+) -> dict[str, Any]:
     if key_type != "Phone":
         where_sql = """
             (Deleted = 0 OR Deleted IS NULL)
@@ -535,6 +540,10 @@ def _sample_user_defaults(cursor: pyodbc.Cursor, key_type: str) -> dict[str, Any
             AND Trim(Number) <> ''
             AND (Phone IS NULL OR Trim(Phone) = '')
         """
+        params: list[Any] = []
+        if exclude_user_ptr is not None:
+            where_sql += "\n            AND UserPtr <> ?"
+            params.append(int(exclude_user_ptr))
 
         row = cursor.execute(
             f"""
@@ -550,12 +559,14 @@ def _sample_user_defaults(cursor: pyodbc.Cursor, key_type: str) -> dict[str, Any
             FROM Users
             WHERE {where_sql}
             ORDER BY UserPtr DESC
-            """
+            """,
+            params,
         ).fetchone()
     else:
         rows = cursor.execute(
             """
             SELECT TOP 100
+                UserPtr,
                 GroupPtr,
                 IdleNotLimited,
                 NoFacility,
@@ -572,7 +583,15 @@ def _sample_user_defaults(cursor: pyodbc.Cursor, key_type: str) -> dict[str, Any
             ORDER BY UserPtr DESC
             """
         ).fetchall()
-        row = next((item for item in rows if _is_phone_identity_row(item)), None)
+        row = next(
+            (
+                item
+                for item in rows
+                if (exclude_user_ptr is None or int(getattr(item, "UserPtr", 0) or 0) != int(exclude_user_ptr))
+                and _is_phone_identity_row(item)
+            ),
+            None,
+        )
 
     if row is None:
         return {}
@@ -586,6 +605,34 @@ def _sample_user_defaults(cursor: pyodbc.Cursor, key_type: str) -> dict[str, Any
         "SendMail": row.SendMail,
         "UniPassMode": row.UniPassMode,
     }
+
+
+def _apply_user_defaults(
+    cursor: pyodbc.Cursor,
+    *,
+    user_ptr: int,
+    key_type: str,
+    exclude_user_ptr: int | None = None,
+) -> None:
+    if not hasattr(cursor, "execute") or not hasattr(cursor, "fetchall"):
+        return
+    defaults = _sample_user_defaults(cursor, key_type, exclude_user_ptr=exclude_user_ptr)
+    if not defaults:
+        return
+
+    assignments: list[str] = []
+    params: list[Any] = []
+    for column in ("GroupPtr", "IdleNotLimited", "NoFacility", "Status", "BgPtr", "SendSms", "SendMail", "UniPassMode"):
+        if column not in defaults:
+            continue
+        assignments.append(f"[{column}] = ?")
+        params.append(defaults[column])
+
+    if not assignments:
+        return
+
+    params.append(int(user_ptr))
+    cursor.execute(f"UPDATE Users SET {', '.join(assignments)} WHERE UserPtr = ?", params)
 
 
 def _build_identity(cursor: pyodbc.Cursor, key_type: str, normalized_key_value: str) -> RealGateIdentity:
@@ -911,6 +958,8 @@ def _reactivate_real_user(
 
     params.append(user_ptr)
     cursor.execute(f"UPDATE Users SET {', '.join(assignments)} WHERE UserPtr = ?", params)
+    if key_type == "Phone":
+        _apply_user_defaults(cursor, user_ptr=user_ptr, key_type=key_type, exclude_user_ptr=user_ptr)
     return user_ptr
 
 
@@ -1276,6 +1325,13 @@ def _upsert_real_user(
             cursor.execute("UPDATE Users SET [FirstName] = ? WHERE UserPtr = ?", (first_name, existing_user_ptr))
         if father_name is not None:
             cursor.execute("UPDATE Users SET [FatherName] = ? WHERE UserPtr = ?", (father_name, existing_user_ptr))
+        if key_type == "Phone":
+            _apply_user_defaults(
+                cursor,
+                user_ptr=existing_user_ptr,
+                key_type=key_type,
+                exclude_user_ptr=existing_user_ptr,
+            )
         if key_type == "Phone":
             _cleanup_conflicting_phone_rows(
                 cursor,

@@ -157,16 +157,20 @@ class _TemplateSamplingCursor:
     def __init__(self, access_rows=None, user_rows=None) -> None:
         self.access_rows = list(access_rows or [])
         self.user_rows = list(user_rows or [])
+        self.commands: list[tuple[str, tuple | None]] = []
         self._last_sql = ""
 
     def execute(self, sql: str, params=None):
         self._last_sql = sql
+        self.commands.append((sql, tuple(params) if params is not None else None))
         return self
 
     def fetchall(self):
         if "AccessTable AS a" in self._last_sql:
             return list(self.access_rows)
         if "SELECT TOP 100 UserPtr, Phone, Number, KeyType, Deleted" in self._last_sql:
+            return list(self.user_rows)
+        if "SELECT TOP 100" in self._last_sql and "GroupPtr" in self._last_sql and "FROM Users" in self._last_sql:
             return list(self.user_rows)
         raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
 
@@ -380,6 +384,51 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
     assert any(
         sql == "UPDATE Users SET [LastName] = ? WHERE UserPtr = ?"
         and params == ("009991234567", 42)
+        for sql, params in cursor.commands
+    )
+
+
+def test_apply_user_defaults_for_existing_phone_user_uses_other_phone_template():
+    cursor = _TemplateSamplingCursor(
+        user_rows=[
+            SimpleNamespace(
+                UserPtr=42,
+                GroupPtr=1,
+                IdleNotLimited=False,
+                NoFacility=True,
+                Status=3,
+                BgPtr=9,
+                SendSms=False,
+                SendMail=False,
+                UniPassMode=5,
+                Phone="89991234567\n",
+                Number="009991234567",
+                KeyType=6,
+                Deleted=False,
+            ),
+            SimpleNamespace(
+                UserPtr=41,
+                GroupPtr=7,
+                IdleNotLimited=True,
+                NoFacility=False,
+                Status=0,
+                BgPtr=2,
+                SendSms=True,
+                SendMail=True,
+                UniPassMode=1,
+                Phone="89990001122\n",
+                Number="0099990001122",
+                KeyType=6,
+                Deleted=False,
+            ),
+        ]
+    )
+
+    gate_runtime._apply_user_defaults(cursor, user_ptr=42, key_type="Phone", exclude_user_ptr=42)
+
+    assert any(
+        sql == "UPDATE Users SET [GroupPtr] = ?, [IdleNotLimited] = ?, [NoFacility] = ?, [Status] = ?, [BgPtr] = ?, [SendSms] = ?, [SendMail] = ?, [UniPassMode] = ? WHERE UserPtr = ?"
+        and params == (7, True, False, 0, 2, True, True, 1, 42)
         for sql, params in cursor.commands
     )
 
