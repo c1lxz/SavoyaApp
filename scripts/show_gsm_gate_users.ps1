@@ -6,6 +6,7 @@ param(
     [string]$PythonLauncher = $(if ($env:GATE_PYTHON_LAUNCHER) { $env:GATE_PYTHON_LAUNCHER } else { "py" }),
     [string]$PythonVersion = $(if ($env:GATE_PYTHON_VERSION) { $env:GATE_PYTHON_VERSION } else { "-3.12-32" }),
     [string]$Driver = $(if ($env:GATE_ODBC_DRIVER) { $env:GATE_ODBC_DRIVER } else { "Driver do Microsoft Access (*.mdb)" }),
+    [string]$Needle,
     [int]$Top = 20
 )
 
@@ -87,6 +88,7 @@ uid = sys.argv[3]
 pwd = sys.argv[4]
 top = int(sys.argv[5])
 preferred_driver = sys.argv[6]
+needle = (sys.argv[7] if len(sys.argv) > 7 else "").strip().lower()
 
 
 def pick_driver(preferred: str) -> str:
@@ -111,6 +113,7 @@ conn = pyodbc.connect(
 )
 cur = conn.cursor()
 
+phone_reader_hints = ("gsm", "gate terminal", "terminal", "phone", "call", "caller", "tel", "звон", "вызов", "тел")
 rows = cur.execute(
     f"""
     SELECT TOP {top * 10}
@@ -127,15 +130,38 @@ rows = cur.execute(
         u.ExpiryDate,
         u.ExpiryTime,
         a.RdrPtr,
-        r.Name
+        r.Name,
+        d.KeyType AS DeviceKeyType,
+        a.Always,
+        a.Schedule1,
+        a.RecordState,
+        a.CardType,
+        a.CardCode,
+        a.NoEntry,
+        a.NoExit
     FROM (Users AS u
         INNER JOIN AccessTable AS a ON a.UserPtr = u.UserPtr)
         LEFT JOIN Readers AS r ON r.RdrPtr = a.RdrPtr
-    WHERE r.Name IS NOT NULL
-      AND LCase(r.Name) Like '*gsm*'
+        LEFT JOIN Devices AS d ON d.DevPtr = r.DevPtr
     ORDER BY u.UserPtr DESC, a.RdrPtr ASC
     """
 ).fetchall()
+
+rows = [
+    row for row in rows
+    if any(hint in str(row.Name or "").lower() for hint in phone_reader_hints)
+]
+if needle:
+    rows = [
+        row for row in rows
+        if needle in str(row.Phone or "").lower()
+        or needle in str(row.Number or "").lower()
+        or needle in str(row.LastName or "").lower()
+        or needle in str(row.FirstName or "").lower()
+        or needle in str(row.Name or "").lower()
+        or needle in str(row.RdrPtr or "").lower()
+        or needle in str(row.UserPtr or "").lower()
+    ]
 
 print("=== GSM Gate Users ===")
 if not rows:
@@ -161,7 +187,13 @@ for user_ptr, user_rows in grouped.items():
         f"UseExpiry={head.UseExpiry!r} | ExpiryDate={head.ExpiryDate!r} | ExpiryTime={head.ExpiryTime!r}"
     )
     for access_row in user_rows:
-        print(f"  GSM Reader: RdrPtr={access_row.RdrPtr} Name={access_row.Name!r}")
+        print(
+            f"  Phone Reader: RdrPtr={access_row.RdrPtr} Name={access_row.Name!r} "
+            f"DeviceKeyType={access_row.DeviceKeyType!r} Always={access_row.Always!r} "
+            f"Schedule1={access_row.Schedule1!r} RecordState={access_row.RecordState!r} "
+            f"CardType={access_row.CardType!r} CardCode={access_row.CardCode!r} "
+            f"NoEntry={access_row.NoEntry!r} NoExit={access_row.NoExit!r}"
+        )
     print("-" * 60)
     count += 1
 
@@ -176,7 +208,7 @@ try {
     if ($PythonVersion) {
         $pythonArgs += $PythonVersion
     }
-    $pythonArgs += @($tempPy, $tempMdb, $tempSystemDb, $Uid, $Pwd, $Top.ToString(), $Driver)
+    $pythonArgs += @($tempPy, $tempMdb, $tempSystemDb, $Uid, $Pwd, $Top.ToString(), $Driver, $Needle)
     & $PythonLauncher @pythonArgs
 }
 finally {

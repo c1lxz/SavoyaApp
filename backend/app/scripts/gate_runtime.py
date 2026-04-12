@@ -737,7 +737,68 @@ def _default_permission_template() -> dict[str, Any]:
     }
 
 
-def _permission_template_for_reader(cursor: pyodbc.Cursor, access_point_id: int) -> dict[str, Any]:
+def _permission_template_from_row(row: Any | None) -> dict[str, Any]:
+    if row is None:
+        return _default_permission_template()
+    return {
+        "InnerNum": row.InnerNum,
+        "Always": row.Always,
+        "Schedule1": row.Schedule1,
+        "Schedule2": row.Schedule2,
+        "Schedule3": row.Schedule3,
+        "Schedule4": row.Schedule4,
+        "Schedule5": row.Schedule5,
+        "Schedule6": row.Schedule6,
+        "Schedule7": row.Schedule7,
+        "RecordState": row.RecordState,
+        "APB": row.APB,
+        "Inside": row.Inside,
+        "CardType": row.CardType,
+        "CardCode": row.CardCode,
+        "NoEntry": row.NoEntry,
+        "NoExit": row.NoExit,
+    }
+
+
+def _permission_template_for_reader(
+    cursor: pyodbc.Cursor,
+    access_point_id: int,
+    *,
+    key_type: str | None = None,
+) -> dict[str, Any]:
+    if key_type == "Phone":
+        phone_row = cursor.execute(
+            """
+            SELECT TOP 1
+                a.InnerNum,
+                a.Always,
+                a.Schedule1,
+                a.Schedule2,
+                a.Schedule3,
+                a.Schedule4,
+                a.Schedule5,
+                a.Schedule6,
+                a.Schedule7,
+                a.RecordState,
+                a.APB,
+                a.Inside,
+                a.CardType,
+                a.CardCode,
+                a.NoEntry,
+                a.NoExit
+            FROM AccessTable AS a
+            LEFT JOIN Users AS u ON u.UserPtr = a.UserPtr
+            WHERE a.RdrPtr = ?
+              AND (u.Deleted = 0 OR u.Deleted IS NULL)
+              AND u.Phone IS NOT NULL
+              AND Trim(u.Phone) <> ''
+            ORDER BY a.UserPtr DESC
+            """,
+            (access_point_id,),
+        ).fetchone()
+        if phone_row is not None:
+            return _permission_template_from_row(phone_row)
+
     row = cursor.execute(
         """
         SELECT TOP 1
@@ -763,40 +824,71 @@ def _permission_template_for_reader(cursor: pyodbc.Cursor, access_point_id: int)
         """,
         (access_point_id,),
     ).fetchone()
-    if row is None:
-        return _default_permission_template()
-    return {
-        "InnerNum": row.InnerNum,
-        "Always": row.Always,
-        "Schedule1": row.Schedule1,
-        "Schedule2": row.Schedule2,
-        "Schedule3": row.Schedule3,
-        "Schedule4": row.Schedule4,
-        "Schedule5": row.Schedule5,
-        "Schedule6": row.Schedule6,
-        "Schedule7": row.Schedule7,
-        "RecordState": row.RecordState,
-        "APB": row.APB,
-        "Inside": row.Inside,
-        "CardType": row.CardType,
-        "CardCode": row.CardCode,
-        "NoEntry": row.NoEntry,
-        "NoExit": row.NoExit,
-    }
+    return _permission_template_from_row(row)
 
 
-def _ensure_access_permissions(cursor: pyodbc.Cursor, user_ptr: int, access_point_ids: Iterable[int]) -> None:
+def _ensure_access_permissions(
+    cursor: pyodbc.Cursor,
+    user_ptr: int,
+    access_point_ids: Iterable[int],
+    *,
+    key_type: str | None = None,
+) -> None:
     for access_point_id in access_point_ids:
         if not _reader_exists(cursor, access_point_id):
             raise ValueError(f"Access point {access_point_id} was not found in Readers")
-        cursor.execute(
+        existing_row = cursor.execute(
             "SELECT TOP 1 UserPtr FROM AccessTable WHERE UserPtr = ? AND RdrPtr = ?",
             (user_ptr, access_point_id),
+        ).fetchone()
+
+        template = _permission_template_for_reader(cursor, access_point_id, key_type=key_type)
+        template_params = (
+            template["InnerNum"],
+            template["Always"],
+            template["Schedule1"],
+            template["Schedule2"],
+            template["Schedule3"],
+            template["Schedule4"],
+            template["Schedule5"],
+            template["Schedule6"],
+            template["Schedule7"],
+            template["RecordState"],
+            template["APB"],
+            template["Inside"],
+            template["CardType"],
+            template["CardCode"],
+            template["NoEntry"],
+            template["NoExit"],
         )
-        if cursor.fetchone() is not None:
+
+        if existing_row is not None:
+            cursor.execute(
+                """
+                UPDATE AccessTable
+                SET
+                    InnerNum = ?,
+                    Always = ?,
+                    Schedule1 = ?,
+                    Schedule2 = ?,
+                    Schedule3 = ?,
+                    Schedule4 = ?,
+                    Schedule5 = ?,
+                    Schedule6 = ?,
+                    Schedule7 = ?,
+                    RecordState = ?,
+                    APB = ?,
+                    Inside = ?,
+                    CardType = ?,
+                    CardCode = ?,
+                    NoEntry = ?,
+                    NoExit = ?
+                WHERE UserPtr = ? AND RdrPtr = ?
+                """,
+                template_params + (user_ptr, access_point_id),
+            )
             continue
 
-        template = _permission_template_for_reader(cursor, access_point_id)
         cursor.execute(
             """
             INSERT INTO AccessTable
@@ -825,23 +917,7 @@ def _ensure_access_permissions(cursor: pyodbc.Cursor, user_ptr: int, access_poin
             (
                 access_point_id,
                 user_ptr,
-                template["InnerNum"],
-                template["Always"],
-                template["Schedule1"],
-                template["Schedule2"],
-                template["Schedule3"],
-                template["Schedule4"],
-                template["Schedule5"],
-                template["Schedule6"],
-                template["Schedule7"],
-                template["RecordState"],
-                template["APB"],
-                template["Inside"],
-                template["CardType"],
-                template["CardCode"],
-                template["NoEntry"],
-                template["NoExit"],
-            ),
+            ) + template_params,
         )
 
 
@@ -894,7 +970,7 @@ def _upsert_real_user(
             cursor.execute("UPDATE Users SET [FirstName] = ? WHERE UserPtr = ?", (first_name, existing_user_ptr))
         if father_name is not None:
             cursor.execute("UPDATE Users SET [FatherName] = ? WHERE UserPtr = ?", (father_name, existing_user_ptr))
-        _ensure_access_permissions(cursor, existing_user_ptr, access_point_ids)
+        _ensure_access_permissions(cursor, existing_user_ptr, access_point_ids, key_type=key_type)
         return existing_user_ptr
 
     reusable_user_ptr = _find_reusable_deleted_user_ptr(cursor, key_type, normalized_key_value)
@@ -910,7 +986,7 @@ def _upsert_real_user(
             is_visitor=is_visitor,
             expires_at=expires_at,
         )
-        _ensure_access_permissions(cursor, user_ptr, access_point_ids)
+        _ensure_access_permissions(cursor, user_ptr, access_point_ids, key_type=key_type)
         return user_ptr
 
     user_ptr = _insert_real_user(
@@ -923,7 +999,7 @@ def _upsert_real_user(
         is_visitor=is_visitor,
         expires_at=expires_at,
     )
-    _ensure_access_permissions(cursor, user_ptr, access_point_ids)
+    _ensure_access_permissions(cursor, user_ptr, access_point_ids, key_type=key_type)
     return user_ptr
 
 

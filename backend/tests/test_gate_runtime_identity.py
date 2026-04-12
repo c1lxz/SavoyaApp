@@ -76,6 +76,23 @@ class _ReaderKeyTypeCursor:
         raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
 
 
+class _AccessPermissionCursor:
+    def __init__(self, existing: bool) -> None:
+        self.existing = existing
+        self.commands: list[tuple[str, tuple | None]] = []
+        self._last_sql = ""
+
+    def execute(self, sql: str, params=None):
+        self._last_sql = sql
+        self.commands.append((sql, tuple(params) if params is not None else None))
+        return self
+
+    def fetchone(self):
+        if "SELECT TOP 1 UserPtr FROM AccessTable WHERE UserPtr = ? AND RdrPtr = ?" in self._last_sql:
+            return SimpleNamespace(UserPtr=42) if self.existing else None
+        raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
+
+
 def test_build_identity_for_phone_populates_required_number(monkeypatch):
     monkeypatch.setattr(gate_runtime, "_generate_unique_number_u", lambda cursor: "ABC123NUMBER")
     monkeypatch.delenv("GATE_PHONE_WRITE_FORMAT", raising=False)
@@ -155,6 +172,38 @@ def test_sample_key_type_prefers_phone_reader_device_key_type(monkeypatch):
     key_type = gate_runtime._sample_key_type(cursor, "Phone", [15, 70])
 
     assert key_type == 9
+
+
+def test_ensure_access_permissions_updates_existing_rows(monkeypatch):
+    cursor = _AccessPermissionCursor(existing=True)
+    template = {
+        "InnerNum": 1,
+        "Always": True,
+        "Schedule1": False,
+        "Schedule2": False,
+        "Schedule3": False,
+        "Schedule4": False,
+        "Schedule5": False,
+        "Schedule6": False,
+        "Schedule7": False,
+        "RecordState": 0,
+        "APB": False,
+        "Inside": False,
+        "CardType": 9,
+        "CardCode": "PHONE",
+        "NoEntry": False,
+        "NoExit": False,
+    }
+
+    monkeypatch.setattr(gate_runtime, "_reader_exists", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(gate_runtime, "_permission_template_for_reader", lambda *_args, **_kwargs: template)
+
+    gate_runtime._ensure_access_permissions(cursor, 42, [70], key_type="Phone")
+
+    assert any(
+        "UPDATE AccessTable" in sql and params[-2:] == (42, 70)
+        for sql, params in cursor.commands
+    )
 
 
 def test_find_existing_user_ptr_skips_zero_user_ptr():
