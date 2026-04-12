@@ -82,19 +82,40 @@ class _ReaderKeyTypeCursor:
 
 
 class _AccessPermissionCursor:
-    def __init__(self, existing: bool) -> None:
+    def __init__(
+        self,
+        existing: bool,
+        *,
+        existing_inner_num: int | None = None,
+        max_inner_num: int = 0,
+        conflicting_inner_nums=None,
+    ) -> None:
         self.existing = existing
+        self.existing_inner_num = existing_inner_num
+        self.max_inner_num = max_inner_num
+        self.conflicting_inner_nums = set(conflicting_inner_nums or [])
         self.commands: list[tuple[str, tuple | None]] = []
         self._last_sql = ""
+        self._params = None
 
     def execute(self, sql: str, params=None):
         self._last_sql = sql
+        self._params = tuple(params) if params is not None else None
         self.commands.append((sql, tuple(params) if params is not None else None))
         return self
 
     def fetchone(self):
-        if "SELECT TOP 1 UserPtr FROM AccessTable WHERE UserPtr = ? AND RdrPtr = ?" in self._last_sql:
-            return SimpleNamespace(UserPtr=42) if self.existing else None
+        if "SELECT TOP 1 UserPtr, InnerNum FROM AccessTable WHERE UserPtr = ? AND RdrPtr = ?" in self._last_sql:
+            if not self.existing:
+                return None
+            return SimpleNamespace(UserPtr=42, InnerNum=self.existing_inner_num)
+        if "SELECT TOP 1 UserPtr FROM AccessTable WHERE RdrPtr = ? AND InnerNum = ?" in self._last_sql:
+            inner_num = int(self._params[1])
+            if inner_num in self.conflicting_inner_nums:
+                return SimpleNamespace(UserPtr=999)
+            return None
+        if "SELECT MAX(InnerNum) AS MaxInnerNum FROM AccessTable WHERE RdrPtr = ?" in self._last_sql:
+            return SimpleNamespace(MaxInnerNum=self.max_inner_num)
         raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
 
 
@@ -244,7 +265,7 @@ def test_sample_key_type_prefers_phone_reader_device_key_type(monkeypatch):
 
 
 def test_ensure_access_permissions_updates_existing_rows(monkeypatch):
-    cursor = _AccessPermissionCursor(existing=True)
+    cursor = _AccessPermissionCursor(existing=True, existing_inner_num=77)
     template = {
         "InnerNum": 1,
         "Always": True,
@@ -270,7 +291,71 @@ def test_ensure_access_permissions_updates_existing_rows(monkeypatch):
     gate_runtime._ensure_access_permissions(cursor, 42, [70], key_type="Phone")
 
     assert any(
-        "UPDATE AccessTable" in sql and params[-2:] == (42, 70)
+        "UPDATE AccessTable" in sql and params[0] == 77 and params[-2:] == (42, 70)
+        for sql, params in cursor.commands
+    )
+
+
+def test_ensure_access_permissions_inserts_new_rows_with_unique_inner_num(monkeypatch):
+    cursor = _AccessPermissionCursor(existing=False, max_inner_num=100)
+    template = {
+        "InnerNum": 1,
+        "Always": True,
+        "Schedule1": False,
+        "Schedule2": False,
+        "Schedule3": False,
+        "Schedule4": False,
+        "Schedule5": False,
+        "Schedule6": False,
+        "Schedule7": False,
+        "RecordState": 0,
+        "APB": False,
+        "Inside": False,
+        "CardType": 9,
+        "CardCode": "PHONE",
+        "NoEntry": False,
+        "NoExit": False,
+    }
+
+    monkeypatch.setattr(gate_runtime, "_reader_exists", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(gate_runtime, "_permission_template_for_reader", lambda *_args, **_kwargs: template)
+
+    gate_runtime._ensure_access_permissions(cursor, 42, [70], key_type="Phone")
+
+    assert any(
+        "INSERT INTO AccessTable" in sql and params[:3] == (70, 42, 101)
+        for sql, params in cursor.commands
+    )
+
+
+def test_ensure_access_permissions_reassigns_conflicting_inner_num(monkeypatch):
+    cursor = _AccessPermissionCursor(existing=True, existing_inner_num=77, max_inner_num=100, conflicting_inner_nums={77})
+    template = {
+        "InnerNum": 1,
+        "Always": True,
+        "Schedule1": False,
+        "Schedule2": False,
+        "Schedule3": False,
+        "Schedule4": False,
+        "Schedule5": False,
+        "Schedule6": False,
+        "Schedule7": False,
+        "RecordState": 0,
+        "APB": False,
+        "Inside": False,
+        "CardType": 9,
+        "CardCode": "PHONE",
+        "NoEntry": False,
+        "NoExit": False,
+    }
+
+    monkeypatch.setattr(gate_runtime, "_reader_exists", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(gate_runtime, "_permission_template_for_reader", lambda *_args, **_kwargs: template)
+
+    gate_runtime._ensure_access_permissions(cursor, 42, [70], key_type="Phone")
+
+    assert any(
+        "UPDATE AccessTable" in sql and params[0] == 101 and params[-2:] == (42, 70)
         for sql, params in cursor.commands
     )
 

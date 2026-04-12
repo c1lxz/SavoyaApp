@@ -385,6 +385,29 @@ def load_access_rows(cursor, user_ptr: int):
     ).fetchall()
 
 
+def count_inner_num_conflicts(cursor, rdr_ptr: int, inner_num, user_ptr: int) -> int:
+    if inner_num is None:
+        return 0
+    try:
+        normalized_inner_num = int(inner_num)
+    except (TypeError, ValueError):
+        return 0
+    row = cursor.execute(
+        """
+        SELECT Count(*) AS ConflictCount
+        FROM AccessTable
+        WHERE RdrPtr = ? AND InnerNum = ? AND UserPtr <> ?
+        """,
+        (int(rdr_ptr), normalized_inner_num, int(user_ptr)),
+    ).fetchone()
+    if row is None:
+        return 0
+    try:
+        return int(getattr(row, "ConflictCount", row[0]) or 0)
+    except Exception:
+        return 0
+
+
 def format_value(value):
     if isinstance(value, datetime):
         return value.isoformat(sep=" ")
@@ -401,6 +424,11 @@ def collect_matches(cursor, users, key_type_names, needle: str, top_limit: int):
                 "user": user,
                 "access_rows": access_rows,
                 "gsm_rows": [row for row in access_rows if looks_like_phone_reader(getattr(row, "ReaderName", None))],
+                "inner_num_conflicts": {
+                    int(row.RdrPtr): count_inner_num_conflicts(cursor, int(row.RdrPtr), getattr(row, "InnerNum", None), int(user.UserPtr))
+                    for row in access_rows
+                    if getattr(row, "RdrPtr", None) is not None
+                },
                 "key_type_name": key_type_names.get(int(user.KeyType)) if getattr(user, "KeyType", None) is not None else None,
             }
         )
@@ -498,6 +526,11 @@ def print_analysis(title: str, record):
                 warnings.append(
                     f"RdrPtr {row.RdrPtr}: Users.KeyType={user.KeyType!r} differs from Devices.KeyType={row.DeviceKeyType!r}."
                 )
+        conflict_count = record["inner_num_conflicts"].get(int(row.RdrPtr), 0)
+        if conflict_count > 0:
+            warnings.append(
+                f"RdrPtr {row.RdrPtr}: InnerNum={row.InnerNum!r} is also used by {conflict_count} other AccessTable row(s)."
+            )
         if not bool(getattr(row, "Always", False)) and not any(bool(getattr(row, f"Schedule{idx}", False)) for idx in range(1, 8)):
             warnings.append(f"RdrPtr {row.RdrPtr}: no active schedule flags and Always is not enabled.")
         if bool(getattr(row, "NoEntry", False)) or bool(getattr(row, "NoExit", False)):

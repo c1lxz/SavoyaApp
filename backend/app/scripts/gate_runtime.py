@@ -966,6 +966,64 @@ def _permission_template_for_reader(
     return _permission_template_from_row(row)
 
 
+def _existing_access_row(cursor: pyodbc.Cursor, user_ptr: int, access_point_id: int) -> Any | None:
+    return cursor.execute(
+        "SELECT TOP 1 UserPtr, InnerNum FROM AccessTable WHERE UserPtr = ? AND RdrPtr = ?",
+        (user_ptr, access_point_id),
+    ).fetchone()
+
+
+def _inner_num_in_use(
+    cursor: pyodbc.Cursor,
+    access_point_id: int,
+    inner_num: int,
+    *,
+    exclude_user_ptr: int | None = None,
+) -> bool:
+    sql = "SELECT TOP 1 UserPtr FROM AccessTable WHERE RdrPtr = ? AND InnerNum = ?"
+    params: list[Any] = [access_point_id, inner_num]
+    if exclude_user_ptr is not None:
+        sql += " AND UserPtr <> ?"
+        params.append(exclude_user_ptr)
+    row = cursor.execute(sql, params).fetchone()
+    return row is not None
+
+
+def _next_inner_num(cursor: pyodbc.Cursor, access_point_id: int) -> int:
+    row = cursor.execute(
+        "SELECT MAX(InnerNum) AS MaxInnerNum FROM AccessTable WHERE RdrPtr = ?",
+        (access_point_id,),
+    ).fetchone()
+    max_inner_num = getattr(row, "MaxInnerNum", None) if row is not None else None
+    try:
+        return max(int(max_inner_num), 0) + 1
+    except (TypeError, ValueError):
+        return 1
+
+
+def _resolve_access_inner_num(
+    cursor: pyodbc.Cursor,
+    access_point_id: int,
+    *,
+    existing_row: Any | None,
+) -> int:
+    if existing_row is not None:
+        existing_inner_num = getattr(existing_row, "InnerNum", None)
+        try:
+            resolved_inner_num = int(existing_inner_num)
+        except (TypeError, ValueError):
+            resolved_inner_num = 0
+        if resolved_inner_num > 0 and not _inner_num_in_use(
+            cursor,
+            access_point_id,
+            resolved_inner_num,
+            exclude_user_ptr=int(existing_row.UserPtr),
+        ):
+            return resolved_inner_num
+
+    return _next_inner_num(cursor, access_point_id)
+
+
 def _ensure_access_permissions(
     cursor: pyodbc.Cursor,
     user_ptr: int,
@@ -976,14 +1034,16 @@ def _ensure_access_permissions(
     for access_point_id in access_point_ids:
         if not _reader_exists(cursor, access_point_id):
             raise ValueError(f"Access point {access_point_id} was not found in Readers")
-        existing_row = cursor.execute(
-            "SELECT TOP 1 UserPtr FROM AccessTable WHERE UserPtr = ? AND RdrPtr = ?",
-            (user_ptr, access_point_id),
-        ).fetchone()
+        existing_row = _existing_access_row(cursor, user_ptr, access_point_id)
 
         template = _permission_template_for_reader(cursor, access_point_id, key_type=key_type)
+        resolved_inner_num = _resolve_access_inner_num(
+            cursor,
+            access_point_id,
+            existing_row=existing_row,
+        )
         template_params = (
-            template["InnerNum"],
+            resolved_inner_num,
             template["Always"],
             template["Schedule1"],
             template["Schedule2"],
