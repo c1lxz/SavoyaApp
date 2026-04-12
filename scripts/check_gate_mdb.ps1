@@ -5,7 +5,7 @@ param(
     [string]$Pwd = $(if ($null -ne $env:GATE_MDB_PWD) { $env:GATE_MDB_PWD } else { $env:GATE_PWD }),
     [string]$PythonLauncher = $(if ($env:GATE_PYTHON_LAUNCHER) { $env:GATE_PYTHON_LAUNCHER } else { "py" }),
     [string]$PythonVersion = $(if ($env:GATE_PYTHON_VERSION) { $env:GATE_PYTHON_VERSION } else { "-3.12-32" }),
-    [string]$Driver = $(if ($env:GATE_ODBC_DRIVER) { $env:GATE_ODBC_DRIVER } else { "Driver do Microsoft Access (*.mdb)" }),
+    [string]$Driver = $(if ($env:GATE_ODBC_DRIVER) { $env:GATE_ODBC_DRIVER } else { "Microsoft Access Driver (*.mdb, *.accdb)" }),
     [int]$Top = 10
 )
 
@@ -95,6 +95,7 @@ preferred_driver = sys.argv[6]
 def pick_driver(preferred: str) -> str:
     candidates = [
         preferred,
+        "Microsoft Access Driver (*.mdb, *.accdb)",
         "Driver do Microsoft Access (*.mdb)",
         "Microsoft Access Driver (*.mdb)",
         "Microsoft Access-Treiber (*.mdb)",

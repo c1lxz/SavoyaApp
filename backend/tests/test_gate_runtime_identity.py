@@ -121,9 +121,47 @@ def test_build_identity_for_phone_matches_sample_storage_format(monkeypatch):
     assert identity.number_u == "ABC123NUMBER"
 
 
+def test_insert_real_user_uses_storage_phone_for_phone_keys(monkeypatch):
+    cursor = _FakeCursor()
+
+    monkeypatch.setattr(gate_runtime, "_sample_user_defaults", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        gate_runtime,
+        "_build_identity",
+        lambda *args, **kwargs: gate_runtime.RealGateIdentity(
+            number="89991234567",
+            phone="89991234567",
+            number_u="ABC123NUMBER",
+            number_mifare=None,
+        ),
+    )
+    monkeypatch.setattr(gate_runtime, "_resolve_inserted_user_ptr", lambda *args, **kwargs: 55)
+
+    user_ptr = gate_runtime._insert_real_user(
+        cursor,
+        key_type_value=6,
+        key_type="Phone",
+        normalized_key_value="009991234567",
+        phone_number="+79991234567",
+        resident_name="Phone User",
+        is_visitor=True,
+        expires_at=None,
+    )
+
+    assert user_ptr == 55
+    assert any(
+        sql.startswith("INSERT INTO Users")
+        and params.count("89991234567") == 2
+        and "009991234567" not in params
+        for sql, params in cursor.commands
+    )
+
+
 def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
     cursor = _FakeCursor()
 
+    monkeypatch.setenv("GATE_PHONE_WRITE_FORMAT", "local_10")
+    monkeypatch.delenv("GATE_PHONE_STORAGE_FORMAT", raising=False)
     monkeypatch.setattr(gate_runtime, "_find_existing_user_ptr", lambda *args, **kwargs: 42)
     monkeypatch.setattr(gate_runtime, "_find_reusable_deleted_user_ptr", lambda *args, **kwargs: None)
     monkeypatch.setattr(gate_runtime, "_ensure_access_permissions", lambda *args, **kwargs: None)
@@ -212,12 +250,12 @@ def test_ensure_access_permissions_updates_existing_rows(monkeypatch):
 def test_find_existing_user_ptr_skips_zero_user_ptr():
     cursor = _RowCursor(
         [
-            SimpleNamespace(UserPtr=0, Phone="0079991234567", Number="0079991234567", Deleted=False),
-            SimpleNamespace(UserPtr=17, Phone="009991234567", Number="009991234567", Deleted=False),
+            SimpleNamespace(UserPtr=0, Phone="0079991234567", Number="0079991234567", KeyType=6, Deleted=False),
+            SimpleNamespace(UserPtr=17, Phone="009991234567", Number="009991234567", KeyType=6, Deleted=False),
         ]
     )
 
-    user_ptr = gate_runtime._find_existing_user_ptr(cursor, "Phone", "009991234567")
+    user_ptr = gate_runtime._find_existing_user_ptr(cursor, "Phone", "009991234567", key_type_value=6)
 
     assert user_ptr == 17
 
@@ -225,11 +263,11 @@ def test_find_existing_user_ptr_skips_zero_user_ptr():
 def test_find_existing_user_ptr_matches_legacy_007_phone_value():
     cursor = _RowCursor(
         [
-            SimpleNamespace(UserPtr=18, Phone="0079991234567", Number="0079991234567", Deleted=False),
+            SimpleNamespace(UserPtr=18, Phone="0079991234567", Number="0079991234567", KeyType=6, Deleted=False),
         ]
     )
 
-    user_ptr = gate_runtime._find_existing_user_ptr(cursor, "Phone", "009991234567")
+    user_ptr = gate_runtime._find_existing_user_ptr(cursor, "Phone", "009991234567", key_type_value=6)
 
     assert user_ptr == 18
 
@@ -244,6 +282,43 @@ def test_find_existing_user_ptr_matches_vehicle_number_with_mixed_alphabet():
     user_ptr = gate_runtime._find_existing_user_ptr(cursor, "VehicleNumber", gate_runtime._normalize_vehicle("A123AA77"))
 
     assert user_ptr == 24
+
+
+def test_find_existing_phone_user_ptr_ignores_vehicle_user_with_same_contact_phone():
+    cursor = _RowCursor(
+        [
+            SimpleNamespace(UserPtr=30, Phone="89111253128", Number="A182DC178", KeyType=3, Deleted=False),
+        ]
+    )
+
+    user_ptr = gate_runtime._find_existing_user_ptr(cursor, "Phone", "009111253128", key_type_value=6)
+
+    assert user_ptr is None
+
+
+def test_find_existing_phone_user_ptr_prefers_phone_row_when_vehicle_row_has_same_phone():
+    cursor = _RowCursor(
+        [
+            SimpleNamespace(UserPtr=31, Phone="89111253128", Number="A182DC178", KeyType=3, Deleted=False),
+            SimpleNamespace(UserPtr=32, Phone="89111253128", Number="009111253128", KeyType=6, Deleted=False),
+        ]
+    )
+
+    user_ptr = gate_runtime._find_existing_user_ptr(cursor, "Phone", "009111253128", key_type_value=6)
+
+    assert user_ptr == 32
+
+
+def test_find_existing_phone_user_ptr_reuses_numeric_phone_row_even_if_key_type_is_stale():
+    cursor = _RowCursor(
+        [
+            SimpleNamespace(UserPtr=33, Phone="89111253128", Number="89111253128", KeyType=3, Deleted=False),
+        ]
+    )
+
+    user_ptr = gate_runtime._find_existing_user_ptr(cursor, "Phone", "009111253128", key_type_value=6)
+
+    assert user_ptr == 33
 
 
 def test_resolve_inserted_user_ptr_falls_back_when_identity_is_zero():

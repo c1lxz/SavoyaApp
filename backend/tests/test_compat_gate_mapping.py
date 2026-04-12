@@ -68,7 +68,7 @@ def test_runtime_gate_action_map_detects_admin_wicket_from_kalitka_1(monkeypatch
     assert compatibility._runtime_gate_action_map()["wicket_admin"] == 17
 
 
-def test_runtime_gsm_access_point_ids_detects_terminal_hints_and_config(monkeypatch):
+def test_runtime_gsm_access_point_ids_prefers_explicit_config(monkeypatch):
     monkeypatch.setattr(compatibility.settings, "gate_real_integration_enabled", True)
     monkeypatch.setattr(compatibility.settings, "gsm_access_point_ids_json", "[70]")
     monkeypatch.setattr(
@@ -81,7 +81,23 @@ def test_runtime_gsm_access_point_ids_detects_terminal_hints_and_config(monkeypa
         ],
     )
 
-    assert compatibility._runtime_gsm_access_point_ids() == [70, 71]
+    assert compatibility._runtime_gsm_access_point_ids() == [70]
+
+
+def test_runtime_gsm_access_point_ids_detects_terminal_hints_when_config_is_empty(monkeypatch):
+    monkeypatch.setattr(compatibility.settings, "gate_real_integration_enabled", True)
+    monkeypatch.setattr(compatibility.settings, "gsm_access_point_ids_json", "[]")
+    monkeypatch.setattr(
+        compatibility.gate_client,
+        "get_access_points",
+        lambda: [
+            {"id": 15, "name": "Entry Camera"},
+            {"id": 70, "name": "Reader 70"},
+            {"id": 71, "name": "Gate Terminal Entry"},
+        ],
+    )
+
+    assert compatibility._runtime_gsm_access_point_ids() == [71]
 
 
 def test_build_compat_create_payloads_uses_gsm_points_for_phone_when_available(monkeypatch):

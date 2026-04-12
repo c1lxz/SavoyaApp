@@ -5,6 +5,7 @@ import re
 import shutil
 import tempfile
 import uuid
+from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
@@ -24,7 +25,7 @@ if load_dotenv is not None:
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_MDB_PATH = _PROJECT_ROOT / "config.mdb"
-_DEFAULT_ODBC_DRIVER = "Driver do Microsoft Access (*.mdb)"
+_DEFAULT_ODBC_DRIVER = "Microsoft Access Driver (*.mdb, *.accdb)"
 _REQUIRED_TABLES = {"Users", "Readers", "AccessTable"}
 ALLOWED_KEY_TYPES = {"Phone", "VehicleNumber"}
 WIEGAND_BITS = 26
@@ -55,7 +56,18 @@ _VEHICLE_LOOKALIKE_MAP = {
     "У": "У",
 }
 _VEHICLE_SEPARATORS_RE = re.compile(r"[\s-]+")
-_PHONE_READER_HINTS = ("gsm", "gate terminal", "terminal", "phone", "call", "caller", "tel", "звон", "вызов", "тел")
+_PHONE_READER_HINTS = (
+    "gsm",
+    "gate terminal",
+    "terminal",
+    "phone",
+    "call",
+    "caller",
+    "telephone",
+    "звон",
+    "вызов",
+    "телефон",
+)
 
 
 @dataclass
@@ -120,6 +132,7 @@ def _resolve_gate_credentials() -> tuple[str, str]:
 def _pick_driver(preferred: str | None) -> str:
     candidates = [
         preferred,
+        "Microsoft Access Driver (*.mdb, *.accdb)",
         "Driver do Microsoft Access (*.mdb)",
         "Microsoft Access Driver (*.mdb)",
         "Microsoft Access-Treiber (*.mdb)",
@@ -231,6 +244,40 @@ def _sample_phone_storage_value(cursor: pyodbc.Cursor) -> str | None:
     if not hasattr(cursor, "execute"):
         return None
     try:
+        try:
+            rows = cursor.execute(
+                """
+                SELECT TOP 50
+                    u.Phone,
+                    r.Name
+                FROM (Users AS u
+                    INNER JOIN AccessTable AS a ON a.UserPtr = u.UserPtr)
+                    LEFT JOIN Readers AS r ON r.RdrPtr = a.RdrPtr
+                WHERE (u.Deleted = 0 OR u.Deleted IS NULL)
+                  AND u.Phone IS NOT NULL
+                  AND Trim(u.Phone) <> ''
+                ORDER BY u.UserPtr DESC, a.RdrPtr ASC
+                """
+            ).fetchall()
+        except Exception:
+            rows = []
+
+        phone_candidates: list[str] = []
+        for row in rows:
+            if not _looks_like_phone_reader(getattr(row, "Name", None)):
+                continue
+            phone_value = row.Phone if hasattr(row, "Phone") else row[0]
+            normalized = str(phone_value).strip()
+            if normalized:
+                phone_candidates.append(normalized)
+
+        if phone_candidates:
+            mode_counts = Counter(_detect_phone_storage_mode(value) for value in phone_candidates)
+            dominant_mode = mode_counts.most_common(1)[0][0]
+            for value in phone_candidates:
+                if _detect_phone_storage_mode(value) == dominant_mode:
+                    return value
+
         row = cursor.execute(
             """
             SELECT TOP 1 Phone
@@ -529,10 +576,37 @@ def _normalize_optional_text(value: Any) -> str:
     return "".join(_VEHICLE_LOOKALIKE_MAP.get(ch, ch) for ch in compact)
 
 
-def _find_existing_user_ptr(cursor: pyodbc.Cursor, key_type: str, normalized_key_value: str) -> int | None:
+def _looks_like_phone_identity_number(value: Any) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) < 10:
+        return False
+    return not any(ch.isalpha() for ch in raw)
+
+
+def _is_phone_user_match(row: Any, *, normalized_key_value: str, phone_key_type_value: Any | None) -> bool:
+    if _normalize_optional_phone(getattr(row, "Phone", None)) != normalized_key_value:
+        return False
+
+    row_key_type = getattr(row, "KeyType", None)
+    if phone_key_type_value is not None and row_key_type == phone_key_type_value:
+        return True
+
+    return _looks_like_phone_identity_number(getattr(row, "Number", None))
+
+
+def _find_existing_user_ptr(
+    cursor: pyodbc.Cursor,
+    key_type: str,
+    normalized_key_value: str,
+    *,
+    key_type_value: Any | None = None,
+) -> int | None:
     rows = cursor.execute(
         """
-        SELECT UserPtr, Phone, Number, Deleted
+        SELECT UserPtr, Phone, Number, KeyType, Deleted
         FROM Users
         ORDER BY UserPtr DESC
         """
@@ -543,7 +617,7 @@ def _find_existing_user_ptr(cursor: pyodbc.Cursor, key_type: str, normalized_key
         if int(row.UserPtr) <= 0:
             continue
         if key_type == "Phone":
-            if _normalize_optional_phone(row.Phone) == normalized_key_value:
+            if _is_phone_user_match(row, normalized_key_value=normalized_key_value, phone_key_type_value=key_type_value):
                 return int(row.UserPtr)
             continue
         if _normalize_optional_text(row.Number) == normalized_key_value:
@@ -551,10 +625,16 @@ def _find_existing_user_ptr(cursor: pyodbc.Cursor, key_type: str, normalized_key
     return None
 
 
-def _find_reusable_deleted_user_ptr(cursor: pyodbc.Cursor, key_type: str, normalized_key_value: str) -> int | None:
+def _find_reusable_deleted_user_ptr(
+    cursor: pyodbc.Cursor,
+    key_type: str,
+    normalized_key_value: str,
+    *,
+    key_type_value: Any | None = None,
+) -> int | None:
     rows = cursor.execute(
         """
-        SELECT UserPtr, Phone, Number, Deleted
+        SELECT UserPtr, Phone, Number, KeyType, Deleted
         FROM Users
         ORDER BY UserPtr DESC
         """
@@ -565,7 +645,7 @@ def _find_reusable_deleted_user_ptr(cursor: pyodbc.Cursor, key_type: str, normal
         if int(row.UserPtr) <= 0:
             continue
         if key_type == "Phone":
-            if _normalize_optional_phone(row.Phone) == normalized_key_value:
+            if _is_phone_user_match(row, normalized_key_value=normalized_key_value, phone_key_type_value=key_type_value):
                 return int(row.UserPtr)
             continue
         if _normalize_optional_text(row.Number) == normalized_key_value:
@@ -638,7 +718,10 @@ def _insert_real_user(
     add("Number", identity.number)
     add("NumberU", identity.number_u)
     add("NumberMifare", identity.number_mifare)
-    add("Phone", _normalize_contact_phone(phone_number) or identity.phone)
+    if key_type == "Phone":
+        add("Phone", identity.phone)
+    else:
+        add("Phone", _normalize_contact_phone(phone_number) or identity.phone)
     add("LastName", last_name)
     add("FirstName", first_name)
     add("FatherName", father_name)
@@ -936,7 +1019,12 @@ def _upsert_real_user(
     access_point_ids: list[int],
 ) -> int:
     key_type_value = _sample_key_type(cursor, key_type, access_point_ids)
-    existing_user_ptr = _find_existing_user_ptr(cursor, key_type, normalized_key_value)
+    existing_user_ptr = _find_existing_user_ptr(
+        cursor,
+        key_type,
+        normalized_key_value,
+        key_type_value=key_type_value,
+    )
     if existing_user_ptr is not None:
         access_expires_at = _to_access_datetime(expires_at)
         last_name, first_name, father_name = _split_name(resident_name)
@@ -976,7 +1064,12 @@ def _upsert_real_user(
         _ensure_access_permissions(cursor, existing_user_ptr, access_point_ids, key_type=key_type)
         return existing_user_ptr
 
-    reusable_user_ptr = _find_reusable_deleted_user_ptr(cursor, key_type, normalized_key_value)
+    reusable_user_ptr = _find_reusable_deleted_user_ptr(
+        cursor,
+        key_type,
+        normalized_key_value,
+        key_type_value=key_type_value,
+    )
     if reusable_user_ptr is not None:
         user_ptr = _reactivate_real_user(
             cursor,

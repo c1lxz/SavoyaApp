@@ -39,7 +39,18 @@ settings = get_settings()
 
 
 _INVALID_LOGIN_MESSAGE = "Invalid login or password"
-_PHONE_READER_HINTS = ("gsm", "gate terminal", "terminal", "phone", "call", "caller", "tel", "звон", "вызов", "тел")
+_PHONE_READER_HINTS = (
+    "gsm",
+    "gate terminal",
+    "terminal",
+    "phone",
+    "call",
+    "caller",
+    "telephone",
+    "звон",
+    "вызов",
+    "телефон",
+)
 
 
 def _compat_user(user: User) -> CompatUser:
@@ -108,13 +119,17 @@ def _runtime_gsm_access_point_ids() -> list[int]:
 
     points = gate_client.get_access_points()
     available_ids = {int(item["id"]) for item in points}
-    gsm_ids: list[int] = []
+    configured_ids: list[int] = []
     seen: set[int] = set()
     for point_id in configured:
         if point_id not in available_ids or point_id in seen:
             continue
         seen.add(point_id)
-        gsm_ids.append(point_id)
+        configured_ids.append(point_id)
+    if configured_ids:
+        return configured_ids
+
+    gsm_ids: list[int] = []
     for item in points:
         point_id = int(item["id"])
         if point_id in seen:

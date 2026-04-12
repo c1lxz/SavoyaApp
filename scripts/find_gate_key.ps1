@@ -6,7 +6,7 @@ param(
     [string]$Pwd = $(if ($null -ne $env:GATE_MDB_PWD) { $env:GATE_MDB_PWD } else { $env:GATE_PWD }),
     [string]$PythonLauncher = $(if ($env:GATE_PYTHON_LAUNCHER) { $env:GATE_PYTHON_LAUNCHER } else { "py" }),
     [string]$PythonVersion = $(if ($env:GATE_PYTHON_VERSION) { $env:GATE_PYTHON_VERSION } else { "-3.12-32" }),
-    [string]$Driver = $(if ($env:GATE_ODBC_DRIVER) { $env:GATE_ODBC_DRIVER } else { "Driver do Microsoft Access (*.mdb)" }),
+    [string]$Driver = $(if ($env:GATE_ODBC_DRIVER) { $env:GATE_ODBC_DRIVER } else { "Microsoft Access Driver (*.mdb, *.accdb)" }),
     [int]$Top = 20
 )
 
@@ -102,6 +102,7 @@ preferred_driver = sys.argv[7]
 def pick_driver(preferred: str) -> str:
     candidates = [
         preferred,
+        "Microsoft Access Driver (*.mdb, *.accdb)",
         "Driver do Microsoft Access (*.mdb)",
         "Microsoft Access Driver (*.mdb)",
         "Microsoft Access-Treiber (*.mdb)",
@@ -115,6 +116,34 @@ def pick_driver(preferred: str) -> str:
     raise RuntimeError("No compatible MDB ODBC driver was found.")
 
 
+LOOKALIKE_MAP = {
+    "A": "\u0410",
+    "B": "\u0412",
+    "C": "\u0421",
+    "E": "\u0415",
+    "H": "\u041d",
+    "K": "\u041a",
+    "M": "\u041c",
+    "O": "\u041e",
+    "P": "\u0420",
+    "T": "\u0422",
+    "X": "\u0425",
+    "Y": "\u0423",
+    "\u0410": "\u0410",
+    "\u0412": "\u0412",
+    "\u0421": "\u0421",
+    "\u0415": "\u0415",
+    "\u041d": "\u041d",
+    "\u041a": "\u041a",
+    "\u041c": "\u041c",
+    "\u041e": "\u041e",
+    "\u0420": "\u0420",
+    "\u0422": "\u0422",
+    "\u0425": "\u0425",
+    "\u0423": "\u0423",
+}
+
+
 def normalize_digits(value) -> str:
     if value is None:
         return ""
@@ -124,7 +153,8 @@ def normalize_digits(value) -> str:
 def normalize_text(value) -> str:
     if value is None:
         return ""
-    return re.sub(r"\s+", "", str(value).upper())
+    compact = re.sub(r"[\s-]+", "", str(value).upper())
+    return "".join(LOOKALIKE_MAP.get(ch, ch) for ch in compact)
 
 
 driver = pick_driver(preferred_driver)
