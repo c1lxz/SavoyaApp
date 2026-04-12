@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppBackground } from '@/components/AppBackground';
 import { LoadingOverlay } from '@/components/LoadingOverlay';
+import { AdminHomeScreen } from '@/screens/AdminHomeScreen';
 import { AdminRequestsScreen } from '@/screens/AdminRequestsScreen';
 import { AuthScreen } from '@/screens/AuthScreen';
 import { CreatePassScreen } from '@/screens/CreatePassScreen';
@@ -40,6 +41,7 @@ const linking: LinkingOptions<RootStackParamList> = {
       Auth: 'auth',
       ProfileSetup: 'profile-setup',
       Admin: 'admin',
+      AdminRequests: 'admin/requests',
       Home: '',
       CreatePass: 'create-pass',
       OpenBarrier: 'open-barrier',
@@ -86,7 +88,12 @@ export const RootNavigator = () => {
       >
         {user ? (
           user.isAdmin ? (
-            <Stack.Screen name="Admin" component={AdminRequestsScreen} />
+            <>
+              <Stack.Screen name="Admin" component={AdminHomeScreen} />
+              <Stack.Screen name="AdminRequests" component={AdminRequestsScreen} />
+              <Stack.Screen name="OpenBarrier" component={OpenBarrierScreen} />
+              <Stack.Screen name="Wickets" component={WicketsScreen} />
+            </>
           ) : requiresProfileCompletion ? (
             <Stack.Screen name="ProfileSetup" component={ProfileSetupWebScreen} />
           ) : (

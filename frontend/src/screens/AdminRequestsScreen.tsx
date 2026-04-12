@@ -15,10 +15,11 @@ import { useAuthStore } from '@/store/authStore';
 import { theme } from '@/theme';
 import { AdminRequestItem, AdminRequestStatus, RequestState } from '@/types';
 import { formatRequestForCopy } from '@/utils/adminRequests';
+import { goBackOrHome } from '@/utils/backNavigation';
 import { copyToClipboard } from '@/utils/clipboard';
 import { getLayoutMetrics } from '@/utils/layout';
 
-type Props = NativeStackScreenProps<RootStackParamList, 'Admin'>;
+type Props = NativeStackScreenProps<RootStackParamList, 'AdminRequests'>;
 type StatusFilter = AdminRequestStatus | 'all';
 type KeyTypeFilter = 'VehicleNumber' | 'Phone' | 'all';
 
@@ -50,7 +51,7 @@ const FilterChip = ({
   </Pressable>
 );
 
-export const AdminRequestsScreen = (_props: Props) => {
+export const AdminRequestsScreen = ({ navigation }: Props) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
   const logout = useAuthStore((state) => state.logout);
@@ -219,7 +220,7 @@ export const AdminRequestsScreen = (_props: Props) => {
     <AppBackground>
       <SafeAreaView style={styles.safeArea}>
         <View style={[styles.content, { maxWidth: metrics.isDesktop ? 1200 : metrics.contentMaxWidth }]}>
-          <ScreenHeader title="Админка заявок" rightSlot={headerRightSlot} />
+          <ScreenHeader title="Пропуски" onBack={() => goBackOrHome(navigation, 'Admin')} rightSlot={headerRightSlot} />
 
           <FlatList
             data={requests}
