@@ -1,3 +1,3 @@
-from . import access, auth, compatibility, gate, requests, user
+from . import access, admin, auth, compatibility, gate, requests, user
 
-__all__ = ["access", "auth", "compatibility", "gate", "requests", "user"]
+__all__ = ["access", "admin", "auth", "compatibility", "gate", "requests", "user"]

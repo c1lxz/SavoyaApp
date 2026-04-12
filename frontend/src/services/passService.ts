@@ -28,7 +28,7 @@ export const mockPassService: PassService = {
       return apiPassService.createPass(payload);
     }
 
-    const keyType = payload.carNumber ? 'VehicleNumber' : 'Phone';
+    const keyType: PassItem['keyType'] = payload.carNumber ? 'VehicleNumber' : 'Phone';
     const keyValue = payload.carNumber ?? payload.phoneNumber ?? '';
 
     const draft = {

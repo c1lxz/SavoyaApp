@@ -114,6 +114,7 @@ class CompatUser(BaseModel):
     fullName: str
     plotNumber: str
     phoneNumber: str
+    isAdmin: bool = False
 
 
 class CompatAuthResult(BaseModel):
@@ -264,3 +265,34 @@ class AccessEventItem(BaseModel):
     error_message: str | None = None
     details: dict | None = None
     created_at: datetime
+
+
+class AdminResidentSummary(BaseModel):
+    id: int
+    login: str | None = None
+    full_name: str | None = None
+    phone: str
+    plot_number: str | None = None
+
+
+class AdminRequestItem(BaseModel):
+    id: int
+    resident: AdminResidentSummary
+    key_type: str
+    key_value: str
+    country_label: str | None = None
+    phone_number: str | None = None
+    access_point_ids: list[int]
+    gate_key_id: int | None = None
+    is_permanent: bool
+    is_courier: bool
+    expires_at: datetime | None = None
+    status: str
+    created_at: datetime
+    cancelled_at: datetime | None = None
+    plot_number: str | None = None
+
+
+class AdminRequestListResponse(BaseModel):
+    total: int
+    items: list[AdminRequestItem]

@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     demo_plot_number: str = "25"
     bootstrap_demo_user: bool = True
     bootstrap_test_users_json: str = "[]"
+    bootstrap_admin_user: bool = False
+    admin_login: str = ""
+    admin_password: str = ""
+    admin_phone: str = "+79990009999"
+    admin_full_name: str = "\u0410\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440 Savoya"
+    admin_plot_number: str = "ADMIN"
 
     # Gate integration controls
     gate_real_integration_enabled: bool = False

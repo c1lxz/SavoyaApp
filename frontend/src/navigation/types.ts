@@ -1,6 +1,7 @@
-﻿export type RootStackParamList = {
+export type RootStackParamList = {
   Auth: undefined;
   ProfileSetup: undefined;
+  Admin: undefined;
   Home: undefined;
   CreatePass: undefined;
   OpenBarrier: undefined;

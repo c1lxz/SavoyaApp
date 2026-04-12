@@ -29,6 +29,16 @@ const resolveApiBaseUrl = (): string => {
     if (!isLoopbackHost(currentUrl.hostname) && isLoopbackHost(targetUrl.hostname)) {
       return `${window.location.origin}/api`;
     }
+
+    // Local web builds also should prefer same-origin /api when the current
+    // page is already behind a frontend proxy on another port.
+    if (
+      isLoopbackHost(currentUrl.hostname) &&
+      isLoopbackHost(targetUrl.hostname) &&
+      currentUrl.origin !== targetUrl.origin
+    ) {
+      return `${window.location.origin}/api`;
+    }
   } catch {
     // Leave invalid custom values untouched so request errors stay explicit.
   }

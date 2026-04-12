@@ -6,6 +6,7 @@ export type User = {
   fullName: string;
   plotNumber: string;
   phoneNumber?: string;
+  isAdmin: boolean;
 };
 
 export type AuthResult = {
@@ -47,4 +48,37 @@ export type GateActionResult = {
   action: GateAction;
   message: string;
   timestamp: number;
+};
+
+export type AdminResidentSummary = {
+  id: string;
+  login: string;
+  fullName: string;
+  phone: string;
+  plotNumber: string;
+};
+
+export type AdminRequestStatus = 'active' | 'expired' | 'permanent' | 'cancelled';
+
+export type AdminRequestItem = {
+  id: string;
+  resident: AdminResidentSummary;
+  keyType: 'Phone' | 'VehicleNumber' | string;
+  keyValue: string;
+  countryLabel?: string | null;
+  phoneNumber?: string | null;
+  accessPointIds: number[];
+  gateKeyId?: number | null;
+  isPermanent: boolean;
+  isCourier: boolean;
+  expiresAt: string | null;
+  status: AdminRequestStatus;
+  createdAt: string;
+  cancelledAt: string | null;
+  plotNumber: string;
+};
+
+export type AdminRequestList = {
+  total: number;
+  items: AdminRequestItem[];
 };

@@ -8,9 +8,10 @@ import { getLayoutMetrics } from '@/utils/layout';
 type ScreenHeaderProps = {
   title: string;
   onBack?: () => void;
+  rightSlot?: React.ReactNode;
 };
 
-export const ScreenHeader = ({ title, onBack }: ScreenHeaderProps) => {
+export const ScreenHeader = ({ title, onBack, rightSlot }: ScreenHeaderProps) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
   const backControlWidth = metrics.isDesktop ? 124 : 64;
@@ -39,7 +40,11 @@ export const ScreenHeader = ({ title, onBack }: ScreenHeaderProps) => {
         <Text style={[styles.title, { fontSize: metrics.titleFontSize }]} numberOfLines={2}>
           {title}
         </Text>
-        <View style={[styles.spacer, { width: backControlWidth }]} />
+        {rightSlot ? (
+          <View style={[styles.rightSlot, { minWidth: backControlWidth }]}>{rightSlot}</View>
+        ) : (
+          <View style={[styles.spacer, { width: backControlWidth }]} />
+        )}
       </View>
       <View style={styles.line} />
     </View>
@@ -78,6 +83,11 @@ const styles = StyleSheet.create({
   },
   spacer: {
     flexShrink: 0,
+  },
+  rightSlot: {
+    flexShrink: 0,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
   },
   line: {
     height: 1,

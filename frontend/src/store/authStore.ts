@@ -38,7 +38,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
         set({
           user: result.user,
           loginState: 'success',
-          requiresProfileCompletion: Boolean(result.requiresProfileCompletion),
+          requiresProfileCompletion: !result.user.isAdmin && Boolean(result.requiresProfileCompletion),
         });
         return true;
       }
@@ -81,12 +81,12 @@ export const useAuthStore = create<AuthStore>((set) => ({
   async restoreSession() {
     set({ restoreState: 'loading', error: null });
     try {
-      const user = null;
-      usePassesStore.getState().resetPasses(null);
+      const user = await mockAuthService.getCurrentUser();
+      usePassesStore.getState().resetPasses(user?.id ?? null);
       set({
         user,
         restoreState: 'success',
-        requiresProfileCompletion: user ? !Boolean(user.fullName.trim()) : false,
+        requiresProfileCompletion: user ? !user.isAdmin && !Boolean(user.fullName.trim()) : false,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Ошибка сети';

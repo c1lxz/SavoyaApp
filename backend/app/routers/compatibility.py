@@ -60,6 +60,7 @@ def _compat_user(user: User) -> CompatUser:
         fullName=user.name or "",
         plotNumber=user.plot_number or user.apartment or "",
         phoneNumber=user.phone or "",
+        isAdmin=user.is_admin,
     )
 
 

@@ -316,7 +316,7 @@ def test_passes_create_returns_502_when_gate_bridge_raises(client):
 
     assert response.status_code == 502
     assert response.json()['detail']['code'] == 'gate_bridge_error'
-    assert 'Gate bridge failed' in response.json()['detail']['message']
+    assert response.json()['detail']['message'] == 'Gate integration failed'
 
 
 def test_passes_create_courier_flow_sets_flag(client):

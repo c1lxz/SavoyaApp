@@ -1,8 +1,12 @@
-import React from 'react';
-import { Platform } from 'react-native';
+import React, { useEffect } from 'react';
+import { Platform, StyleSheet } from 'react-native';
 import { DefaultTheme, NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AppBackground } from '@/components/AppBackground';
+import { LoadingOverlay } from '@/components/LoadingOverlay';
+import { AdminRequestsScreen } from '@/screens/AdminRequestsScreen';
 import { AuthScreen } from '@/screens/AuthScreen';
 import { CreatePassScreen } from '@/screens/CreatePassScreen';
 import { HomeScreen } from '@/screens/HomeScreen';
@@ -35,6 +39,7 @@ const linking: LinkingOptions<RootStackParamList> = {
     screens: {
       Auth: 'auth',
       ProfileSetup: 'profile-setup',
+      Admin: 'admin',
       Home: '',
       CreatePass: 'create-pass',
       OpenBarrier: 'open-barrier',
@@ -47,11 +52,31 @@ const linking: LinkingOptions<RootStackParamList> = {
 export const RootNavigator = () => {
   const user = useAuthStore((state) => state.user);
   const requiresProfileCompletion = useAuthStore((state) => state.requiresProfileCompletion);
+  const restoreSession = useAuthStore((state) => state.restoreSession);
+  const restoreState = useAuthStore((state) => state.restoreState);
+
+  useEffect(() => {
+    if (restoreState === 'idle') {
+      void restoreSession();
+    }
+  }, [restoreSession, restoreState]);
+
+  if (restoreState === 'idle' || restoreState === 'loading') {
+    return (
+      <AppBackground>
+        <SafeAreaView style={styles.loadingScreen}>
+          <LoadingOverlay visible />
+        </SafeAreaView>
+      </AppBackground>
+    );
+  }
 
   return (
     <NavigationContainer linking={linking} theme={navigationTheme}>
       <Stack.Navigator
-        initialRouteName={user ? (requiresProfileCompletion ? 'ProfileSetup' : 'Home') : 'Auth'}
+        initialRouteName={
+          user ? (user.isAdmin ? 'Admin' : requiresProfileCompletion ? 'ProfileSetup' : 'Home') : 'Auth'
+        }
         screenOptions={{
           headerShown: false,
           animation: Platform.OS === 'ios' ? 'slide_from_right' : Platform.OS === 'web' ? 'none' : 'fade',
@@ -60,7 +85,9 @@ export const RootNavigator = () => {
         }}
       >
         {user ? (
-          requiresProfileCompletion ? (
+          user.isAdmin ? (
+            <Stack.Screen name="Admin" component={AdminRequestsScreen} />
+          ) : requiresProfileCompletion ? (
             <Stack.Screen name="ProfileSetup" component={ProfileSetupWebScreen} />
           ) : (
             <>
@@ -78,3 +105,9 @@ export const RootNavigator = () => {
     </NavigationContainer>
   );
 };
+
+const styles = StyleSheet.create({
+  loadingScreen: {
+    flex: 1,
+  },
+});

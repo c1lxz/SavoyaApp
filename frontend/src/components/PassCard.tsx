@@ -6,6 +6,7 @@ import { theme } from '@/theme';
 import { PassItem } from '@/types';
 import { formatDate } from '@/utils/date';
 import { getLayoutMetrics } from '@/utils/layout';
+import { formatVehicleLabel } from '@/utils/vehicleCountry';
 import { StatusBadge } from './StatusBadge';
 
 type PassCardProps = {
@@ -20,7 +21,9 @@ const PassCardComponent = ({ item }: PassCardProps) => {
     <View style={styles.card}>
       <View style={[styles.row, metrics.isShortHeight && styles.rowCompact]}>
         <View style={styles.content}>
-          <Text style={[styles.car, { fontSize: metrics.isCompactHeight ? 22 : 24 }]}>{item.keyValue}</Text>
+          <Text style={[styles.car, { fontSize: metrics.isCompactHeight ? 22 : 24 }]}>
+            {item.keyType === 'VehicleNumber' ? formatVehicleLabel(item.keyValue) : item.keyValue}
+          </Text>
           <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>
             {item.keyType === 'Phone' ? 'Телефонный пропуск' : 'Пропуск по номеру ТС'}
           </Text>

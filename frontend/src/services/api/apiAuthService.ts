@@ -32,6 +32,7 @@ const mapBackendUser = (user: BackendUser): User => ({
   fullName: user.name ?? '',
   plotNumber: user.apartment ?? '',
   phoneNumber: user.phone ?? '',
+  isAdmin: Boolean(user.is_admin),
 });
 
 export const apiAuthService = {
@@ -48,7 +49,7 @@ export const apiAuthService = {
       return {
         success: true,
         user: mappedUser,
-        requiresProfileCompletion: !Boolean(mappedUser.fullName.trim()),
+        requiresProfileCompletion: !mappedUser.isAdmin && !Boolean(mappedUser.fullName.trim()),
       };
     }
 
@@ -61,7 +62,7 @@ export const apiAuthService = {
       success: result.success,
       user: result.user,
       error: result.error,
-      requiresProfileCompletion: result.requiresProfileCompletion,
+      requiresProfileCompletion: result.user?.isAdmin ? false : result.requiresProfileCompletion,
     };
   },
   async logout(): Promise<void> {

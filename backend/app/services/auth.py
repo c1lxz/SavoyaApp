@@ -41,6 +41,29 @@ async def ensure_demo_user(session: AsyncSession) -> None:
     await session.commit()
 
 
+async def ensure_admin_user(session: AsyncSession) -> None:
+    if not settings.bootstrap_admin_user:
+        return
+    if not settings.admin_login.strip() or not settings.admin_password.strip():
+        return
+
+    query = await session.execute(select(User).where(User.login == settings.admin_login))
+    user = query.scalar_one_or_none()
+    if user is None:
+        user = User(login=settings.admin_login)
+        session.add(user)
+
+    user.phone = settings.admin_phone
+    user.name = settings.admin_full_name
+    user.apartment = settings.admin_plot_number
+    user.is_admin = True
+    user.is_active = True
+    user.login = settings.admin_login
+    user.password_hash = hash_password(settings.admin_password)
+    user.plot_number = settings.admin_plot_number
+    await session.commit()
+
+
 async def ensure_bootstrap_test_users(session: AsyncSession) -> None:
     bootstrap_users = settings.bootstrap_test_users
     if not bootstrap_users:

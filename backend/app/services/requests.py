@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, func, inspect, select, text
+from sqlalchemy import and_, func, inspect, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -211,7 +211,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
     except Exception as exc:
         raise RequestIntegrationError(
             code="gate_bridge_error",
-            message=str(exc) or "Gate integration failed",
+            message="Gate integration failed",
         ) from exc
 
     if gate_key_id <= 0:
@@ -257,6 +257,70 @@ async def list_my_requests(session: AsyncSession, user_id: int) -> list[Request]
         select(Request).where(Request.resident_id == user_id).order_by(Request.created_at.desc())
     )
     return list(query.scalars().all())
+
+
+async def list_requests_for_admin(
+    session: AsyncSession,
+    *,
+    search: str | None = None,
+    status: str | None = None,
+    key_type: str | None = None,
+    resident_login: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[int, list[tuple[Request, User]]]:
+    filters = []
+
+    normalized_status = (status or "").strip().lower()
+    if normalized_status:
+        if normalized_status == "permanent":
+            filters.append(Request.is_permanent.is_(True))
+        else:
+            filters.append(Request.status == normalized_status)
+
+    normalized_key_type = (key_type or "").strip()
+    if normalized_key_type:
+        filters.append(Request.key_type == normalized_key_type)
+
+    normalized_resident_login = (resident_login or "").strip().lower()
+    if normalized_resident_login:
+        filters.append(func.lower(User.login) == normalized_resident_login)
+
+    normalized_search = (search or "").strip()
+    if normalized_search:
+        like_pattern = f"%{normalized_search}%"
+        filters.append(
+            or_(
+                Request.key_value.ilike(like_pattern),
+                Request.contact_phone.ilike(like_pattern),
+                Request.plot_number.ilike(like_pattern),
+                User.login.ilike(like_pattern),
+                User.name.ilike(like_pattern),
+                User.phone.ilike(like_pattern),
+                User.plot_number.ilike(like_pattern),
+            )
+        )
+
+    safe_limit = max(1, min(limit, 200))
+    safe_offset = max(0, offset)
+
+    total_query = select(func.count(Request.id)).select_from(Request).join(User, User.id == Request.resident_id)
+    if filters:
+        total_query = total_query.where(*filters)
+    total = int((await session.execute(total_query)).scalar_one())
+
+    list_query = (
+        select(Request, User)
+        .join(User, User.id == Request.resident_id)
+        .order_by(Request.created_at.desc(), Request.id.desc())
+        .limit(safe_limit)
+        .offset(safe_offset)
+    )
+    if filters:
+        list_query = list_query.where(*filters)
+
+    rows = await session.execute(list_query)
+    return total, list(rows.all())
 
 
 async def cancel_request(session: AsyncSession, user_id: int, request_id: int) -> Request | None:

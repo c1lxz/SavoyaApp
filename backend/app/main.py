@@ -12,9 +12,9 @@ from fastapi.responses import FileResponse, PlainTextResponse
 
 from .config import get_settings
 from .database import Base, SessionLocal, engine
-from .routers import access, auth, compatibility, gate, requests, user
+from .routers import access, admin, auth, compatibility, gate, requests, user
 from .security import LoginRateLimiter
-from .services.auth import ensure_bootstrap_test_users, ensure_demo_user
+from .services.auth import ensure_admin_user, ensure_bootstrap_test_users, ensure_demo_user
 from .services.requests import (
     cleanup_broken_requests,
     cleanup_duplicate_requests,
@@ -139,6 +139,7 @@ async def startup_event() -> None:
             logging.info("Cleaned up %s duplicate active requests", duplicate_count)
         await ensure_active_request_unique_index(session)
         await ensure_demo_user(session)
+        await ensure_admin_user(session)
         await ensure_bootstrap_test_users(session)
 
 
@@ -148,6 +149,7 @@ app.include_router(access.legacy_router, prefix=settings.api_prefix)
 app.include_router(gate.router, prefix=settings.api_prefix)
 app.include_router(requests.router, prefix=settings.api_prefix)
 app.include_router(user.router, prefix=settings.api_prefix)
+app.include_router(admin.router, prefix=settings.api_prefix)
 app.include_router(compatibility.router)
 
 
