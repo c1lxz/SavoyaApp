@@ -542,13 +542,10 @@ def _build_identity(cursor: pyodbc.Cursor, key_type: str, normalized_key_value: 
     number_u = _generate_unique_number_u(cursor)
     if key_type == "Phone":
         storage_phone = _format_phone_for_storage(cursor, normalized_key_value)
-        # Some real Gate MDB schemas mark Users.Number as required even for
-        # phone-based identities. Mirror the normalized phone into Number so
-        # inserts work on those deployments.
         return RealGateIdentity(
-            number=storage_phone,
+            number=normalized_key_value,
             phone=storage_phone,
-            number_u=number_u,
+            number_u=normalized_key_value,
             number_mifare=None,
         )
     return RealGateIdentity(number=normalized_key_value, phone=None, number_u=number_u, number_mifare=None)
@@ -775,7 +772,9 @@ def _reactivate_real_user(
         assignments.append("[Phone] = ?")
         params.append(storage_phone)
         assignments.append("[Number] = ?")
-        params.append(storage_phone)
+        params.append(normalized_key_value)
+        assignments.append("[NumberU] = ?")
+        params.append(normalized_key_value)
     else:
         assignments.append("[Number] = ?")
         params.append(normalized_key_value)
@@ -1048,8 +1047,8 @@ def _upsert_real_user(
         if key_type == "Phone":
             storage_phone = _format_phone_for_storage(cursor, normalized_key_value)
             cursor.execute(
-                "UPDATE Users SET Phone = ?, [Number] = ? WHERE UserPtr = ?",
-                (storage_phone, storage_phone, existing_user_ptr),
+                "UPDATE Users SET Phone = ?, [Number] = ?, [NumberU] = ? WHERE UserPtr = ?",
+                (storage_phone, normalized_key_value, normalized_key_value, existing_user_ptr),
             )
         else:
             cursor.execute("UPDATE Users SET [Number] = ? WHERE UserPtr = ?", (normalized_key_value, existing_user_ptr))
@@ -1144,7 +1143,7 @@ def add_temporary_key(
             normalized_key_value=normalized_key_value,
             phone_number=phone_number,
             resident_name=normalized_key_value,
-            is_visitor=True,
+            is_visitor=False if validated_key_type == "Phone" else True,
             expires_at=expires_at,
             access_point_ids=validated_points,
         )

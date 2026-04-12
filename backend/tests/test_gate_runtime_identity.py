@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from backend.app.scripts import gate_runtime
@@ -96,6 +98,11 @@ class _AccessPermissionCursor:
         raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
 
 
+@contextmanager
+def _fake_transaction_cursor(cursor):
+    yield None, cursor
+
+
 def test_build_identity_for_phone_populates_required_number(monkeypatch):
     monkeypatch.setattr(gate_runtime, "_generate_unique_number_u", lambda cursor: "ABC123NUMBER")
     monkeypatch.delenv("GATE_PHONE_WRITE_FORMAT", raising=False)
@@ -103,9 +110,9 @@ def test_build_identity_for_phone_populates_required_number(monkeypatch):
 
     identity = gate_runtime._build_identity(object(), "Phone", "009991234567")
 
-    assert identity.number == "9991234567"
+    assert identity.number == "009991234567"
     assert identity.phone == "9991234567"
-    assert identity.number_u == "ABC123NUMBER"
+    assert identity.number_u == "009991234567"
 
 
 def test_build_identity_for_phone_matches_sample_storage_format(monkeypatch):
@@ -116,9 +123,9 @@ def test_build_identity_for_phone_matches_sample_storage_format(monkeypatch):
 
     identity = gate_runtime._build_identity(cursor, "Phone", "009991234567")
 
-    assert identity.number == "+79991234567"
+    assert identity.number == "009991234567"
     assert identity.phone == "+79991234567"
-    assert identity.number_u == "ABC123NUMBER"
+    assert identity.number_u == "009991234567"
 
 
 def test_insert_real_user_uses_storage_phone_for_phone_keys(monkeypatch):
@@ -129,9 +136,9 @@ def test_insert_real_user_uses_storage_phone_for_phone_keys(monkeypatch):
         gate_runtime,
         "_build_identity",
         lambda *args, **kwargs: gate_runtime.RealGateIdentity(
-            number="89991234567",
+            number="009991234567",
             phone="89991234567",
-            number_u="ABC123NUMBER",
+            number_u="009991234567",
             number_mifare=None,
         ),
     )
@@ -151,8 +158,8 @@ def test_insert_real_user_uses_storage_phone_for_phone_keys(monkeypatch):
     assert user_ptr == 55
     assert any(
         sql.startswith("INSERT INTO Users")
-        and params.count("89991234567") == 2
-        and "009991234567" not in params
+        and params.count("89991234567") == 1
+        and params.count("009991234567") == 2
         for sql, params in cursor.commands
     )
 
@@ -179,8 +186,8 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
 
     assert user_ptr == 42
     assert any(
-        sql == "UPDATE Users SET Phone = ?, [Number] = ? WHERE UserPtr = ?"
-        and params == ("9991234567", "9991234567", 42)
+        sql == "UPDATE Users SET Phone = ?, [Number] = ?, [NumberU] = ? WHERE UserPtr = ?"
+        and params == ("9991234567", "009991234567", "009991234567", 42)
         for sql, params in cursor.commands
     )
     assert any(
@@ -245,6 +252,29 @@ def test_ensure_access_permissions_updates_existing_rows(monkeypatch):
         "UPDATE AccessTable" in sql and params[-2:] == (42, 70)
         for sql, params in cursor.commands
     )
+
+
+def test_add_temporary_phone_key_marks_gate_user_as_non_visitor(monkeypatch):
+    observed: dict[str, object] = {}
+    cursor = _FakeCursor()
+
+    monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(cursor))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_upsert_real_user",
+        lambda *args, **kwargs: observed.update(kwargs) or 77,
+    )
+
+    key_id = gate_runtime.add_temporary_key(
+        key_type="Phone",
+        key_value="+79991234567",
+        phone_number="+79991234567",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        access_point_ids=[5, 6],
+    )
+
+    assert key_id == 77
+    assert observed["is_visitor"] is False
 
 
 def test_find_existing_user_ptr_skips_zero_user_ptr():
