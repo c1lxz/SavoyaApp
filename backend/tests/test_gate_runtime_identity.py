@@ -97,6 +97,17 @@ class _PhoneSampleCursor:
         raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
 
 
+class _UserActiveCursor:
+    def __init__(self, row) -> None:
+        self._row = row
+
+    def execute(self, sql: str, params=None):
+        return self
+
+    def fetchone(self):
+        return self._row
+
+
 class _ReaderKeyTypeCursor:
     def __init__(self, rows_by_id) -> None:
         self._rows_by_id = rows_by_id
@@ -274,6 +285,7 @@ def test_insert_real_user_uses_storage_phone_for_phone_keys(monkeypatch):
         and params.count("009991234567") == 2
         for sql, params in cursor.commands
     )
+    assert any(sql.startswith("INSERT INTO Users") and 0 in params for sql, params in cursor.commands)
 
 
 def test_insert_real_user_splits_expiry_date_and_time(monkeypatch):
@@ -386,6 +398,12 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
         and params == ("009991234567", 42)
         for sql, params in cursor.commands
     )
+    assert any(
+        "SET Deleted = ?, UseExpiry = ?, ExpiryDate = ?, ExpiryTime = ?, Visitor = ?, Status = ?, LockDate = ?"
+        in sql
+        and params == (False, False, None, None, True, 0, None, 42)
+        for sql, params in cursor.commands
+    )
 
 
 def test_apply_user_defaults_for_existing_phone_user_uses_other_phone_template():
@@ -427,10 +445,24 @@ def test_apply_user_defaults_for_existing_phone_user_uses_other_phone_template()
     gate_runtime._apply_user_defaults(cursor, user_ptr=42, key_type="Phone", exclude_user_ptr=42)
 
     assert any(
-        sql == "UPDATE Users SET [GroupPtr] = ?, [IdleNotLimited] = ?, [NoFacility] = ?, [Status] = ?, [BgPtr] = ?, [SendSms] = ?, [SendMail] = ?, [UniPassMode] = ? WHERE UserPtr = ?"
-        and params == (7, True, False, 0, 2, True, True, 1, 42)
+        sql == "UPDATE Users SET [GroupPtr] = ?, [IdleNotLimited] = ?, [NoFacility] = ?, [BgPtr] = ?, [SendSms] = ?, [SendMail] = ?, [UniPassMode] = ? WHERE UserPtr = ?"
+        and params == (7, True, False, 2, True, True, 1, 42)
         for sql, params in cursor.commands
     )
+
+
+def test_user_is_active_rejects_non_zero_status():
+    cursor = _UserActiveCursor(
+        SimpleNamespace(
+            Deleted=False,
+            UseExpiry=False,
+            ExpiryDate=None,
+            ExpiryTime=None,
+            Status=2,
+        )
+    )
+
+    assert gate_runtime._user_is_active(cursor, 42) is False
 
 
 def test_normalize_phone_keeps_legacy_formats_compatible():

@@ -317,7 +317,9 @@ pwd = sys.argv[5]
 top = int(sys.argv[6])
 preferred_driver = sys.argv[7]
 needle = sys.argv[8] if len(sys.argv) > 8 and sys.argv[8] else None
-project_root = Path(sys.argv[9]).resolve()
+if needle == "__EMPTY__":
+    needle = None
+project_root = Path(sys.argv[9]).resolve() if len(sys.argv) > 9 else Path.cwd()
 
 sqlite_path = resolve_sqlite_path(database_url, project_root)
 if not sqlite_path.exists():
@@ -408,7 +410,7 @@ try {
         $Pwd,
         $Top.ToString(),
         $Driver,
-        $Needle,
+        $(if ($null -eq $Needle) { "__EMPTY__" } else { $Needle }),
         $projectRoot
     )
     & $PythonLauncher @pythonArgs

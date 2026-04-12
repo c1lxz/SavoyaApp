@@ -68,6 +68,7 @@ _PHONE_READER_HINTS = (
     "вызов",
     "телефон",
 )
+ACTIVE_USER_STATUS = 0
 
 
 @dataclass
@@ -551,7 +552,6 @@ def _sample_user_defaults(
                 GroupPtr,
                 IdleNotLimited,
                 NoFacility,
-                Status,
                 BgPtr,
                 SendSms,
                 SendMail,
@@ -570,7 +570,6 @@ def _sample_user_defaults(
                 GroupPtr,
                 IdleNotLimited,
                 NoFacility,
-                Status,
                 BgPtr,
                 SendSms,
                 SendMail,
@@ -599,7 +598,6 @@ def _sample_user_defaults(
         "GroupPtr": row.GroupPtr,
         "IdleNotLimited": row.IdleNotLimited,
         "NoFacility": row.NoFacility,
-        "Status": row.Status,
         "BgPtr": row.BgPtr,
         "SendSms": row.SendSms,
         "SendMail": row.SendMail,
@@ -622,7 +620,7 @@ def _apply_user_defaults(
 
     assignments: list[str] = []
     params: list[Any] = []
-    for column in ("GroupPtr", "IdleNotLimited", "NoFacility", "Status", "BgPtr", "SendSms", "SendMail", "UniPassMode"):
+    for column in ("GroupPtr", "IdleNotLimited", "NoFacility", "BgPtr", "SendSms", "SendMail", "UniPassMode"):
         if column not in defaults:
             continue
         assignments.append(f"[{column}] = ?")
@@ -892,8 +890,9 @@ def _insert_real_user(
     add("ExpiryDate", expiry_date)
     add("ExpiryTime", expiry_time)
     add("Visitor", is_visitor)
+    add("Status", ACTIVE_USER_STATUS)
 
-    for column in ("GroupPtr", "IdleNotLimited", "NoFacility", "Status", "BgPtr", "SendSms", "SendMail", "UniPassMode"):
+    for column in ("GroupPtr", "IdleNotLimited", "NoFacility", "BgPtr", "SendSms", "SendMail", "UniPassMode"):
         add(column, defaults.get(column))
 
     sql = f"INSERT INTO Users ({', '.join(columns)}) VALUES ({', '.join(['?'] * len(params))})"
@@ -921,6 +920,8 @@ def _reactivate_real_user(
         "[ExpiryDate] = ?",
         "[ExpiryTime] = ?",
         "[Visitor] = ?",
+        "[Status] = ?",
+        "[LockDate] = ?",
     ]
     params: list[Any] = [
         False,
@@ -928,6 +929,8 @@ def _reactivate_real_user(
         expiry_date,
         expiry_time,
         is_visitor,
+        ACTIVE_USER_STATUS,
+        None,
     ]
     if key_type_value is not None:
         assignments.append("[KeyType] = ?")
@@ -1295,7 +1298,7 @@ def _upsert_real_user(
         cursor.execute(
             """
             UPDATE Users
-            SET Deleted = ?, UseExpiry = ?, ExpiryDate = ?, ExpiryTime = ?, Visitor = ?
+            SET Deleted = ?, UseExpiry = ?, ExpiryDate = ?, ExpiryTime = ?, Visitor = ?, Status = ?, LockDate = ?
             WHERE UserPtr = ?
             """,
             (
@@ -1304,6 +1307,8 @@ def _upsert_real_user(
                 expiry_date,
                 expiry_time,
                 is_visitor,
+                ACTIVE_USER_STATUS,
+                None,
                 existing_user_ptr,
             ),
         )
@@ -1596,13 +1601,16 @@ def _resolve_user_ptr(cursor: pyodbc.Cursor, external_key_id: str | None) -> int
 def _user_is_active(cursor: pyodbc.Cursor, user_ptr: int) -> bool:
     row = cursor.execute(
         """
-        SELECT TOP 1 Deleted, UseExpiry, ExpiryDate, ExpiryTime
+        SELECT TOP 1 Deleted, UseExpiry, ExpiryDate, ExpiryTime, Status
         FROM Users
         WHERE UserPtr = ?
         """,
         (user_ptr,),
     ).fetchone()
     if row is None or bool(row.Deleted):
+        return False
+    raw_status = getattr(row, "Status", None)
+    if raw_status is not None and int(raw_status) != ACTIVE_USER_STATUS:
         return False
     if not bool(row.UseExpiry):
         return True
