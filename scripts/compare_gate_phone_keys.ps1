@@ -195,6 +195,43 @@ def pick_driver(preferred: str) -> str:
     raise RuntimeError("No compatible MDB ODBC driver was found.")
 
 
+def driver_candidates(preferred: str) -> list[str]:
+    candidates = [
+        preferred,
+        "Driver do Microsoft Access (*.mdb)",
+        "Microsoft Access Driver (*.mdb)",
+        "Microsoft Access-Treiber (*.mdb)",
+        "Microsoft Access Driver (*.mdb, *.accdb)",
+    ]
+    installed = {name.lower(): name for name in pyodbc.drivers()}
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        actual = installed.get(candidate.lower(), candidate)
+        key = actual.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved.append(actual)
+    return resolved
+
+
+def connect_with_fallback(mdb_path: str, systemdb_path: str, uid: str, pwd: str, preferred: str):
+    errors: list[str] = []
+    for driver_name in driver_candidates(preferred):
+        try:
+            conn = pyodbc.connect(
+                f"DRIVER={{{driver_name}}};DBQ={mdb_path};SystemDB={systemdb_path};UID={uid};PWD={pwd}"
+            )
+            return conn, driver_name
+        except pyodbc.Error as exc:
+            errors.append(f"{driver_name}: {exc}")
+    detail = "\n".join(errors) if errors else "No compatible MDB ODBC driver was found."
+    raise RuntimeError(f"Failed to connect to Gate MDB with available ODBC drivers:\n{detail}")
+
+
 def normalize_digits(value) -> str:
     if value is None:
         return ""
@@ -525,10 +562,7 @@ def print_diff(left_record, right_record, key_type_names):
         print()
 
 
-driver = pick_driver(preferred_driver)
-conn = pyodbc.connect(
-    f"DRIVER={{{driver}}};DBQ={mdb_path};SystemDB={systemdb_path};UID={uid};PWD={pwd}"
-)
+conn, driver = connect_with_fallback(mdb_path, systemdb_path, uid, pwd, preferred_driver)
 cur = conn.cursor()
 key_type_names = build_key_type_names(cur)
 users = load_users(cur)
