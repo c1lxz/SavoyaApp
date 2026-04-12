@@ -113,6 +113,15 @@ def normalize_digits(value) -> str:
     return "".join(ch for ch in str(value) if ch.isdigit())
 
 
+def normalize_phone_key(value) -> str:
+    digits = normalize_digits(value)
+    if digits.startswith("00"):
+        digits = digits[2:]
+    if len(digits) == 11 and digits[0] in ("7", "8"):
+        return digits[1:]
+    return digits
+
+
 driver = pick_driver(preferred_driver)
 conn = pyodbc.connect(
     f"DRIVER={{{driver}}};DBQ={mdb_path};SystemDB={systemdb_path};UID={uid};PWD={pwd}"
@@ -158,7 +167,7 @@ rows = [
     if any(hint in str(row.Name or "").lower() for hint in phone_reader_hints)
 ]
 if needle:
-    needle_digits = normalize_digits(needle)
+    needle_digits = normalize_phone_key(needle)
     rows = [
         row for row in rows
         if needle in str(row.Phone or "").lower()
@@ -168,8 +177,8 @@ if needle:
         or needle in str(row.Name or "").lower()
         or needle in str(row.RdrPtr or "").lower()
         or needle in str(row.UserPtr or "").lower()
-        or (needle_digits and needle_digits in normalize_digits(row.Phone))
-        or (needle_digits and needle_digits in normalize_digits(row.Number))
+        or (needle_digits and needle_digits in normalize_phone_key(row.Phone))
+        or (needle_digits and needle_digits in normalize_phone_key(row.Number))
     ]
 
 print("=== GSM Gate Users ===")

@@ -62,18 +62,21 @@ class _PhoneSampleCursor:
 
 
 class _ReaderKeyTypeCursor:
-    def __init__(self, rows) -> None:
-        self._rows = rows
+    def __init__(self, rows_by_id) -> None:
+        self._rows_by_id = rows_by_id
         self._last_sql = ""
+        self._params = None
 
     def execute(self, sql: str, params=None):
         self._last_sql = sql
+        self._params = tuple(params) if params is not None else None
         return self
 
-    def fetchall(self):
+    def fetchone(self):
         if "FROM Readers AS r" in self._last_sql:
-            return list(self._rows)
-        raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
+            point_id = int(self._params[0])
+            return self._rows_by_id.get(point_id)
+        raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
 
 
 class _AccessPermissionCursor:
@@ -100,14 +103,14 @@ def test_build_identity_for_phone_populates_required_number(monkeypatch):
 
     identity = gate_runtime._build_identity(object(), "Phone", "009991234567")
 
-    assert identity.number == "009991234567"
-    assert identity.phone == "009991234567"
+    assert identity.number == "9991234567"
+    assert identity.phone == "9991234567"
     assert identity.number_u == "ABC123NUMBER"
 
 
 def test_build_identity_for_phone_matches_sample_storage_format(monkeypatch):
     monkeypatch.setattr(gate_runtime, "_generate_unique_number_u", lambda cursor: "ABC123NUMBER")
-    monkeypatch.delenv("GATE_PHONE_WRITE_FORMAT", raising=False)
+    monkeypatch.setenv("GATE_PHONE_WRITE_FORMAT", "sample")
     monkeypatch.delenv("GATE_PHONE_STORAGE_FORMAT", raising=False)
     cursor = _PhoneSampleCursor("+79991234567")
 
@@ -139,7 +142,7 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
     assert user_ptr == 42
     assert any(
         sql == "UPDATE Users SET Phone = ?, [Number] = ? WHERE UserPtr = ?"
-        and params == ("009991234567", "009991234567", 42)
+        and params == ("9991234567", "9991234567", 42)
         for sql, params in cursor.commands
     )
     assert any(
@@ -163,10 +166,10 @@ def test_normalize_vehicle_canonicalizes_lookalikes_and_separators():
 def test_sample_key_type_prefers_phone_reader_device_key_type(monkeypatch):
     monkeypatch.delenv("GATE_REAL_KEYTYPE_PHONE", raising=False)
     cursor = _ReaderKeyTypeCursor(
-        [
-            SimpleNamespace(RdrPtr=15, Name="Entry Camera", KeyType=3),
-            SimpleNamespace(RdrPtr=70, Name="Gate Terminal Entry", KeyType=9),
-        ]
+        {
+            15: SimpleNamespace(RdrPtr=15, Name="Entry Camera", DeviceKeyType=3),
+            70: SimpleNamespace(RdrPtr=70, Name="Gate Terminal Entry", DeviceKeyType=9),
+        }
     )
 
     key_type = gate_runtime._sample_key_type(cursor, "Phone", [15, 70])

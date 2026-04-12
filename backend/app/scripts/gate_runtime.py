@@ -268,7 +268,7 @@ def _detect_phone_storage_mode(sample_value: str | None) -> str:
 
 
 def _format_phone_for_storage(cursor: pyodbc.Cursor, normalized_key_value: str) -> str:
-    mode = (_env("GATE_PHONE_WRITE_FORMAT", "GATE_PHONE_STORAGE_FORMAT", default="sample") or "sample").strip().lower()
+    mode = (_env("GATE_PHONE_WRITE_FORMAT", "GATE_PHONE_STORAGE_FORMAT", default="local_10") or "local_10").strip().lower()
     if mode in {"", "sample", "match_sample"}:
         mode = _detect_phone_storage_mode(_sample_phone_storage_value(cursor))
 
@@ -361,30 +361,33 @@ def _reader_device_key_types(
     if not point_ids or not hasattr(cursor, "execute"):
         return []
 
-    placeholders = ", ".join("?" for _ in point_ids)
-    try:
-        rows = cursor.execute(
-            f"""
-            SELECT
-                r.RdrPtr,
-                r.Name,
-                d.KeyType
-            FROM Readers AS r
-            LEFT JOIN Devices AS d ON d.DevPtr = r.DevPtr
-            WHERE r.RdrPtr IN ({placeholders})
-            ORDER BY r.RdrPtr
-            """,
-            tuple(point_ids),
-        ).fetchall()
-    except Exception:
-        return []
-
     key_types: list[Any] = []
     seen: set[Any] = set()
-    for row in rows:
+    for point_id in point_ids:
+        try:
+            row = cursor.execute(
+                """
+                SELECT TOP 1
+                    r.RdrPtr,
+                    r.Name,
+                    d.KeyType AS DeviceKeyType
+                FROM Readers AS r
+                LEFT JOIN Devices AS d ON d.DevPtr = r.DevPtr
+                WHERE r.RdrPtr = ?
+                """,
+                (point_id,),
+            ).fetchone()
+        except Exception:
+            continue
+        if row is None:
+            continue
         if phone_reader_only and not _looks_like_phone_reader(getattr(row, "Name", None)):
             continue
-        key_type_value = getattr(row, "KeyType", None)
+        key_type_value = getattr(row, "DeviceKeyType", None)
+        if key_type_value is None and hasattr(row, "KeyType"):
+            key_type_value = getattr(row, "KeyType", None)
+        if key_type_value is None and len(row) >= 3:
+            key_type_value = row[2]
         if key_type_value is None or key_type_value in seen:
             continue
         seen.add(key_type_value)
