@@ -139,9 +139,9 @@ rows = cur.execute(
         a.CardCode,
         a.NoEntry,
         a.NoExit
-    FROM (Users AS u
+    FROM ((Users AS u
         INNER JOIN AccessTable AS a ON a.UserPtr = u.UserPtr)
-        LEFT JOIN Readers AS r ON r.RdrPtr = a.RdrPtr
+        LEFT JOIN Readers AS r ON r.RdrPtr = a.RdrPtr)
         LEFT JOIN Devices AS d ON d.DevPtr = r.DevPtr
     ORDER BY u.UserPtr DESC, a.RdrPtr ASC
     """
