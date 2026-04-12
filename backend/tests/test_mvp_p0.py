@@ -10,6 +10,7 @@ from backend.app.database import SessionLocal
 from backend.app.models import Request, User
 from backend.app.services.auth import hash_password
 from backend.app.services.requests import cleanup_broken_requests
+from backend.app.services import requests as request_service
 from backend.app.services.gate import gate_client
 
 
@@ -210,6 +211,41 @@ def test_create_temporary_phone_request_passes_resident_name_to_gate(client):
     assert response.status_code == 200
     assert captured
     assert captured[0]["resident_name"].startswith("User ")
+
+
+def test_create_temporary_phone_request_forces_gsm_access_points(client):
+    headers, _ = _create_user_and_login(client)
+    captured: list[dict] = []
+    phone_number = f"+7999{str(uuid4().int)[:7]}"
+    original_add_temporary_key = gate_client.add_temporary_key
+    original_gsm_json = request_service.settings.gsm_access_point_ids_json
+
+    def _capture_gate_call(**kwargs):
+        captured.append(dict(kwargs))
+        return 5321
+
+    request_service.settings.gsm_access_point_ids_json = "[5, 6]"
+    gate_client.add_temporary_key = _capture_gate_call
+    try:
+        response = client.post(
+            "/api/requests/",
+            headers=headers,
+            json={
+                "key_type": "Phone",
+                "key_value": phone_number,
+                "phone_number": phone_number,
+                "access_point_ids": [1, 7, 19],
+                "is_permanent": False,
+                "hours": 2,
+            },
+        )
+    finally:
+        gate_client.add_temporary_key = original_add_temporary_key
+        request_service.settings.gsm_access_point_ids_json = original_gsm_json
+
+    assert response.status_code == 200
+    assert captured
+    assert captured[0]["access_point_ids"] == [5, 6]
 
 
 def test_cleanup_broken_requests_cancels_invalid_gate_key_rows():

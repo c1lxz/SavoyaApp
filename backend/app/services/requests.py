@@ -32,6 +32,14 @@ class RequestIntegrationError(Exception):
         self.message = message
 
 
+def _resolved_access_point_ids(*, key_type: str, requested_ids: list[int]) -> list[int]:
+    normalized_requested = [int(item) for item in requested_ids]
+    if key_type != "Phone":
+        return normalized_requested
+    configured_gsm = list(settings.gsm_access_point_ids)
+    return configured_gsm or normalized_requested
+
+
 def resolve_request_status(is_permanent: bool, expires_at: datetime | None) -> str:
     if is_permanent:
         return "permanent"
@@ -158,6 +166,11 @@ async def _ensure_no_duplicate_active_request(
 
 
 async def create_request(session: AsyncSession, user: User, payload: CreateRequestRequest) -> Request:
+    resolved_access_point_ids = _resolved_access_point_ids(
+        key_type=payload.key_type,
+        requested_ids=payload.access_point_ids,
+    )
+
     await _ensure_no_duplicate_active_request(
         session,
         key_type=payload.key_type,
@@ -183,7 +196,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
                 key_type=payload.key_type,
                 key_value=payload.key_value,
                 phone_number=payload.phone_number,
-                access_point_ids=payload.access_point_ids,
+                access_point_ids=resolved_access_point_ids,
                 resident_name=user.name or user.login or "Resident",
             )
         else:
@@ -192,7 +205,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
                 key_value=payload.key_value,
                 phone_number=payload.phone_number,
                 expires_at=expires_at,
-                access_point_ids=payload.access_point_ids,
+                access_point_ids=resolved_access_point_ids,
                 resident_name=user.name or user.login or "Resident",
             )
     except Exception as exc:
@@ -212,7 +225,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
         key_type=payload.key_type,
         key_value=payload.key_value,
         gate_key_id=gate_key_id,
-        access_point_ids=payload.access_point_ids,
+        access_point_ids=resolved_access_point_ids,
         is_permanent=is_permanent,
         is_courier=payload.is_courier,
         contact_phone=payload.phone_number,

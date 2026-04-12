@@ -708,6 +708,44 @@ def _find_reusable_deleted_user_ptr(
     return None
 
 
+def _cleanup_conflicting_phone_rows(
+    cursor: pyodbc.Cursor,
+    *,
+    normalized_key_value: str,
+    keep_user_ptr: int,
+    phone_key_type_value: Any | None,
+) -> None:
+    if not hasattr(cursor, "execute") or not hasattr(cursor, "fetchall"):
+        return
+    rows = cursor.execute(
+        """
+        SELECT UserPtr, Phone, Number, KeyType, Deleted
+        FROM Users
+        ORDER BY UserPtr DESC
+        """
+    ).fetchall()
+    for row in rows:
+        if bool(getattr(row, "Deleted", False)):
+            continue
+        row_user_ptr = int(getattr(row, "UserPtr", 0) or 0)
+        if row_user_ptr <= 0 or row_user_ptr == keep_user_ptr:
+            continue
+        if _normalize_optional_phone(getattr(row, "Phone", None)) != normalized_key_value:
+            continue
+        if _is_phone_identity_row(row, phone_key_type_value=phone_key_type_value):
+            cursor.execute("DELETE FROM AccessTable WHERE UserPtr = ?", (row_user_ptr,))
+            cursor.execute(
+                """
+                UPDATE Users
+                SET Deleted = ?, UseExpiry = ?, ExpiryDate = ?, ExpiryTime = ?
+                WHERE UserPtr = ?
+                """,
+                (True, False, None, None, row_user_ptr),
+            )
+            continue
+        cursor.execute("UPDATE Users SET Phone = ? WHERE UserPtr = ?", (None, row_user_ptr))
+
+
 def _resolve_inserted_user_ptr(cursor: pyodbc.Cursor, *, number_u: str) -> int:
     identity_value = cursor.execute("SELECT @@IDENTITY").fetchval()
     try:
@@ -744,6 +782,15 @@ def _to_access_datetime(value: datetime | None) -> datetime | None:
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _split_access_expiry(value: datetime | None) -> tuple[datetime | None, datetime | None]:
+    access_value = _to_access_datetime(value)
+    if access_value is None:
+        return None, None
+    expiry_date = datetime.combine(access_value.date(), time.min)
+    expiry_time = datetime.combine(date(1899, 12, 30), access_value.time().replace(microsecond=0))
+    return expiry_date, expiry_time
+
+
 def _insert_real_user(
     cursor: pyodbc.Cursor,
     *,
@@ -758,7 +805,7 @@ def _insert_real_user(
     defaults = _sample_user_defaults(cursor, key_type)
     last_name, first_name, father_name = _split_name(resident_name)
     identity = _build_identity(cursor, key_type, normalized_key_value)
-    access_expires_at = _to_access_datetime(expires_at)
+    expiry_date, expiry_time = _split_access_expiry(expires_at)
 
     columns: list[str] = []
     params: list[Any] = []
@@ -781,9 +828,9 @@ def _insert_real_user(
     add("FirstName", first_name)
     add("FatherName", father_name)
     add("Deleted", False)
-    add("UseExpiry", access_expires_at is not None)
-    add("ExpiryDate", access_expires_at)
-    add("ExpiryTime", access_expires_at)
+    add("UseExpiry", expiry_date is not None)
+    add("ExpiryDate", expiry_date)
+    add("ExpiryTime", expiry_time)
     add("Visitor", is_visitor)
 
     for column in ("GroupPtr", "IdleNotLimited", "NoFacility", "Status", "BgPtr", "SendSms", "SendMail", "UniPassMode"):
@@ -806,7 +853,7 @@ def _reactivate_real_user(
     is_visitor: bool,
     expires_at: datetime | None,
 ) -> int:
-    access_expires_at = _to_access_datetime(expires_at)
+    expiry_date, expiry_time = _split_access_expiry(expires_at)
     last_name, first_name, father_name = _split_name(resident_name)
     assignments = [
         "[Deleted] = ?",
@@ -817,9 +864,9 @@ def _reactivate_real_user(
     ]
     params: list[Any] = [
         False,
-        access_expires_at is not None,
-        access_expires_at,
-        access_expires_at,
+        expiry_date is not None,
+        expiry_date,
+        expiry_time,
         is_visitor,
     ]
     if key_type_value is not None:
@@ -1160,7 +1207,7 @@ def _upsert_real_user(
         key_type_value=key_type_value,
     )
     if existing_user_ptr is not None:
-        access_expires_at = _to_access_datetime(expires_at)
+        expiry_date, expiry_time = _split_access_expiry(expires_at)
         last_name, first_name, father_name = _split_name(resident_name)
         cursor.execute(
             """
@@ -1170,9 +1217,9 @@ def _upsert_real_user(
             """,
             (
                 False,
-                access_expires_at is not None,
-                access_expires_at,
-                access_expires_at,
+                expiry_date is not None,
+                expiry_date,
+                expiry_time,
                 is_visitor,
                 existing_user_ptr,
             ),
@@ -1195,6 +1242,13 @@ def _upsert_real_user(
             cursor.execute("UPDATE Users SET [FirstName] = ? WHERE UserPtr = ?", (first_name, existing_user_ptr))
         if father_name is not None:
             cursor.execute("UPDATE Users SET [FatherName] = ? WHERE UserPtr = ?", (father_name, existing_user_ptr))
+        if key_type == "Phone":
+            _cleanup_conflicting_phone_rows(
+                cursor,
+                normalized_key_value=normalized_key_value,
+                keep_user_ptr=existing_user_ptr,
+                phone_key_type_value=key_type_value,
+            )
         _ensure_access_permissions(cursor, existing_user_ptr, access_point_ids, key_type=key_type)
         return existing_user_ptr
 
@@ -1216,6 +1270,13 @@ def _upsert_real_user(
             is_visitor=is_visitor,
             expires_at=expires_at,
         )
+        if key_type == "Phone":
+            _cleanup_conflicting_phone_rows(
+                cursor,
+                normalized_key_value=normalized_key_value,
+                keep_user_ptr=user_ptr,
+                phone_key_type_value=key_type_value,
+            )
         _ensure_access_permissions(cursor, user_ptr, access_point_ids, key_type=key_type)
         return user_ptr
 
@@ -1229,6 +1290,13 @@ def _upsert_real_user(
         is_visitor=is_visitor,
         expires_at=expires_at,
     )
+    if key_type == "Phone":
+        _cleanup_conflicting_phone_rows(
+            cursor,
+            normalized_key_value=normalized_key_value,
+            keep_user_ptr=user_ptr,
+            phone_key_type_value=key_type_value,
+        )
     _ensure_access_permissions(cursor, user_ptr, access_point_ids, key_type=key_type)
     return user_ptr
 

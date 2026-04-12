@@ -27,6 +27,23 @@ class _RowCursor:
         return list(self._rows)
 
 
+class _ConflictCleanupCursor:
+    def __init__(self, rows) -> None:
+        self._rows = list(rows)
+        self.commands: list[tuple[str, tuple | None]] = []
+        self._last_sql = ""
+
+    def execute(self, sql: str, params=None):
+        self._last_sql = sql
+        self.commands.append((sql, tuple(params) if params is not None else None))
+        return self
+
+    def fetchall(self):
+        if "SELECT UserPtr, Phone, Number, KeyType, Deleted" in self._last_sql:
+            return list(self._rows)
+        raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
+
+
 class _InsertedUserCursor:
     def __init__(self) -> None:
         self.commands: list[tuple[str, tuple | None]] = []
@@ -157,6 +174,15 @@ def test_build_identity_for_phone_populates_required_number(monkeypatch):
     assert identity.number_u == "009991234567"
 
 
+def test_split_access_expiry_separates_date_and_time():
+    expiry_date, expiry_time = gate_runtime._split_access_expiry(
+        datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc)
+    )
+
+    assert expiry_date == datetime(2026, 4, 13, 0, 0, 0)
+    assert expiry_time == datetime(1899, 12, 30, 7, 43, 29)
+
+
 def test_build_identity_for_phone_matches_sample_storage_format(monkeypatch):
     monkeypatch.setattr(gate_runtime, "_generate_unique_number_u", lambda cursor: "ABC123NUMBER")
     monkeypatch.setenv("GATE_PHONE_WRITE_FORMAT", "sample")
@@ -214,6 +240,41 @@ def test_insert_real_user_uses_storage_phone_for_phone_keys(monkeypatch):
         sql.startswith("INSERT INTO Users")
         and params.count("89991234567") == 1
         and params.count("009991234567") == 2
+        for sql, params in cursor.commands
+    )
+
+
+def test_insert_real_user_splits_expiry_date_and_time(monkeypatch):
+    cursor = _FakeCursor()
+
+    monkeypatch.setattr(gate_runtime, "_sample_user_defaults", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        gate_runtime,
+        "_build_identity",
+        lambda *args, **kwargs: gate_runtime.RealGateIdentity(
+            number="009991234567",
+            phone="89991234567",
+            number_u="009991234567",
+            number_mifare=None,
+        ),
+    )
+    monkeypatch.setattr(gate_runtime, "_resolve_inserted_user_ptr", lambda *args, **kwargs: 55)
+
+    gate_runtime._insert_real_user(
+        cursor,
+        key_type_value=6,
+        key_type="Phone",
+        normalized_key_value="009991234567",
+        phone_number="+79991234567",
+        resident_name="Phone User",
+        is_visitor=False,
+        expires_at=datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc),
+    )
+
+    assert any(
+        sql.startswith("INSERT INTO Users")
+        and datetime(2026, 4, 13, 0, 0, 0) in params
+        and datetime(1899, 12, 30, 7, 43, 29) in params
         for sql, params in cursor.commands
     )
 
@@ -567,6 +628,32 @@ def test_find_existing_phone_user_ptr_reuses_numeric_phone_row_even_if_key_type_
     user_ptr = gate_runtime._find_existing_user_ptr(cursor, "Phone", "009111253128", key_type_value=6)
 
     assert user_ptr == 33
+
+
+def test_cleanup_conflicting_phone_rows_deletes_other_phone_identities_and_clears_vehicle_contact_phone():
+    cursor = _ConflictCleanupCursor(
+        [
+            SimpleNamespace(UserPtr=42, Phone="89111253128\n", Number="009111253128", KeyType=6, Deleted=False),
+            SimpleNamespace(UserPtr=41, Phone="79111253128", Number="009111253128", KeyType=6, Deleted=False),
+            SimpleNamespace(UserPtr=40, Phone="009111253128", Number="A182DC178", KeyType=3, Deleted=False),
+            SimpleNamespace(UserPtr=39, Phone="89111253128", Number="A135BC178", KeyType=3, Deleted=True),
+        ]
+    )
+
+    gate_runtime._cleanup_conflicting_phone_rows(
+        cursor,
+        normalized_key_value="009111253128",
+        keep_user_ptr=42,
+        phone_key_type_value=6,
+    )
+
+    assert any(sql == "DELETE FROM AccessTable WHERE UserPtr = ?" and params == (41,) for sql, params in cursor.commands)
+    assert any(
+        "UPDATE Users\n                SET Deleted = ?, UseExpiry = ?, ExpiryDate = ?, ExpiryTime = ?" in sql
+        and params == (True, False, None, None, 41)
+        for sql, params in cursor.commands
+    )
+    assert any(sql == "UPDATE Users SET Phone = ? WHERE UserPtr = ?" and params == (None, 40) for sql, params in cursor.commands)
 
 
 def test_resolve_inserted_user_ptr_falls_back_when_identity_is_zero():
