@@ -265,23 +265,23 @@ def _sample_phone_storage_value(cursor: pyodbc.Cursor) -> str | None:
         except Exception:
             rows = []
 
-        phone_candidates: list[str] = []
+        phone_candidates: list[tuple[str, str]] = []
         for row in rows:
             if not _looks_like_phone_reader(getattr(row, "Name", None)):
                 continue
             if not _is_phone_identity_row(row):
                 continue
-            phone_value = row.Phone if hasattr(row, "Phone") else row[0]
-            normalized = str(phone_value).strip()
+            raw_value = str(row.Phone if hasattr(row, "Phone") else row[0])
+            normalized = raw_value.strip()
             if normalized:
-                phone_candidates.append(normalized)
+                phone_candidates.append((raw_value, normalized))
 
         if phone_candidates:
-            mode_counts = Counter(_detect_phone_storage_mode(value) for value in phone_candidates)
+            mode_counts = Counter(_detect_phone_storage_mode(normalized) for _, normalized in phone_candidates)
             dominant_mode = mode_counts.most_common(1)[0][0]
-            for value in phone_candidates:
-                if _detect_phone_storage_mode(value) == dominant_mode:
-                    return value
+            for raw_value, normalized in phone_candidates:
+                if _detect_phone_storage_mode(normalized) == dominant_mode:
+                    return raw_value
 
         row = cursor.execute(
             """
@@ -297,8 +297,8 @@ def _sample_phone_storage_value(cursor: pyodbc.Cursor) -> str | None:
         return None
     if row is None:
         return None
-    phone_value = row.Phone if hasattr(row, "Phone") else row[0]
-    return str(phone_value).strip() or None
+    raw_value = str(row.Phone if hasattr(row, "Phone") else row[0])
+    return raw_value if raw_value.strip() else None
 
 
 def _detect_phone_storage_mode(sample_value: str | None) -> str:
@@ -319,10 +319,23 @@ def _detect_phone_storage_mode(sample_value: str | None) -> str:
     return "legacy_00"
 
 
+def _apply_phone_storage_whitespace(sample_value: str | None, formatted_value: str) -> str:
+    raw_value = str(sample_value or "")
+    if not raw_value:
+        return formatted_value
+    leading_len = len(raw_value) - len(raw_value.lstrip())
+    trailing_len = len(raw_value) - len(raw_value.rstrip())
+    leading = raw_value[:leading_len]
+    trailing = raw_value[len(raw_value) - trailing_len :] if trailing_len else ""
+    return f"{leading}{formatted_value}{trailing}"
+
+
 def _format_phone_for_storage(cursor: pyodbc.Cursor, normalized_key_value: str) -> str:
     mode = (_env("GATE_PHONE_WRITE_FORMAT", "GATE_PHONE_STORAGE_FORMAT", default="local_10") or "local_10").strip().lower()
+    sample_value: str | None = None
     if mode in {"", "sample", "match_sample"}:
-        mode = _detect_phone_storage_mode(_sample_phone_storage_value(cursor))
+        sample_value = _sample_phone_storage_value(cursor)
+        mode = _detect_phone_storage_mode(sample_value)
 
     digits = "".join(ch for ch in normalized_key_value if ch.isdigit())
     if digits.startswith("00") and len(digits) == 12:
@@ -335,21 +348,29 @@ def _format_phone_for_storage(cursor: pyodbc.Cursor, normalized_key_value: str) 
         local10 = digits
         national11 = f"7{local10}"
     else:
-        return normalized_key_value
+        formatted_value = normalized_key_value
+        if sample_value is not None:
+            return _apply_phone_storage_whitespace(sample_value, formatted_value)
+        return formatted_value
 
     if mode in {"legacy_00", "canonical_00", "00_local10"}:
-        return f"00{local10}"
-    if mode in {"double_zero_11", "007_national11"}:
-        return f"00{national11}"
-    if mode in {"plus7", "e164", "e164_plus7"}:
-        return f"+{national11}"
-    if mode in {"national_11", "digits_11", "7xxxxxxxxxx"}:
-        return national11
-    if mode in {"domestic_11", "8xxxxxxxxxx"}:
-        return f"8{local10}"
-    if mode in {"local_10", "digits_10"}:
-        return local10
-    return normalized_key_value
+        formatted_value = f"00{local10}"
+    elif mode in {"double_zero_11", "007_national11"}:
+        formatted_value = f"00{national11}"
+    elif mode in {"plus7", "e164", "e164_plus7"}:
+        formatted_value = f"+{national11}"
+    elif mode in {"national_11", "digits_11", "7xxxxxxxxxx"}:
+        formatted_value = national11
+    elif mode in {"domestic_11", "8xxxxxxxxxx"}:
+        formatted_value = f"8{local10}"
+    elif mode in {"local_10", "digits_10"}:
+        formatted_value = local10
+    else:
+        formatted_value = normalized_key_value
+
+    if sample_value is not None:
+        return _apply_phone_storage_whitespace(sample_value, formatted_value)
+    return formatted_value
 
 
 def _normalize_vehicle(value: str) -> str:

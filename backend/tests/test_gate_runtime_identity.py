@@ -170,6 +170,18 @@ def test_build_identity_for_phone_matches_sample_storage_format(monkeypatch):
     assert identity.number_u == "009991234567"
 
 
+def test_build_identity_for_phone_preserves_sample_phone_whitespace(monkeypatch):
+    monkeypatch.setattr(gate_runtime, "_generate_unique_number_u", lambda cursor: "ABC123NUMBER")
+    monkeypatch.setenv("GATE_PHONE_WRITE_FORMAT", "sample")
+    monkeypatch.delenv("GATE_PHONE_STORAGE_FORMAT", raising=False)
+    cursor = _PhoneSampleCursor("89991234567\n")
+
+    identity = gate_runtime._build_identity(cursor, "Phone", "009991234567")
+
+    assert identity.phone == "89991234567\n"
+    assert identity.number_u == "009991234567"
+
+
 def test_insert_real_user_uses_storage_phone_for_phone_keys(monkeypatch):
     cursor = _FakeCursor()
 
@@ -440,6 +452,22 @@ def test_sample_phone_storage_value_skips_vehicle_rows_with_contact_phone():
     )
 
     assert gate_runtime._sample_phone_storage_value(cursor) == "89991234567"
+
+
+def test_sample_phone_storage_value_preserves_trailing_whitespace():
+    cursor = _TemplateSamplingCursor(
+        access_rows=[
+            SimpleNamespace(
+                Phone="89991234567\n",
+                Number="009991234567",
+                KeyType=6,
+                Deleted=False,
+                Name="GSM Entry",
+            ),
+        ]
+    )
+
+    assert gate_runtime._sample_phone_storage_value(cursor) == "89991234567\n"
 
 
 def test_add_temporary_phone_key_marks_gate_user_as_non_visitor(monkeypatch):
