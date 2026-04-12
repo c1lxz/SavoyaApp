@@ -122,6 +122,33 @@ def quote_ident(name: str) -> str:
     return "[" + name.replace("]", "]]") + "]"
 
 
+def describe_columns(cur, table_name: str):
+    # Some real Gate MDB files expose malformed metadata through SQLColumns,
+    # which makes pyodbc.cur.columns(...) crash during unicode decoding.
+    # Read the schema through a zero-row SELECT instead.
+    try:
+        cur.execute(f"SELECT TOP 0 * FROM {quote_ident(table_name)}")
+    except Exception as exc:
+        raise RuntimeError(f"Failed to read schema for table {table_name!r}: {exc}") from exc
+    description = cur.description or []
+    columns = []
+    for ordinal, column in enumerate(description, start=1):
+        name, type_code, display_size, internal_size, precision, scale, null_ok = column
+        columns.append(
+            {
+                "name": name,
+                "type_code": type_code,
+                "display_size": display_size,
+                "internal_size": internal_size,
+                "precision": precision,
+                "scale": scale,
+                "null_ok": null_ok,
+                "ordinal": ordinal,
+            }
+        )
+    return columns
+
+
 driver = pick_driver(preferred_driver)
 conn = pyodbc.connect(
     f"DRIVER={{{driver}}};DBQ={mdb_path};SystemDB={systemdb_path};UID={uid};PWD={pwd}"
@@ -168,15 +195,16 @@ if not table_names:
 
 for table_name in table_names:
     print(f"=== {table_name} :: Columns ===")
-    columns = list(cur.columns(table=table_name))
+    columns = describe_columns(cur, table_name)
     if not columns:
         print("(no columns)")
     else:
         for column in columns:
             print(
-                f"{column.column_name} | "
-                f"type={column.type_name!r} size={column.column_size!r} "
-                f"nullable={column.nullable!r} ordinal={column.ordinal_position!r}"
+                f"{column['name']} | "
+                f"type_code={column['type_code']!r} display_size={column['display_size']!r} "
+                f"internal_size={column['internal_size']!r} precision={column['precision']!r} "
+                f"scale={column['scale']!r} nullable={column['null_ok']!r} ordinal={column['ordinal']!r}"
             )
     print()
 
