@@ -279,9 +279,14 @@ def _sample_phone_storage_value(cursor: pyodbc.Cursor) -> str | None:
         if phone_candidates:
             mode_counts = Counter(_detect_phone_storage_mode(normalized) for _, normalized in phone_candidates)
             dominant_mode = mode_counts.most_common(1)[0][0]
-            for raw_value, normalized in phone_candidates:
-                if _detect_phone_storage_mode(normalized) == dominant_mode:
+            dominant_candidates = [
+                raw_value for raw_value, normalized in phone_candidates if _detect_phone_storage_mode(normalized) == dominant_mode
+            ]
+            for raw_value in dominant_candidates:
+                if raw_value != raw_value.rstrip():
                     return raw_value
+            if dominant_candidates:
+                return dominant_candidates[0]
 
         row = cursor.execute(
             """
@@ -1041,6 +1046,27 @@ def _existing_access_row(cursor: pyodbc.Cursor, user_ptr: int, access_point_id: 
     ).fetchone()
 
 
+def _prune_access_permissions(cursor: pyodbc.Cursor, user_ptr: int, allowed_access_point_ids: Iterable[int]) -> None:
+    if not hasattr(cursor, "execute") or not hasattr(cursor, "fetchall"):
+        return
+    allowed = {int(point_id) for point_id in allowed_access_point_ids}
+    rows = cursor.execute(
+        "SELECT RdrPtr FROM AccessTable WHERE UserPtr = ?",
+        (user_ptr,),
+    ).fetchall()
+    for row in rows:
+        raw_reader_ptr = getattr(row, "RdrPtr", None)
+        if raw_reader_ptr is None:
+            raw_reader_ptr = row[0]
+        access_point_id = int(raw_reader_ptr)
+        if access_point_id in allowed:
+            continue
+        cursor.execute(
+            "DELETE FROM AccessTable WHERE UserPtr = ? AND RdrPtr = ?",
+            (user_ptr, access_point_id),
+        )
+
+
 def _inner_num_in_use(
     cursor: pyodbc.Cursor,
     access_point_id: int,
@@ -1250,6 +1276,8 @@ def _upsert_real_user(
                 phone_key_type_value=key_type_value,
             )
         _ensure_access_permissions(cursor, existing_user_ptr, access_point_ids, key_type=key_type)
+        if key_type == "Phone":
+            _prune_access_permissions(cursor, existing_user_ptr, access_point_ids)
         return existing_user_ptr
 
     reusable_user_ptr = _find_reusable_deleted_user_ptr(
@@ -1278,6 +1306,8 @@ def _upsert_real_user(
                 phone_key_type_value=key_type_value,
             )
         _ensure_access_permissions(cursor, user_ptr, access_point_ids, key_type=key_type)
+        if key_type == "Phone":
+            _prune_access_permissions(cursor, user_ptr, access_point_ids)
         return user_ptr
 
     user_ptr = _insert_real_user(
@@ -1298,6 +1328,8 @@ def _upsert_real_user(
             phone_key_type_value=key_type_value,
         )
     _ensure_access_permissions(cursor, user_ptr, access_point_ids, key_type=key_type)
+    if key_type == "Phone":
+        _prune_access_permissions(cursor, user_ptr, access_point_ids)
     return user_ptr
 
 

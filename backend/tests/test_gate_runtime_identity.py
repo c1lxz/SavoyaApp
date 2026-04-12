@@ -44,6 +44,23 @@ class _ConflictCleanupCursor:
         raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
 
 
+class _AccessPruneCursor:
+    def __init__(self, rows) -> None:
+        self._rows = list(rows)
+        self.commands: list[tuple[str, tuple | None]] = []
+        self._last_sql = ""
+
+    def execute(self, sql: str, params=None):
+        self._last_sql = sql
+        self.commands.append((sql, tuple(params) if params is not None else None))
+        return self
+
+    def fetchall(self):
+        if "SELECT RdrPtr FROM AccessTable WHERE UserPtr = ?" in self._last_sql:
+            return list(self._rows)
+        raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
+
+
 class _InsertedUserCursor:
     def __init__(self) -> None:
         self.commands: list[tuple[str, tuple | None]] = []
@@ -531,6 +548,29 @@ def test_sample_phone_storage_value_preserves_trailing_whitespace():
     assert gate_runtime._sample_phone_storage_value(cursor) == "89991234567\n"
 
 
+def test_sample_phone_storage_value_prefers_whitespace_preserving_phone_sample():
+    cursor = _TemplateSamplingCursor(
+        access_rows=[
+            SimpleNamespace(
+                Phone="89991234567",
+                Number="009991234567",
+                KeyType=6,
+                Deleted=False,
+                Name="GSM Entry",
+            ),
+            SimpleNamespace(
+                Phone="89990001122\n",
+                Number="0099990001122",
+                KeyType=6,
+                Deleted=False,
+                Name="GSM Exit",
+            ),
+        ]
+    )
+
+    assert gate_runtime._sample_phone_storage_value(cursor) == "89990001122\n"
+
+
 def test_add_temporary_phone_key_marks_gate_user_as_non_visitor(monkeypatch):
     observed: dict[str, object] = {}
     cursor = _FakeCursor()
@@ -654,6 +694,28 @@ def test_cleanup_conflicting_phone_rows_deletes_other_phone_identities_and_clear
         for sql, params in cursor.commands
     )
     assert any(sql == "UPDATE Users SET Phone = ? WHERE UserPtr = ?" and params == (None, 40) for sql, params in cursor.commands)
+
+
+def test_prune_access_permissions_keeps_only_requested_readers():
+    cursor = _AccessPruneCursor(
+        [
+            SimpleNamespace(RdrPtr=5),
+            SimpleNamespace(RdrPtr=6),
+            SimpleNamespace(RdrPtr=7),
+            SimpleNamespace(RdrPtr=19),
+        ]
+    )
+
+    gate_runtime._prune_access_permissions(cursor, 42, [5, 6])
+
+    assert any(
+        sql == "DELETE FROM AccessTable WHERE UserPtr = ? AND RdrPtr = ?" and params == (42, 7)
+        for sql, params in cursor.commands
+    )
+    assert any(
+        sql == "DELETE FROM AccessTable WHERE UserPtr = ? AND RdrPtr = ?" and params == (42, 19)
+        for sql, params in cursor.commands
+    )
 
 
 def test_resolve_inserted_user_ptr_falls_back_when_identity_is_zero():
