@@ -107,6 +107,12 @@ def pick_driver(preferred: str) -> str:
     raise RuntimeError("No compatible MDB ODBC driver was found.")
 
 
+def normalize_digits(value) -> str:
+    if value is None:
+        return ""
+    return "".join(ch for ch in str(value) if ch.isdigit())
+
+
 driver = pick_driver(preferred_driver)
 conn = pyodbc.connect(
     f"DRIVER={{{driver}}};DBQ={mdb_path};SystemDB={systemdb_path};UID={uid};PWD={pwd}"
@@ -152,6 +158,7 @@ rows = [
     if any(hint in str(row.Name or "").lower() for hint in phone_reader_hints)
 ]
 if needle:
+    needle_digits = normalize_digits(needle)
     rows = [
         row for row in rows
         if needle in str(row.Phone or "").lower()
@@ -161,6 +168,8 @@ if needle:
         or needle in str(row.Name or "").lower()
         or needle in str(row.RdrPtr or "").lower()
         or needle in str(row.UserPtr or "").lower()
+        or (needle_digits and needle_digits in normalize_digits(row.Phone))
+        or (needle_digits and needle_digits in normalize_digits(row.Number))
     ]
 
 print("=== GSM Gate Users ===")
