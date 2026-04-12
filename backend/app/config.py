@@ -52,6 +52,7 @@ class Settings(BaseSettings):
         default='{"entry": 1, "exit": 2, "wicket_north": 3, "wicket_lake": 4, "wicket_admin": 5, "wicket_forest": 6}'
     )
     default_access_point_ids_json: str = "[1, 2, 3, 4, 5, 6]"
+    gsm_access_point_ids_json: str = "[]"
     courier_ttl_only_enabled: bool = True
     courier_default_hours: int = 2
     courier_max_hours: int = 12
@@ -66,6 +67,11 @@ class Settings(BaseSettings):
     @property
     def default_access_point_ids(self) -> list[int]:
         raw = json.loads(self.default_access_point_ids_json)
+        return [int(value) for value in raw]
+
+    @property
+    def gsm_access_point_ids(self) -> list[int]:
+        raw = json.loads(self.gsm_access_point_ids_json)
         return [int(value) for value in raw]
 
     @property

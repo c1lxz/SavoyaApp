@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from backend.app.routers import compatibility
+from backend.app.schemas import CompatCreatePassPayload
 
 
 def test_runtime_gate_action_map_infers_real_reader_ids(monkeypatch):
@@ -65,3 +66,41 @@ def test_runtime_gate_action_map_detects_admin_wicket_from_kalitka_1(monkeypatch
     )
 
     assert compatibility._runtime_gate_action_map()["wicket_admin"] == 17
+
+
+def test_runtime_gsm_access_point_ids_detects_terminal_hints_and_config(monkeypatch):
+    monkeypatch.setattr(compatibility.settings, "gate_real_integration_enabled", True)
+    monkeypatch.setattr(compatibility.settings, "gsm_access_point_ids_json", "[70]")
+    monkeypatch.setattr(
+        compatibility.gate_client,
+        "get_access_points",
+        lambda: [
+            {"id": 15, "name": "Entry Camera"},
+            {"id": 70, "name": "Reader 70"},
+            {"id": 71, "name": "Gate Terminal Entry"},
+        ],
+    )
+
+    assert compatibility._runtime_gsm_access_point_ids() == [70, 71]
+
+
+def test_build_compat_create_payloads_uses_gsm_points_for_phone_when_available(monkeypatch):
+    monkeypatch.setattr(compatibility, "_runtime_default_access_point_ids", lambda: [15, 17, 19])
+    monkeypatch.setattr(compatibility, "_runtime_gsm_access_point_ids", lambda: [70, 71])
+
+    payload = CompatCreatePassPayload(
+        carNumber="A123AA77",
+        plotNumber="25",
+        phoneNumber="+79991234567",
+        expiresAt=None,
+        isPermanent=True,
+        isCourier=False,
+    )
+
+    rows = compatibility._build_compat_create_payloads(payload)
+
+    assert len(rows) == 2
+    assert rows[0].key_type == "VehicleNumber"
+    assert rows[0].access_point_ids == [15, 17, 19]
+    assert rows[1].key_type == "Phone"
+    assert rows[1].access_point_ids == [70, 71]

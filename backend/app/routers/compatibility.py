@@ -39,6 +39,7 @@ settings = get_settings()
 
 
 _INVALID_LOGIN_MESSAGE = "Invalid login or password"
+_PHONE_READER_HINTS = ("gsm", "gate terminal", "terminal", "phone", "call", "caller", "tel", "звон", "вызов", "тел")
 
 
 def _compat_user(user: User) -> CompatUser:
@@ -95,16 +96,32 @@ def _runtime_default_access_point_ids() -> list[int]:
     return [int(item["id"]) for item in points] or configured
 
 
+def _looks_like_phone_reader(name: str) -> bool:
+    value = (name or "").strip().lower()
+    return any(hint in value for hint in _PHONE_READER_HINTS)
+
+
 def _runtime_gsm_access_point_ids() -> list[int]:
+    configured = list(settings.gsm_access_point_ids)
     if not settings.gate_real_integration_enabled:
-        return []
+        return configured
 
     points = gate_client.get_access_points()
+    available_ids = {int(item["id"]) for item in points}
     gsm_ids: list[int] = []
+    seen: set[int] = set()
+    for point_id in configured:
+        if point_id not in available_ids or point_id in seen:
+            continue
+        seen.add(point_id)
+        gsm_ids.append(point_id)
     for item in points:
-        name = str(item["name"] or "").lower()
-        if "gsm" in name:
-            gsm_ids.append(int(item["id"]))
+        point_id = int(item["id"])
+        if point_id in seen:
+            continue
+        if _looks_like_phone_reader(str(item["name"] or "")):
+            seen.add(point_id)
+            gsm_ids.append(point_id)
     return gsm_ids
 
 
@@ -131,7 +148,7 @@ def _build_compat_create_payloads(payload: CompatCreatePassPayload) -> list[Crea
             hours = 24
 
     default_access_point_ids = _runtime_default_access_point_ids()
-    phone_access_point_ids = _merge_access_point_ids(default_access_point_ids, _runtime_gsm_access_point_ids())
+    phone_access_point_ids = _runtime_gsm_access_point_ids() or default_access_point_ids
 
     requests: list[CreateRequestRequest] = []
     if payload.carNumber:

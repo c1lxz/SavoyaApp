@@ -46,13 +46,58 @@ class _InsertedUserCursor:
         raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
 
 
+class _PhoneSampleCursor:
+    def __init__(self, sample_phone: str) -> None:
+        self.sample_phone = sample_phone
+        self._last_sql = ""
+
+    def execute(self, sql: str, params=None):
+        self._last_sql = sql
+        return self
+
+    def fetchone(self):
+        if "SELECT TOP 1 Phone" in self._last_sql:
+            return SimpleNamespace(Phone=self.sample_phone)
+        raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
+
+
+class _ReaderKeyTypeCursor:
+    def __init__(self, rows) -> None:
+        self._rows = rows
+        self._last_sql = ""
+
+    def execute(self, sql: str, params=None):
+        self._last_sql = sql
+        return self
+
+    def fetchall(self):
+        if "FROM Readers AS r" in self._last_sql:
+            return list(self._rows)
+        raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
+
+
 def test_build_identity_for_phone_populates_required_number(monkeypatch):
     monkeypatch.setattr(gate_runtime, "_generate_unique_number_u", lambda cursor: "ABC123NUMBER")
+    monkeypatch.delenv("GATE_PHONE_WRITE_FORMAT", raising=False)
+    monkeypatch.delenv("GATE_PHONE_STORAGE_FORMAT", raising=False)
 
     identity = gate_runtime._build_identity(object(), "Phone", "009991234567")
 
     assert identity.number == "009991234567"
     assert identity.phone == "009991234567"
+    assert identity.number_u == "ABC123NUMBER"
+
+
+def test_build_identity_for_phone_matches_sample_storage_format(monkeypatch):
+    monkeypatch.setattr(gate_runtime, "_generate_unique_number_u", lambda cursor: "ABC123NUMBER")
+    monkeypatch.delenv("GATE_PHONE_WRITE_FORMAT", raising=False)
+    monkeypatch.delenv("GATE_PHONE_STORAGE_FORMAT", raising=False)
+    cursor = _PhoneSampleCursor("+79991234567")
+
+    identity = gate_runtime._build_identity(cursor, "Phone", "009991234567")
+
+    assert identity.number == "+79991234567"
+    assert identity.phone == "+79991234567"
     assert identity.number_u == "ABC123NUMBER"
 
 
@@ -94,6 +139,24 @@ def test_normalize_phone_keeps_legacy_formats_compatible():
     assert gate_runtime._normalize_phone("9991234567") == "009991234567"
 
 
+def test_normalize_vehicle_canonicalizes_lookalikes_and_separators():
+    assert gate_runtime._normalize_vehicle("A 123-AA 77") == "А123АА77"
+
+
+def test_sample_key_type_prefers_phone_reader_device_key_type(monkeypatch):
+    monkeypatch.delenv("GATE_REAL_KEYTYPE_PHONE", raising=False)
+    cursor = _ReaderKeyTypeCursor(
+        [
+            SimpleNamespace(RdrPtr=15, Name="Entry Camera", KeyType=3),
+            SimpleNamespace(RdrPtr=70, Name="Gate Terminal Entry", KeyType=9),
+        ]
+    )
+
+    key_type = gate_runtime._sample_key_type(cursor, "Phone", [15, 70])
+
+    assert key_type == 9
+
+
 def test_find_existing_user_ptr_skips_zero_user_ptr():
     cursor = _RowCursor(
         [
@@ -117,6 +180,18 @@ def test_find_existing_user_ptr_matches_legacy_007_phone_value():
     user_ptr = gate_runtime._find_existing_user_ptr(cursor, "Phone", "009991234567")
 
     assert user_ptr == 18
+
+
+def test_find_existing_user_ptr_matches_vehicle_number_with_mixed_alphabet():
+    cursor = _RowCursor(
+        [
+            SimpleNamespace(UserPtr=24, Phone=None, Number="А123АА77", Deleted=False),
+        ]
+    )
+
+    user_ptr = gate_runtime._find_existing_user_ptr(cursor, "VehicleNumber", gate_runtime._normalize_vehicle("A123AA77"))
+
+    assert user_ptr == 24
 
 
 def test_resolve_inserted_user_ptr_falls_back_when_identity_is_zero():

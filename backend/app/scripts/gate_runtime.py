@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -27,6 +28,34 @@ _DEFAULT_ODBC_DRIVER = "Driver do Microsoft Access (*.mdb)"
 _REQUIRED_TABLES = {"Users", "Readers", "AccessTable"}
 ALLOWED_KEY_TYPES = {"Phone", "VehicleNumber"}
 WIEGAND_BITS = 26
+_VEHICLE_LOOKALIKE_MAP = {
+    "A": "А",
+    "B": "В",
+    "C": "С",
+    "E": "Е",
+    "H": "Н",
+    "K": "К",
+    "M": "М",
+    "O": "О",
+    "P": "Р",
+    "T": "Т",
+    "X": "Х",
+    "Y": "У",
+    "А": "А",
+    "В": "В",
+    "С": "С",
+    "Е": "Е",
+    "Н": "Н",
+    "К": "К",
+    "М": "М",
+    "О": "О",
+    "Р": "Р",
+    "Т": "Т",
+    "Х": "Х",
+    "У": "У",
+}
+_VEHICLE_SEPARATORS_RE = re.compile(r"[\s-]+")
+_PHONE_READER_HINTS = ("gsm", "gate terminal", "terminal", "phone", "call", "caller", "tel", "звон", "вызов", "тел")
 
 
 @dataclass
@@ -193,8 +222,86 @@ def _normalize_phone(value: str) -> str:
     return digits
 
 
+def _looks_like_phone_reader(name: Any) -> bool:
+    value = str(name or "").strip().lower()
+    return any(hint in value for hint in _PHONE_READER_HINTS)
+
+
+def _sample_phone_storage_value(cursor: pyodbc.Cursor) -> str | None:
+    if not hasattr(cursor, "execute"):
+        return None
+    try:
+        row = cursor.execute(
+            """
+            SELECT TOP 1 Phone
+            FROM Users
+            WHERE (Deleted = 0 OR Deleted IS NULL)
+              AND Phone IS NOT NULL
+              AND Trim(Phone) <> ''
+            ORDER BY UserPtr DESC
+            """
+        ).fetchone()
+    except Exception:
+        return None
+    if row is None:
+        return None
+    phone_value = row.Phone if hasattr(row, "Phone") else row[0]
+    return str(phone_value).strip() or None
+
+
+def _detect_phone_storage_mode(sample_value: str | None) -> str:
+    value = str(sample_value or "").strip()
+    digits = "".join(ch for ch in value if ch.isdigit())
+    if value.startswith("+") and len(digits) == 11 and digits.startswith("7"):
+        return "plus7"
+    if len(digits) == 13 and digits.startswith("007"):
+        return "double_zero_11"
+    if len(digits) == 12 and digits.startswith("00"):
+        return "legacy_00"
+    if len(digits) == 11 and digits.startswith("7"):
+        return "national_11"
+    if len(digits) == 11 and digits.startswith("8"):
+        return "domestic_11"
+    if len(digits) == 10 and digits.startswith("9"):
+        return "local_10"
+    return "legacy_00"
+
+
+def _format_phone_for_storage(cursor: pyodbc.Cursor, normalized_key_value: str) -> str:
+    mode = (_env("GATE_PHONE_WRITE_FORMAT", "GATE_PHONE_STORAGE_FORMAT", default="sample") or "sample").strip().lower()
+    if mode in {"", "sample", "match_sample"}:
+        mode = _detect_phone_storage_mode(_sample_phone_storage_value(cursor))
+
+    digits = "".join(ch for ch in normalized_key_value if ch.isdigit())
+    if digits.startswith("00") and len(digits) == 12:
+        local10 = digits[2:]
+        national11 = f"7{local10}"
+    elif len(digits) == 11 and digits[0] in {"7", "8"}:
+        local10 = digits[1:]
+        national11 = f"7{local10}"
+    elif len(digits) == 10 and digits.startswith("9"):
+        local10 = digits
+        national11 = f"7{local10}"
+    else:
+        return normalized_key_value
+
+    if mode in {"legacy_00", "canonical_00", "00_local10"}:
+        return f"00{local10}"
+    if mode in {"double_zero_11", "007_national11"}:
+        return f"00{national11}"
+    if mode in {"plus7", "e164", "e164_plus7"}:
+        return f"+{national11}"
+    if mode in {"national_11", "digits_11", "7xxxxxxxxxx"}:
+        return national11
+    if mode in {"domestic_11", "8xxxxxxxxxx"}:
+        return f"8{local10}"
+    if mode in {"local_10", "digits_10"}:
+        return local10
+    return normalized_key_value
+
+
 def _normalize_vehicle(value: str) -> str:
-    normalized = "".join((value or "").upper().split())
+    normalized = _normalize_optional_text(value)
     if not normalized:
         raise ValueError("VehicleNumber key_value must not be empty")
     return normalized
@@ -244,7 +351,48 @@ def _generate_unique_number_u(cursor: pyodbc.Cursor) -> str:
     raise RuntimeError("Failed to generate a unique Users.NumberU value")
 
 
-def _sample_key_type(cursor: pyodbc.Cursor, key_type: str) -> Any | None:
+def _reader_device_key_types(
+    cursor: pyodbc.Cursor,
+    access_point_ids: Iterable[int] | None,
+    *,
+    phone_reader_only: bool = False,
+) -> list[Any]:
+    point_ids = [int(point_id) for point_id in (access_point_ids or [])]
+    if not point_ids or not hasattr(cursor, "execute"):
+        return []
+
+    placeholders = ", ".join("?" for _ in point_ids)
+    try:
+        rows = cursor.execute(
+            f"""
+            SELECT
+                r.RdrPtr,
+                r.Name,
+                d.KeyType
+            FROM Readers AS r
+            LEFT JOIN Devices AS d ON d.DevPtr = r.DevPtr
+            WHERE r.RdrPtr IN ({placeholders})
+            ORDER BY r.RdrPtr
+            """,
+            tuple(point_ids),
+        ).fetchall()
+    except Exception:
+        return []
+
+    key_types: list[Any] = []
+    seen: set[Any] = set()
+    for row in rows:
+        if phone_reader_only and not _looks_like_phone_reader(getattr(row, "Name", None)):
+            continue
+        key_type_value = getattr(row, "KeyType", None)
+        if key_type_value is None or key_type_value in seen:
+            continue
+        seen.add(key_type_value)
+        key_types.append(key_type_value)
+    return key_types
+
+
+def _sample_key_type(cursor: pyodbc.Cursor, key_type: str, access_point_ids: Iterable[int] | None = None) -> Any | None:
     env_name = "GATE_REAL_KEYTYPE_PHONE" if key_type == "Phone" else "GATE_REAL_KEYTYPE_VEHICLE"
     env_value = _env(env_name)
     if env_value is not None:
@@ -254,31 +402,45 @@ def _sample_key_type(cursor: pyodbc.Cursor, key_type: str) -> Any | None:
             return env_value
 
     if key_type == "Phone":
-        row = cursor.execute(
-            """
-            SELECT TOP 1 KeyType
-            FROM Users
-            WHERE (Deleted = 0 OR Deleted IS NULL)
-              AND Phone IS NOT NULL
-              AND Trim(Phone) <> ''
-              AND KeyType IS NOT NULL
-            ORDER BY UserPtr DESC
-            """
-        ).fetchone()
-    else:
-        row = cursor.execute(
-            """
-            SELECT TOP 1 KeyType
-            FROM Users
-            WHERE (Deleted = 0 OR Deleted IS NULL)
-              AND Number IS NOT NULL
-              AND Trim(Number) <> ''
-              AND (Phone IS NULL OR Trim(Phone) = '')
-              AND KeyType IS NOT NULL
-            ORDER BY UserPtr DESC
-            """
-        ).fetchone()
-    return row[0] if row is not None else None
+        phone_reader_key_types = _reader_device_key_types(cursor, access_point_ids, phone_reader_only=True)
+        if len(phone_reader_key_types) == 1:
+            return phone_reader_key_types[0]
+
+    reader_key_types = _reader_device_key_types(cursor, access_point_ids)
+    if len(reader_key_types) == 1:
+        return reader_key_types[0]
+
+    try:
+        if key_type == "Phone":
+            row = cursor.execute(
+                """
+                SELECT TOP 1 KeyType
+                FROM Users
+                WHERE (Deleted = 0 OR Deleted IS NULL)
+                  AND Phone IS NOT NULL
+                  AND Trim(Phone) <> ''
+                  AND KeyType IS NOT NULL
+                ORDER BY UserPtr DESC
+                """
+            ).fetchone()
+        else:
+            row = cursor.execute(
+                """
+                SELECT TOP 1 KeyType
+                FROM Users
+                WHERE (Deleted = 0 OR Deleted IS NULL)
+                  AND Number IS NOT NULL
+                  AND Trim(Number) <> ''
+                  AND (Phone IS NULL OR Trim(Phone) = '')
+                  AND KeyType IS NOT NULL
+                ORDER BY UserPtr DESC
+                """
+            ).fetchone()
+    except Exception:
+        return None
+    if row is None:
+        return None
+    return row.KeyType if hasattr(row, "KeyType") else row[0]
 
 
 def _sample_user_defaults(cursor: pyodbc.Cursor, key_type: str) -> dict[str, Any]:
@@ -329,12 +491,13 @@ def _sample_user_defaults(cursor: pyodbc.Cursor, key_type: str) -> dict[str, Any
 def _build_identity(cursor: pyodbc.Cursor, key_type: str, normalized_key_value: str) -> RealGateIdentity:
     number_u = _generate_unique_number_u(cursor)
     if key_type == "Phone":
+        storage_phone = _format_phone_for_storage(cursor, normalized_key_value)
         # Some real Gate MDB schemas mark Users.Number as required even for
         # phone-based identities. Mirror the normalized phone into Number so
         # inserts work on those deployments.
         return RealGateIdentity(
-            number=normalized_key_value,
-            phone=normalized_key_value,
+            number=storage_phone,
+            phone=storage_phone,
             number_u=number_u,
             number_mifare=None,
         )
@@ -359,7 +522,8 @@ def _normalize_contact_phone(value: str | None) -> str | None:
 def _normalize_optional_text(value: Any) -> str:
     if value is None:
         return ""
-    return "".join(str(value).upper().split())
+    compact = _VEHICLE_SEPARATORS_RE.sub("", str(value).upper())
+    return "".join(_VEHICLE_LOOKALIKE_MAP.get(ch, ch) for ch in compact)
 
 
 def _find_existing_user_ptr(cursor: pyodbc.Cursor, key_type: str, normalized_key_value: str) -> int | None:
@@ -445,6 +609,7 @@ def _to_access_datetime(value: datetime | None) -> datetime | None:
 def _insert_real_user(
     cursor: pyodbc.Cursor,
     *,
+    key_type_value: Any | None,
     key_type: str,
     normalized_key_value: str,
     phone_number: str | None,
@@ -452,7 +617,6 @@ def _insert_real_user(
     is_visitor: bool,
     expires_at: datetime | None,
 ) -> int:
-    key_type_value = _sample_key_type(cursor, key_type)
     defaults = _sample_user_defaults(cursor, key_type)
     last_name, first_name, father_name = _split_name(resident_name)
     identity = _build_identity(cursor, key_type, normalized_key_value)
@@ -493,6 +657,7 @@ def _reactivate_real_user(
     cursor: pyodbc.Cursor,
     *,
     user_ptr: int,
+    key_type_value: Any | None,
     key_type: str,
     normalized_key_value: str,
     phone_number: str | None,
@@ -516,11 +681,15 @@ def _reactivate_real_user(
         access_expires_at,
         is_visitor,
     ]
+    if key_type_value is not None:
+        assignments.append("[KeyType] = ?")
+        params.append(key_type_value)
     if key_type == "Phone":
+        storage_phone = _format_phone_for_storage(cursor, normalized_key_value)
         assignments.append("[Phone] = ?")
-        params.append(normalized_key_value)
+        params.append(storage_phone)
         assignments.append("[Number] = ?")
-        params.append(normalized_key_value)
+        params.append(storage_phone)
     else:
         assignments.append("[Number] = ?")
         params.append(normalized_key_value)
@@ -687,6 +856,7 @@ def _upsert_real_user(
     expires_at: datetime | None,
     access_point_ids: list[int],
 ) -> int:
+    key_type_value = _sample_key_type(cursor, key_type, access_point_ids)
     existing_user_ptr = _find_existing_user_ptr(cursor, key_type, normalized_key_value)
     if existing_user_ptr is not None:
         access_expires_at = _to_access_datetime(expires_at)
@@ -706,10 +876,13 @@ def _upsert_real_user(
                 existing_user_ptr,
             ),
         )
+        if key_type_value is not None:
+            cursor.execute("UPDATE Users SET KeyType = ? WHERE UserPtr = ?", (key_type_value, existing_user_ptr))
         if key_type == "Phone":
+            storage_phone = _format_phone_for_storage(cursor, normalized_key_value)
             cursor.execute(
                 "UPDATE Users SET Phone = ?, [Number] = ? WHERE UserPtr = ?",
-                (normalized_key_value, normalized_key_value, existing_user_ptr),
+                (storage_phone, storage_phone, existing_user_ptr),
             )
         else:
             cursor.execute("UPDATE Users SET [Number] = ? WHERE UserPtr = ?", (normalized_key_value, existing_user_ptr))
@@ -729,6 +902,7 @@ def _upsert_real_user(
         user_ptr = _reactivate_real_user(
             cursor,
             user_ptr=reusable_user_ptr,
+            key_type_value=key_type_value,
             key_type=key_type,
             normalized_key_value=normalized_key_value,
             phone_number=phone_number,
@@ -741,6 +915,7 @@ def _upsert_real_user(
 
     user_ptr = _insert_real_user(
         cursor,
+        key_type_value=key_type_value,
         key_type=key_type,
         normalized_key_value=normalized_key_value,
         phone_number=phone_number,
