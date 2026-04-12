@@ -180,6 +180,38 @@ def test_create_request_persists_contact_phone(client):
     assert body["phone_number"] == "+79991234567"
 
 
+def test_create_temporary_phone_request_passes_resident_name_to_gate(client):
+    headers, _ = _create_user_and_login(client)
+    captured: list[dict] = []
+    phone_number = f"+7999{str(uuid4().int)[:7]}"
+    original_add_temporary_key = gate_client.add_temporary_key
+
+    def _capture_gate_call(**kwargs):
+        captured.append(dict(kwargs))
+        return 4321
+
+    gate_client.add_temporary_key = _capture_gate_call
+    try:
+        response = client.post(
+            "/api/requests/",
+            headers=headers,
+            json={
+                "key_type": "Phone",
+                "key_value": phone_number,
+                "phone_number": phone_number,
+                "access_point_ids": [1],
+                "is_permanent": False,
+                "hours": 2,
+            },
+        )
+    finally:
+        gate_client.add_temporary_key = original_add_temporary_key
+
+    assert response.status_code == 200
+    assert captured
+    assert captured[0]["resident_name"].startswith("User ")
+
+
 def test_cleanup_broken_requests_cancels_invalid_gate_key_rows():
     login = f"cleanup_{uuid4().hex[:8]}"
     password = "demo123"

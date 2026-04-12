@@ -30,6 +30,7 @@ def _call(action: str, payload: dict) -> object:
             phone_number=str(payload["phone_number"]) if payload.get("phone_number") is not None else None,
             expires_at=_parse_datetime(str(payload["expires_at"])),
             access_point_ids=[int(item) for item in payload["access_point_ids"]],
+            resident_name=str(payload.get("resident_name") or "Resident"),
         )
     if action == "add_permanent_key":
         return gate_runtime.add_permanent_key(

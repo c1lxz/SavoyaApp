@@ -67,6 +67,7 @@ class GateClient:
         phone_number: str | None,
         expires_at: datetime,
         access_point_ids: list[int],
+        resident_name: str,
     ) -> int:
         if settings.gate_real_integration_enabled:
             result = self._run_bridge(
@@ -77,6 +78,7 @@ class GateClient:
                     "phone_number": phone_number,
                     "expires_at": expires_at.isoformat(),
                     "access_point_ids": access_point_ids,
+                    "resident_name": resident_name,
                 },
             )
             return int(result)

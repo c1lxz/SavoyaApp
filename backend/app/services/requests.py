@@ -193,6 +193,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
                 phone_number=payload.phone_number,
                 expires_at=expires_at,
                 access_point_ids=payload.access_point_ids,
+                resident_name=user.name or user.login or "Resident",
             )
     except Exception as exc:
         raise RequestIntegrationError(

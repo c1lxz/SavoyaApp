@@ -271,10 +271,12 @@ def test_add_temporary_phone_key_marks_gate_user_as_non_visitor(monkeypatch):
         phone_number="+79991234567",
         expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
         access_point_ids=[5, 6],
+        resident_name="Phone User",
     )
 
     assert key_id == 77
     assert observed["is_visitor"] is False
+    assert observed["resident_name"] == "Phone User"
 
 
 def test_find_existing_user_ptr_skips_zero_user_ptr():

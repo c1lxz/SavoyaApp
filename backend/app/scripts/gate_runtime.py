@@ -1127,6 +1127,7 @@ def add_temporary_key(
     phone_number: str | None,
     expires_at: datetime,
     access_point_ids: list[int],
+    resident_name: str = "Resident",
 ) -> int:
     validated_key_type = _validate_key_type(key_type)
     normalized_key_value = _normalize_key_value(validated_key_type, key_value)
@@ -1142,7 +1143,7 @@ def add_temporary_key(
             key_type=validated_key_type,
             normalized_key_value=normalized_key_value,
             phone_number=phone_number,
-            resident_name=normalized_key_value,
+            resident_name=resident_name,
             is_visitor=False if validated_key_type == "Phone" else True,
             expires_at=expires_at,
             access_point_ids=validated_points,
