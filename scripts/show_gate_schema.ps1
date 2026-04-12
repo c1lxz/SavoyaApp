@@ -125,11 +125,23 @@ def quote_ident(name: str) -> str:
 def describe_columns(cur, table_name: str):
     # Some real Gate MDB files expose malformed metadata through SQLColumns,
     # which makes pyodbc.cur.columns(...) crash during unicode decoding.
-    # Read the schema through a zero-row SELECT instead.
-    try:
-        cur.execute(f"SELECT TOP 0 * FROM {quote_ident(table_name)}")
-    except Exception as exc:
-        raise RuntimeError(f"Failed to read schema for table {table_name!r}: {exc}") from exc
+    # Some Access ODBC drivers also reject SELECT TOP 0, so prefer WHERE 1 = 0.
+    # If even that fails, fall back to a plain SELECT and inspect cursor.description.
+    probe_queries = [
+        f"SELECT * FROM {quote_ident(table_name)} WHERE 1 = 0",
+        f"SELECT * FROM {quote_ident(table_name)}",
+    ]
+    probe_errors = []
+    for query in probe_queries:
+        try:
+            cur.execute(query)
+            break
+        except Exception as exc:
+            probe_errors.append(f"{query!r}: {exc}")
+    else:
+        raise RuntimeError(
+            f"Failed to read schema for table {table_name!r}: " + " | ".join(probe_errors)
+        )
     description = cur.description or []
     columns = []
     for ordinal, column in enumerate(description, start=1):
