@@ -249,6 +249,9 @@ def _sample_phone_storage_value(cursor: pyodbc.Cursor) -> str | None:
                 """
                 SELECT TOP 50
                     u.Phone,
+                    u.Number,
+                    u.KeyType,
+                    u.Deleted,
                     r.Name
                 FROM (Users AS u
                     INNER JOIN AccessTable AS a ON a.UserPtr = u.UserPtr)
@@ -265,6 +268,8 @@ def _sample_phone_storage_value(cursor: pyodbc.Cursor) -> str | None:
         phone_candidates: list[str] = []
         for row in rows:
             if not _looks_like_phone_reader(getattr(row, "Name", None)):
+                continue
+            if not _is_phone_identity_row(row):
                 continue
             phone_value = row.Phone if hasattr(row, "Phone") else row[0]
             normalized = str(phone_value).strip()
@@ -462,17 +467,20 @@ def _sample_key_type(cursor: pyodbc.Cursor, key_type: str, access_point_ids: Ite
 
     try:
         if key_type == "Phone":
-            row = cursor.execute(
+            rows = cursor.execute(
                 """
-                SELECT TOP 1 KeyType
+                SELECT TOP 100 UserPtr, Phone, Number, KeyType, Deleted
                 FROM Users
-                WHERE (Deleted = 0 OR Deleted IS NULL)
-                  AND Phone IS NOT NULL
-                  AND Trim(Phone) <> ''
-                  AND KeyType IS NOT NULL
                 ORDER BY UserPtr DESC
                 """
-            ).fetchone()
+            ).fetchall()
+            for row in rows:
+                row_key_type = getattr(row, "KeyType", None)
+                if row_key_type is None:
+                    continue
+                if _is_phone_identity_row(row):
+                    return row_key_type
+            return None
         else:
             row = cursor.execute(
                 """
@@ -494,13 +502,7 @@ def _sample_key_type(cursor: pyodbc.Cursor, key_type: str, access_point_ids: Ite
 
 
 def _sample_user_defaults(cursor: pyodbc.Cursor, key_type: str) -> dict[str, Any]:
-    if key_type == "Phone":
-        where_sql = """
-            (Deleted = 0 OR Deleted IS NULL)
-            AND Phone IS NOT NULL
-            AND Trim(Phone) <> ''
-        """
-    else:
+    if key_type != "Phone":
         where_sql = """
             (Deleted = 0 OR Deleted IS NULL)
             AND Number IS NOT NULL
@@ -508,22 +510,44 @@ def _sample_user_defaults(cursor: pyodbc.Cursor, key_type: str) -> dict[str, Any
             AND (Phone IS NULL OR Trim(Phone) = '')
         """
 
-    row = cursor.execute(
-        f"""
-        SELECT TOP 1
-            GroupPtr,
-            IdleNotLimited,
-            NoFacility,
-            Status,
-            BgPtr,
-            SendSms,
-            SendMail,
-            UniPassMode
-        FROM Users
-        WHERE {where_sql}
-        ORDER BY UserPtr DESC
-        """
-    ).fetchone()
+        row = cursor.execute(
+            f"""
+            SELECT TOP 1
+                GroupPtr,
+                IdleNotLimited,
+                NoFacility,
+                Status,
+                BgPtr,
+                SendSms,
+                SendMail,
+                UniPassMode
+            FROM Users
+            WHERE {where_sql}
+            ORDER BY UserPtr DESC
+            """
+        ).fetchone()
+    else:
+        rows = cursor.execute(
+            """
+            SELECT TOP 100
+                GroupPtr,
+                IdleNotLimited,
+                NoFacility,
+                Status,
+                BgPtr,
+                SendSms,
+                SendMail,
+                UniPassMode,
+                Phone,
+                Number,
+                KeyType,
+                Deleted
+            FROM Users
+            ORDER BY UserPtr DESC
+            """
+        ).fetchall()
+        row = next((item for item in rows if _is_phone_identity_row(item)), None)
+
     if row is None:
         return {}
     return {
@@ -581,6 +605,19 @@ def _looks_like_phone_identity_number(value: Any) -> bool:
     if len(digits) < 10:
         return False
     return not any(ch.isalpha() for ch in raw)
+
+
+def _is_phone_identity_row(row: Any, *, phone_key_type_value: Any | None = None) -> bool:
+    if bool(getattr(row, "Deleted", False)):
+        return False
+    if not _normalize_optional_phone(getattr(row, "Phone", None)):
+        return False
+
+    row_key_type = getattr(row, "KeyType", None)
+    if phone_key_type_value is not None and row_key_type == phone_key_type_value:
+        return True
+
+    return _looks_like_phone_identity_number(getattr(row, "Number", None))
 
 
 def _is_phone_user_match(row: Any, *, normalized_key_value: str, phone_key_type_value: Any | None) -> bool:
@@ -852,9 +889,9 @@ def _permission_template_for_reader(
     key_type: str | None = None,
 ) -> dict[str, Any]:
     if key_type == "Phone":
-        phone_row = cursor.execute(
+        phone_rows = cursor.execute(
             """
-            SELECT TOP 1
+            SELECT TOP 100
                 a.InnerNum,
                 a.Always,
                 a.Schedule1,
@@ -870,19 +907,36 @@ def _permission_template_for_reader(
                 a.CardType,
                 a.CardCode,
                 a.NoEntry,
-                a.NoExit
+                a.NoExit,
+                u.Phone,
+                u.Number,
+                u.KeyType,
+                u.Deleted
             FROM AccessTable AS a
             LEFT JOIN Users AS u ON u.UserPtr = a.UserPtr
             WHERE a.RdrPtr = ?
-              AND (u.Deleted = 0 OR u.Deleted IS NULL)
-              AND u.Phone IS NOT NULL
-              AND Trim(u.Phone) <> ''
             ORDER BY a.UserPtr DESC
             """,
             (access_point_id,),
-        ).fetchone()
-        if phone_row is not None:
-            return _permission_template_from_row(phone_row)
+        ).fetchall()
+        phone_key_type_value = _sample_key_type(cursor, "Phone", [access_point_id])
+        matching_rows = [
+            row
+            for row in phone_rows
+            if _is_phone_identity_row(row, phone_key_type_value=phone_key_type_value)
+        ]
+        preferred_row = next(
+            (
+                row
+                for row in matching_rows
+                if getattr(row, "CardType", None) is not None or str(getattr(row, "CardCode", "") or "").strip()
+            ),
+            None,
+        )
+        if preferred_row is not None:
+            return _permission_template_from_row(preferred_row)
+        if matching_rows:
+            return _permission_template_from_row(matching_rows[0])
 
     row = cursor.execute(
         """

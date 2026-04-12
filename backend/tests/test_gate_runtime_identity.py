@@ -98,6 +98,27 @@ class _AccessPermissionCursor:
         raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
 
 
+class _TemplateSamplingCursor:
+    def __init__(self, access_rows=None, user_rows=None) -> None:
+        self.access_rows = list(access_rows or [])
+        self.user_rows = list(user_rows or [])
+        self._last_sql = ""
+
+    def execute(self, sql: str, params=None):
+        self._last_sql = sql
+        return self
+
+    def fetchall(self):
+        if "AccessTable AS a" in self._last_sql:
+            return list(self.access_rows)
+        if "SELECT TOP 100 UserPtr, Phone, Number, KeyType, Deleted" in self._last_sql:
+            return list(self.user_rows)
+        raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
+
+    def fetchone(self):
+        raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
+
+
 @contextmanager
 def _fake_transaction_cursor(cursor):
     yield None, cursor
@@ -252,6 +273,88 @@ def test_ensure_access_permissions_updates_existing_rows(monkeypatch):
         "UPDATE AccessTable" in sql and params[-2:] == (42, 70)
         for sql, params in cursor.commands
     )
+
+
+def test_permission_template_for_reader_skips_vehicle_rows_with_contact_phone(monkeypatch):
+    cursor = _TemplateSamplingCursor(
+        access_rows=[
+            SimpleNamespace(
+                InnerNum=11,
+                Always=True,
+                Schedule1=False,
+                Schedule2=False,
+                Schedule3=False,
+                Schedule4=False,
+                Schedule5=False,
+                Schedule6=False,
+                Schedule7=False,
+                RecordState=0,
+                APB=False,
+                Inside=False,
+                CardType=3,
+                CardCode="CAR",
+                NoEntry=False,
+                NoExit=False,
+                Phone="89991234567",
+                Number="A182DC178",
+                KeyType=3,
+                Deleted=False,
+            ),
+            SimpleNamespace(
+                InnerNum=22,
+                Always=True,
+                Schedule1=False,
+                Schedule2=False,
+                Schedule3=False,
+                Schedule4=False,
+                Schedule5=False,
+                Schedule6=False,
+                Schedule7=False,
+                RecordState=0,
+                APB=False,
+                Inside=False,
+                CardType=9,
+                CardCode="PHONE",
+                NoEntry=False,
+                NoExit=False,
+                Phone="89991234567",
+                Number="009991234567",
+                KeyType=6,
+                Deleted=False,
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *_args, **_kwargs: 6)
+
+    template = gate_runtime._permission_template_for_reader(cursor, 70, key_type="Phone")
+
+    assert template["InnerNum"] == 22
+    assert template["CardType"] == 9
+    assert template["CardCode"] == "PHONE"
+
+
+def test_sample_phone_storage_value_skips_vehicle_rows_with_contact_phone():
+    cursor = _TemplateSamplingCursor(
+        access_rows=[
+            SimpleNamespace(
+                Phone="+79991234567",
+                Number="A182DC178",
+                KeyType=3,
+                Deleted=False,
+                Name="GSM Entry",
+            ),
+            SimpleNamespace(
+                Phone="89991234567",
+                Number="009991234567",
+                KeyType=6,
+                Deleted=False,
+                Name="GSM Entry",
+            ),
+        ]
+    )
+
+    assert gate_runtime._sample_phone_storage_value(cursor) == "89991234567"
 
 
 def test_add_temporary_phone_key_marks_gate_user_as_non_visitor(monkeypatch):
