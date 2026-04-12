@@ -787,12 +787,20 @@ def _to_access_datetime(value: datetime | None) -> datetime | None:
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
-def _split_access_expiry(value: datetime | None) -> tuple[datetime | None, datetime | None]:
+def _split_access_expiry(
+    value: datetime | None,
+    *,
+    key_type: str | None = None,
+) -> tuple[datetime | None, datetime | None]:
     access_value = _to_access_datetime(value)
     if access_value is None:
         return None, None
     expiry_date = datetime.combine(access_value.date(), time.min)
-    expiry_time = datetime.combine(date(1899, 12, 30), access_value.time().replace(microsecond=0))
+    if key_type == "Phone":
+        expiry_time_value = time.min
+    else:
+        expiry_time_value = access_value.time().replace(microsecond=0)
+    expiry_time = datetime.combine(date(1899, 12, 30), expiry_time_value)
     return expiry_date, expiry_time
 
 
@@ -810,7 +818,7 @@ def _insert_real_user(
     defaults = _sample_user_defaults(cursor, key_type)
     last_name, first_name, father_name = _split_name(resident_name)
     identity = _build_identity(cursor, key_type, normalized_key_value)
-    expiry_date, expiry_time = _split_access_expiry(expires_at)
+    expiry_date, expiry_time = _split_access_expiry(expires_at, key_type=key_type)
 
     columns: list[str] = []
     params: list[Any] = []
@@ -858,7 +866,7 @@ def _reactivate_real_user(
     is_visitor: bool,
     expires_at: datetime | None,
 ) -> int:
-    expiry_date, expiry_time = _split_access_expiry(expires_at)
+    expiry_date, expiry_time = _split_access_expiry(expires_at, key_type=key_type)
     last_name, first_name, father_name = _split_name(resident_name)
     assignments = [
         "[Deleted] = ?",
@@ -1233,7 +1241,7 @@ def _upsert_real_user(
         key_type_value=key_type_value,
     )
     if existing_user_ptr is not None:
-        expiry_date, expiry_time = _split_access_expiry(expires_at)
+        expiry_date, expiry_time = _split_access_expiry(expires_at, key_type=key_type)
         last_name, first_name, father_name = _split_name(resident_name)
         cursor.execute(
             """
@@ -1430,7 +1438,12 @@ def _combine_expiry(expiry_date: Any, expiry_time: Any) -> datetime | None:
         return None
 
     date_part = _extract_date(expiry_date) or _extract_date(expiry_time)
-    time_part = _extract_time(expiry_time) or _extract_time(expiry_date) or time(23, 59, 59)
+    expiry_time_date = _extract_date(expiry_time)
+    raw_time_part = _extract_time(expiry_time) or _extract_time(expiry_date)
+    if raw_time_part == time.min and expiry_time_date == date(1899, 12, 30) and date_part is not None:
+        time_part = time(23, 59, 59)
+    else:
+        time_part = raw_time_part or time(23, 59, 59)
     if date_part is None:
         return None
     return datetime.combine(date_part, time_part)

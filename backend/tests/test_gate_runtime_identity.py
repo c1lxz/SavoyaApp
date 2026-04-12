@@ -193,11 +193,22 @@ def test_build_identity_for_phone_populates_required_number(monkeypatch):
 
 def test_split_access_expiry_separates_date_and_time():
     expiry_date, expiry_time = gate_runtime._split_access_expiry(
-        datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc)
+        datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc),
+        key_type="VehicleNumber",
     )
 
     assert expiry_date == datetime(2026, 4, 13, 0, 0, 0)
     assert expiry_time == datetime(1899, 12, 30, 7, 43, 29)
+
+
+def test_split_access_expiry_for_phone_uses_date_only_format():
+    expiry_date, expiry_time = gate_runtime._split_access_expiry(
+        datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc),
+        key_type="Phone",
+    )
+
+    assert expiry_date == datetime(2026, 4, 13, 0, 0, 0)
+    assert expiry_time == datetime(1899, 12, 30, 0, 0, 0)
 
 
 def test_build_identity_for_phone_matches_sample_storage_format(monkeypatch):
@@ -280,7 +291,7 @@ def test_insert_real_user_splits_expiry_date_and_time(monkeypatch):
     gate_runtime._insert_real_user(
         cursor,
         key_type_value=6,
-        key_type="Phone",
+        key_type="VehicleNumber",
         normalized_key_value="009991234567",
         phone_number="+79991234567",
         resident_name="Phone User",
@@ -294,6 +305,50 @@ def test_insert_real_user_splits_expiry_date_and_time(monkeypatch):
         and datetime(1899, 12, 30, 7, 43, 29) in params
         for sql, params in cursor.commands
     )
+
+
+def test_insert_real_phone_user_stores_date_only_expiry(monkeypatch):
+    cursor = _FakeCursor()
+
+    monkeypatch.setattr(gate_runtime, "_sample_user_defaults", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        gate_runtime,
+        "_build_identity",
+        lambda *args, **kwargs: gate_runtime.RealGateIdentity(
+            number="009991234567",
+            phone="89991234567\n",
+            number_u="009991234567",
+            number_mifare=None,
+        ),
+    )
+    monkeypatch.setattr(gate_runtime, "_resolve_inserted_user_ptr", lambda *args, **kwargs: 55)
+
+    gate_runtime._insert_real_user(
+        cursor,
+        key_type_value=6,
+        key_type="Phone",
+        normalized_key_value="009991234567",
+        phone_number="+79991234567",
+        resident_name="Phone User",
+        is_visitor=False,
+        expires_at=datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc),
+    )
+
+    assert any(
+        sql.startswith("INSERT INTO Users")
+        and datetime(2026, 4, 13, 0, 0, 0) in params
+        and datetime(1899, 12, 30, 0, 0, 0) in params
+        for sql, params in cursor.commands
+    )
+
+
+def test_combine_expiry_treats_sentinel_midnight_as_end_of_day():
+    expiry = gate_runtime._combine_expiry(
+        datetime(2026, 4, 13, 0, 0, 0),
+        datetime(1899, 12, 30, 0, 0, 0),
+    )
+
+    assert expiry == datetime(2026, 4, 13, 23, 59, 59)
 
 
 def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
