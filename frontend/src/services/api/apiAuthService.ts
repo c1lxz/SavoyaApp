@@ -18,6 +18,8 @@ type BackendUser = {
   is_admin?: boolean;
 };
 
+type ApiUser = BackendUser | User;
+
 type BackendTokenResponse = {
   access_token: string;
   token_type: string;
@@ -34,6 +36,21 @@ const mapBackendUser = (user: BackendUser): User => ({
   phoneNumber: user.phone ?? '',
   isAdmin: Boolean(user.is_admin),
 });
+
+const mapApiUser = (user: ApiUser): User => {
+  if ('isAdmin' in user) {
+    return {
+      id: String(user.id),
+      login: user.login ?? '',
+      fullName: user.fullName ?? '',
+      plotNumber: user.plotNumber ?? '',
+      phoneNumber: user.phoneNumber ?? '',
+      isAdmin: Boolean(user.isAdmin),
+    };
+  }
+
+  return mapBackendUser(user);
+};
 
 export const apiAuthService = {
   async login(login: string, password: string): Promise<AuthResult> {
@@ -54,8 +71,15 @@ export const apiAuthService = {
     }
 
     if (result.success && result.access_token && result.user) {
+      const mappedUser = mapApiUser(result.user);
       await setAccessToken(result.access_token);
-      currentUser = result.user;
+      currentUser = mappedUser;
+      return {
+        success: result.success,
+        user: mappedUser,
+        error: result.error,
+        requiresProfileCompletion: mappedUser.isAdmin ? false : Boolean(result.requiresProfileCompletion),
+      };
     }
 
     return {
@@ -80,9 +104,10 @@ export const apiAuthService = {
     }
 
     try {
-      const actual = await apiRequest<User>('/user/me');
-      currentUser = actual;
-      return actual;
+      const actual = await apiRequest<ApiUser>('/user/me');
+      const mappedUser = mapApiUser(actual);
+      currentUser = mappedUser;
+      return mappedUser;
     } catch {
       await setAccessToken(null);
       currentUser = null;
@@ -90,11 +115,12 @@ export const apiAuthService = {
     }
   },
   async updateProfile(fullName: string, plotNumber?: string): Promise<User> {
-    const updated = await apiRequest<User>('/user/profile', {
+    const updated = await apiRequest<ApiUser>('/user/profile', {
       method: 'PUT',
       body: { fullName, plotNumber },
     });
-    currentUser = updated;
-    return updated;
+    const mappedUser = mapApiUser(updated);
+    currentUser = mappedUser;
+    return mappedUser;
   },
 };

@@ -229,6 +229,33 @@ async def _ensure_user(login: str, password: str, *, full_name: str, plot_number
         await session.commit()
 
 
+async def _ensure_admin_user(login: str, password: str, *, full_name: str) -> None:
+    async with SessionLocal() as session:
+        query = await session.execute(select(User).where(User.login == login))
+        user = query.scalar_one_or_none()
+        if user is None:
+            session.add(
+                User(
+                    phone=f"+7999{str(uuid4().int)[:7]}",
+                    login=login,
+                    password_hash=hash_password(password),
+                    name=full_name,
+                    apartment="ADMIN",
+                    plot_number="ADMIN",
+                    is_admin=True,
+                    is_active=True,
+                )
+            )
+        else:
+            user.password_hash = hash_password(password)
+            user.name = full_name
+            user.apartment = "ADMIN"
+            user.plot_number = "ADMIN"
+            user.is_admin = True
+            user.is_active = True
+        await session.commit()
+
+
 def test_compat_login_requires_profile_completion_when_full_name_missing(client):
     login = f'profile_{uuid4().hex[:8]}'
     password = 'demo123'
@@ -240,6 +267,24 @@ def test_compat_login_requires_profile_completion_when_full_name_missing(client)
     assert data['success'] is True
     assert data['requiresProfileCompletion'] is True
     assert data['user']['fullName'] == ''
+
+
+def test_compat_admin_login_and_me_keep_admin_flag(client):
+    login = f"admin_{uuid4().hex[:8]}"
+    password = "demo123"
+    asyncio.run(_ensure_admin_user(login, password, full_name="Admin User"))
+
+    response = client.post("/auth/login", json={"login": login, "password": password})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["user"]["isAdmin"] is True
+    assert body["requiresProfileCompletion"] is False
+
+    token = body["access_token"]
+    me = client.get("/user/me", headers={"Authorization": f"Bearer {token}"})
+    assert me.status_code == 200
+    assert me.json()["isAdmin"] is True
 
 
 def test_compat_update_profile_persists_full_name(client):

@@ -832,6 +832,14 @@ def _to_access_datetime(value: datetime | None) -> datetime | None:
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _normalize_expiry_datetime(value: datetime) -> datetime:
+    if not isinstance(value, datetime):
+        raise ValueError("expires_at must be a datetime instance")
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _split_access_expiry(
     value: datetime | None,
     *,
@@ -1436,9 +1444,8 @@ def add_temporary_key(
     validated_key_type = _validate_key_type(key_type)
     normalized_key_value = _normalize_key_value(validated_key_type, key_value)
     validated_points = _validate_access_point_ids(access_point_ids)
-    if not isinstance(expires_at, datetime):
-        raise ValueError("expires_at must be a datetime instance")
-    if expires_at <= datetime.now(timezone.utc):
+    normalized_expires_at = _normalize_expiry_datetime(expires_at)
+    if normalized_expires_at <= datetime.now(timezone.utc):
         raise ValueError("expires_at must be in the future")
 
     with _transaction_cursor() as (_, cursor):
@@ -1449,7 +1456,7 @@ def add_temporary_key(
             phone_number=phone_number,
             resident_name=resident_name,
             is_visitor=False if validated_key_type == "Phone" else True,
-            expires_at=expires_at,
+            expires_at=normalized_expires_at,
             access_point_ids=validated_points,
         )
 

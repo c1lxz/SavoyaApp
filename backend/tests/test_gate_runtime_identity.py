@@ -758,6 +758,31 @@ def test_add_temporary_phone_key_marks_gate_user_as_non_visitor(monkeypatch):
     assert observed["resident_name"] == "Phone User"
 
 
+def test_add_temporary_key_normalizes_naive_expiry_to_utc(monkeypatch):
+    observed: dict[str, object] = {}
+    cursor = _FakeCursor()
+
+    monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(cursor))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_upsert_real_user",
+        lambda *args, **kwargs: observed.update(kwargs) or 88,
+    )
+
+    key_id = gate_runtime.add_temporary_key(
+        key_type="Phone",
+        key_value="+79991234567",
+        phone_number="+79991234567",
+        expires_at=datetime.now() + timedelta(hours=1),
+        access_point_ids=[5, 6],
+        resident_name="Phone User",
+    )
+
+    assert key_id == 88
+    assert observed["expires_at"].tzinfo == timezone.utc
+    assert observed["is_visitor"] is False
+
+
 def test_find_existing_user_ptr_skips_zero_user_ptr():
     cursor = _RowCursor(
         [
