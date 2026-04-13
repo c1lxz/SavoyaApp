@@ -369,12 +369,30 @@ def test_combine_expiry_treats_sentinel_midnight_as_end_of_day():
 
 def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
     cursor = _FakeCursor()
+    observed: dict[str, object] = {}
 
     monkeypatch.setenv("GATE_PHONE_WRITE_FORMAT", "local_10")
     monkeypatch.delenv("GATE_PHONE_STORAGE_FORMAT", raising=False)
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 6)
     monkeypatch.setattr(gate_runtime, "_find_existing_user_ptr", lambda *args, **kwargs: 42)
     monkeypatch.setattr(gate_runtime, "_find_reusable_deleted_user_ptr", lambda *args, **kwargs: None)
-    monkeypatch.setattr(gate_runtime, "_ensure_access_permissions", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_ensure_access_permissions",
+        lambda _cursor, user_ptr, access_point_ids, **kwargs: observed.setdefault(
+            "ensure",
+            {
+                "user_ptr": user_ptr,
+                "access_point_ids": list(access_point_ids),
+                **kwargs,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_prune_access_permissions",
+        lambda _cursor, user_ptr, access_point_ids: observed.setdefault("prune", (user_ptr, list(access_point_ids))),
+    )
 
     user_ptr = gate_runtime._upsert_real_user(
         cursor,
@@ -384,10 +402,14 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
         resident_name="009991234567",
         is_visitor=True,
         expires_at=None,
-        access_point_ids=[15],
+        access_point_ids=[5, 6],
     )
 
     assert user_ptr == 42
+    assert any(
+        sql == "UPDATE Users SET KeyType = ? WHERE UserPtr = ?" and params == (6, 42)
+        for sql, params in cursor.commands
+    )
     assert any(
         sql == "UPDATE Users SET Phone = ?, [Number] = ?, [NumberU] = ? WHERE UserPtr = ?"
         and params == ("9991234567", "009991234567", "009991234567", 42)
@@ -404,6 +426,10 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
         and params == (False, False, None, None, True, 0, None, 42)
         for sql, params in cursor.commands
     )
+    assert observed["ensure"]["user_ptr"] == 42
+    assert observed["ensure"]["access_point_ids"] == [5, 6]
+    assert observed["ensure"]["key_type"] == "Phone"
+    assert observed["prune"] == (42, [5, 6])
 
 
 def test_apply_user_defaults_for_existing_phone_user_uses_other_phone_template():
