@@ -277,7 +277,12 @@ def looks_like_phone_identity_number(value) -> bool:
 
 
 def is_phone_identity_user(user) -> bool:
-    if not normalize_phone_key(getattr(user, "Phone", None)):
+    values = [
+        normalize_phone_key(getattr(user, "Phone", None)),
+        normalize_phone_key(getattr(user, "Number", None)),
+        normalize_phone_key(getattr(user, "NumberU", None)),
+    ]
+    if not any(values):
         return False
     return looks_like_phone_identity_number(getattr(user, "Number", None))
 
@@ -310,7 +315,9 @@ def row_matches_needle(user, needle: str) -> bool:
     if digits and any(digits in normalize_digits(value) for value in direct_fields):
         return True
     if phone_digits and (
-        phone_digits in normalize_phone_key(user.Phone) or phone_digits in normalize_phone_key(user.Number)
+        phone_digits in normalize_phone_key(user.Phone)
+        or phone_digits in normalize_phone_key(user.Number)
+        or phone_digits in normalize_phone_key(user.NumberU)
     ):
         return True
     if text and any(text in normalize_text(value) for value in direct_fields):

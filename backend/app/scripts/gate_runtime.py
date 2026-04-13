@@ -131,6 +131,13 @@ def _resolve_gate_credentials() -> tuple[str, str]:
 
 
 def _pick_driver(preferred: str | None) -> str:
+    candidates = _driver_candidates(preferred)
+    if candidates:
+        return candidates[0]
+    raise RuntimeError("No compatible MDB ODBC driver was found.")
+
+
+def _driver_candidates(preferred: str | None) -> list[str]:
     candidates = [
         preferred,
         "Microsoft Access Driver (*.mdb, *.accdb)",
@@ -139,24 +146,41 @@ def _pick_driver(preferred: str | None) -> str:
         "Microsoft Access-Treiber (*.mdb)",
     ]
     installed = {name.lower(): name for name in pyodbc.drivers()}
+    resolved: list[str] = []
+    seen: set[str] = set()
     for candidate in candidates:
-        if candidate and candidate.lower() in installed:
-            return installed[candidate.lower()]
-    if preferred:
-        return preferred
-    raise RuntimeError("No compatible MDB ODBC driver was found.")
+        if not candidate:
+            continue
+        actual = installed.get(candidate.lower(), candidate)
+        key = actual.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved.append(actual)
+    return resolved
 
 
-def _build_connection_string(mdb_path: Path, systemdb_path: Path) -> str:
+def _build_connection_string(mdb_path: Path, systemdb_path: Path, *, driver: str | None = None) -> str:
     uid, pwd = _resolve_gate_credentials()
+    resolved_driver = driver or _pick_driver(_env("GATE_ODBC_DRIVER", default=_DEFAULT_ODBC_DRIVER))
+    return f"DRIVER={{{resolved_driver}}};DBQ={mdb_path};SystemDB={systemdb_path};UID={uid};PWD={pwd}"
+
+
+def _connect_to_gate_mdb(mdb_path: Path, systemdb_path: Path) -> pyodbc.Connection:
     preferred_driver = _env("GATE_ODBC_DRIVER", default=_DEFAULT_ODBC_DRIVER)
-    driver = _pick_driver(preferred_driver)
-    return f"DRIVER={{{driver}}};DBQ={mdb_path};SystemDB={systemdb_path};UID={uid};PWD={pwd}"
+    errors: list[str] = []
+    for driver in _driver_candidates(preferred_driver):
+        try:
+            return pyodbc.connect(_build_connection_string(mdb_path, systemdb_path, driver=driver))
+        except pyodbc.Error as exc:
+            errors.append(f"{driver}: {exc}")
+    detail = "\n".join(errors) if errors else "No compatible MDB ODBC driver was found."
+    raise RuntimeError(f"Failed to connect to Gate MDB with available ODBC drivers:\n{detail}")
 
 
 def get_connection() -> pyodbc.Connection:
     mdb_path, systemdb_path = _resolve_gate_paths()
-    return pyodbc.connect(_build_connection_string(mdb_path, systemdb_path))
+    return _connect_to_gate_mdb(mdb_path, systemdb_path)
 
 
 @contextmanager
@@ -185,7 +209,7 @@ def _readonly_cursor():
     try:
         shutil.copy2(mdb_path, temp_mdb)
         shutil.copy2(systemdb_path, temp_systemdb)
-        conn = pyodbc.connect(_build_connection_string(temp_mdb, temp_systemdb))
+        conn = _connect_to_gate_mdb(temp_mdb, temp_systemdb)
         cursor = conn.cursor()
         try:
             _ensure_required_tables(cursor)
@@ -712,10 +736,23 @@ def _looks_like_phone_identity_number(value: Any) -> bool:
     return not any(ch.isalpha() for ch in raw)
 
 
+def _phone_identity_values(row: Any) -> set[str]:
+    values: set[str] = set()
+    for field_name in ("Phone", "Number", "NumberU"):
+        normalized = _normalize_optional_phone(getattr(row, field_name, None))
+        if normalized:
+            values.add(normalized)
+    return values
+
+
+def _phone_identity_matches(row: Any, normalized_key_value: str) -> bool:
+    return normalized_key_value in _phone_identity_values(row)
+
+
 def _is_phone_identity_row(row: Any, *, phone_key_type_value: Any | None = None) -> bool:
     if bool(getattr(row, "Deleted", False)):
         return False
-    if not _normalize_optional_phone(getattr(row, "Phone", None)):
+    if not _phone_identity_values(row):
         return False
 
     row_key_type = getattr(row, "KeyType", None)
@@ -726,7 +763,7 @@ def _is_phone_identity_row(row: Any, *, phone_key_type_value: Any | None = None)
 
 
 def _is_phone_user_match(row: Any, *, normalized_key_value: str, phone_key_type_value: Any | None) -> bool:
-    if _normalize_optional_phone(getattr(row, "Phone", None)) != normalized_key_value:
+    if not _phone_identity_matches(row, normalized_key_value):
         return False
 
     row_key_type = getattr(row, "KeyType", None)
@@ -745,7 +782,7 @@ def _find_existing_user_ptr(
 ) -> int | None:
     rows = cursor.execute(
         """
-        SELECT UserPtr, Phone, Number, KeyType, Deleted
+        SELECT UserPtr, Phone, Number, NumberU, KeyType, Deleted
         FROM Users
         ORDER BY UserPtr DESC
         """
@@ -773,7 +810,7 @@ def _find_reusable_deleted_user_ptr(
 ) -> int | None:
     rows = cursor.execute(
         """
-        SELECT UserPtr, Phone, Number, KeyType, Deleted
+        SELECT UserPtr, Phone, Number, NumberU, KeyType, Deleted
         FROM Users
         ORDER BY UserPtr DESC
         """
@@ -803,7 +840,7 @@ def _cleanup_conflicting_phone_rows(
         return
     rows = cursor.execute(
         """
-        SELECT UserPtr, Phone, Number, KeyType, Deleted
+        SELECT UserPtr, Phone, Number, NumberU, KeyType, Deleted
         FROM Users
         ORDER BY UserPtr DESC
         """
@@ -814,17 +851,36 @@ def _cleanup_conflicting_phone_rows(
         row_user_ptr = int(getattr(row, "UserPtr", 0) or 0)
         if row_user_ptr <= 0 or row_user_ptr == keep_user_ptr:
             continue
-        if _normalize_optional_phone(getattr(row, "Phone", None)) != normalized_key_value:
+        if not _phone_identity_matches(row, normalized_key_value):
             continue
         if _is_phone_identity_row(row, phone_key_type_value=phone_key_type_value):
+            scrub_token = uuid.uuid4().hex[:10].upper()
             cursor.execute("DELETE FROM AccessTable WHERE UserPtr = ?", (row_user_ptr,))
             cursor.execute(
                 """
                 UPDATE Users
-                SET Deleted = ?, UseExpiry = ?, ExpiryDate = ?, ExpiryTime = ?
+                SET
+                    Deleted = ?,
+                    UseExpiry = ?,
+                    ExpiryDate = ?,
+                    ExpiryTime = ?,
+                    LockDate = ?,
+                    [Phone] = ?,
+                    [Number] = ?,
+                    [NumberU] = ?
                 WHERE UserPtr = ?
                 """,
-                (True, False, None, None, row_user_ptr),
+                (
+                    True,
+                    False,
+                    None,
+                    None,
+                    None,
+                    None,
+                    f"PURGED-{row_user_ptr}-{scrub_token}",
+                    f"PURGED-{scrub_token}",
+                    row_user_ptr,
+                ),
             )
             continue
         cursor.execute("UPDATE Users SET Phone = ? WHERE UserPtr = ?", (None, row_user_ptr))
@@ -1740,26 +1796,33 @@ def _resolve_user_ptr(cursor: pyodbc.Cursor, external_key_id: str | None) -> int
         return None
 
     if value.isdigit():
-        cursor.execute(
-            """
-            SELECT TOP 1 UserPtr
-            FROM Users
-            WHERE UserPtr = ?
-              AND (Deleted = 0 OR Deleted IS NULL)
-            """,
-            (int(value),),
-        )
-        row = cursor.fetchone()
-        if row is not None:
-            resolved_user_ptr = int(row.UserPtr)
-            if resolved_user_ptr > 0:
-                return resolved_user_ptr
+        candidate_user_ptr = int(value)
+        if candidate_user_ptr <= 2_147_483_647:
+            try:
+                cursor.execute(
+                    """
+                    SELECT TOP 1 UserPtr
+                    FROM Users
+                    WHERE UserPtr = ?
+                      AND (Deleted = 0 OR Deleted IS NULL)
+                    """,
+                    (candidate_user_ptr,),
+                )
+                row = cursor.fetchone()
+            except pyodbc.Error:
+                row = None
+            if row is not None:
+                resolved_user_ptr = int(row.UserPtr)
+                if resolved_user_ptr > 0:
+                    return resolved_user_ptr
 
-    normalized_phone = "".join(ch for ch in value if ch.isdigit())
+    normalized_phone = ""
+    if _looks_like_phone_identity_number(value):
+        normalized_phone = _normalize_phone(value)
     normalized_text = "".join(value.upper().split())
     rows = cursor.execute(
         """
-        SELECT UserPtr, Phone, Number, Deleted
+        SELECT UserPtr, Phone, Number, NumberU, Deleted
         FROM Users
         ORDER BY UserPtr DESC
         """
@@ -1769,9 +1832,16 @@ def _resolve_user_ptr(cursor: pyodbc.Cursor, external_key_id: str | None) -> int
             continue
         if int(row.UserPtr) <= 0:
             continue
-        if normalized_phone and _normalize_optional_phone(row.Phone) == normalized_phone:
+        if normalized_phone and (
+            _normalize_optional_phone(row.Phone) == normalized_phone
+            or _normalize_optional_phone(row.Number) == normalized_phone
+            or _normalize_optional_phone(getattr(row, "NumberU", None)) == normalized_phone
+        ):
             return int(row.UserPtr)
-        if normalized_text and _normalize_optional_text(row.Number) == normalized_text:
+        if normalized_text and (
+            _normalize_optional_text(row.Number) == normalized_text
+            or _normalize_optional_text(getattr(row, "NumberU", None)) == normalized_text
+        ):
             return int(row.UserPtr)
     return None
 

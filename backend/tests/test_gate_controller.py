@@ -45,7 +45,7 @@ def test_gateserv_transport_defaults_to_local_1917(monkeypatch) -> None:
     assert controller.config.transport == "gateserv_tcp"
     assert controller.config.host == "127.0.0.1"
     assert controller.config.port == 1917
-    assert controller.config.payload_format == "frame_hex"
+    assert controller.config.payload_format == "gate_monitor_json"
 
 
 def test_dry_run_returns_packet_diagnostics(monkeypatch) -> None:
@@ -107,6 +107,46 @@ def test_controller_tcp_raw_bytes_send_uses_big_endian_packet(monkeypatch) -> No
     assert result.details is not None
     assert result.details["wire"]["mode"] == "raw_bytes"
     assert result.details["wire"]["hex"] == "02026073"
+
+
+def test_gateserv_json_send_uses_gate_monitor_reader_command(monkeypatch) -> None:
+    _clear_gate_env(monkeypatch)
+    monkeypatch.setenv("GATE_WIEGAND_TRANSPORT", "gateserv_tcp")
+    monkeypatch.setenv("GATE_GATESERV_PAYLOAD_FORMAT", "json")
+    monkeypatch.setenv("GATE_GATESERV_APPEND_NEWLINE", "true")
+
+    captured: dict[str, object] = {}
+
+    class _DummyConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def sendall(self, data: bytes) -> None:
+            captured["wire_data"] = data
+
+    def _fake_create_connection(address, timeout):
+        captured["address"] = address
+        captured["timeout"] = timeout
+        return _DummyConnection()
+
+    monkeypatch.setattr("backend.app.services.gate_controller.socket.create_connection", _fake_create_connection)
+
+    result = GateController.from_env().open_gate(
+        gate_id="17",
+        access_point_id=17,
+        facility_code=1,
+        card_number=12345,
+    )
+
+    assert result.success is True
+    assert captured["address"] == ("127.0.0.1", 1917)
+    assert captured["wire_data"] == b'{"command":"Open","readerId":17}\n'
+    assert result.details is not None
+    assert result.details["wire"]["mode"] == "gate_monitor_json"
+    assert result.details["wire"]["payload"] == {"command": "Open", "readerId": 17}
 
 
 def test_connectivity_check_uses_connect_ex(monkeypatch) -> None:

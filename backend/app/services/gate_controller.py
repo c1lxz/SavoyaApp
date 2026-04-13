@@ -138,9 +138,9 @@ class GateController:
                 _env(
                     "GATE_GATESERV_PAYLOAD_FORMAT",
                     "GATE_WIEGAND_GATESERV_PAYLOAD_FORMAT",
-                    default="frame_hex",
+                    default="gate_monitor_json",
                 )
-                or "frame_hex"
+                or "gate_monitor_json"
             ).strip().lower()
             return cls(
                 GateTransportConfig(
@@ -157,8 +157,8 @@ class GateController:
                     ),
                     encoding=(_env("GATE_GATESERV_ENCODING", "GATE_WIEGAND_GATESERV_ENCODING", default="utf-8") or "utf-8").strip(),
                     note=(
-                        "GateServ TCP/1917 is confirmed on the real server and documented by the vendor as a "
-                        "Gate-Monitoring port; the open-command payload format is still a hypothesis."
+                        "GateServ TCP/1917 is confirmed as the Gate monitoring JSON endpoint. "
+                        "The configured open payload is an unconfirmed reader-command hypothesis."
                     ),
                 )
             )
@@ -337,6 +337,32 @@ class GateController:
             "wiegand": packet.as_dict(),
         }
         payload_format = self.config.payload_format.strip().lower()
+
+        if self.config.transport == "gateserv_tcp" and payload_format in {"json", "gate_monitor_json", "monitor_json", "remote_arm_json"}:
+            reader_id = access_point_id
+            if reader_id is None:
+                try:
+                    reader_id = int(gate_id)
+                except (TypeError, ValueError):
+                    raise ValueError("GateServ JSON open requires a numeric access_point_id or gate_id")
+            payload = {
+                "command": "Open",
+                "readerId": int(reader_id),
+            }
+            body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            wire_data = (body + ("\n" if self.config.append_newline else "")).encode(self.config.encoding)
+            return {
+                "wire_data": wire_data,
+                "details": {
+                    "wire": {
+                        "mode": "gate_monitor_json",
+                        "payload": payload,
+                        "text": body,
+                        "hex": wire_data.hex(),
+                        "length": len(wire_data),
+                    }
+                },
+            }
 
         if payload_format == "json":
             body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

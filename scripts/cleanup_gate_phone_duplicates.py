@@ -232,16 +232,7 @@ def _plan_gate_action(
 
 def _apply_gate_action(cursor: Any, action: str, user_ptr: int) -> None:
     if action == "deactivate":
-        cursor.execute("DELETE FROM AccessTable WHERE UserPtr = ?", (user_ptr,))
-        cursor.execute(
-            """
-            UPDATE Users
-            SET Deleted = ?, UseExpiry = ?, ExpiryDate = ?, ExpiryTime = ?, LockDate = ?
-            WHERE UserPtr = ?
-            """,
-            (True, False, None, None, None, user_ptr),
-        )
-        return
+        action = "purge_gate_user"
 
     if action == "purge_gate_user":
         scrub_token = uuid.uuid4().hex[:10].upper()

@@ -41,7 +41,7 @@ class _ConflictCleanupCursor:
         return self
 
     def fetchall(self):
-        if "SELECT UserPtr, Phone, Number, KeyType, Deleted" in self._last_sql:
+        if "SELECT UserPtr, Phone, Number" in self._last_sql and "FROM Users" in self._last_sql:
             return list(self._rows)
         raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
 
@@ -129,6 +129,28 @@ class _UserActiveCursor:
 
     def fetchone(self):
         return self._row
+
+
+class _ResolveUserPtrCursor:
+    def __init__(self, rows) -> None:
+        self._rows = list(rows)
+        self.commands: list[tuple[str, tuple | None]] = []
+        self._last_sql = ""
+
+    def execute(self, sql: str, params=None):
+        self._last_sql = sql
+        self.commands.append((sql, tuple(params) if params is not None else None))
+        return self
+
+    def fetchone(self):
+        if "WHERE UserPtr = ?" in self._last_sql:
+            return None
+        raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
+
+    def fetchall(self):
+        if "SELECT UserPtr, Phone, Number, NumberU, Deleted" in self._last_sql:
+            return list(self._rows)
+        raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
 
 
 class _ReaderKeyTypeCursor:
@@ -597,6 +619,25 @@ def test_user_is_active_rejects_non_zero_status():
     assert gate_runtime._user_is_active(cursor, 42) is False
 
 
+def test_resolve_user_ptr_matches_phone_number_without_large_userptr_lookup():
+    cursor = _ResolveUserPtrCursor(
+        [
+            SimpleNamespace(
+                UserPtr=7661,
+                Phone="89111253128\n",
+                Number="009111253128",
+                NumberU="009111253128",
+                Deleted=False,
+            )
+        ]
+    )
+
+    user_ptr = gate_runtime._resolve_user_ptr(cursor, "89111253128")
+
+    assert user_ptr == 7661
+    assert not any("WHERE UserPtr = ?" in sql for sql, _params in cursor.commands)
+
+
 def test_normalize_phone_keeps_legacy_formats_compatible():
     assert gate_runtime._normalize_phone("8 (999) 123-45-67") == "009991234567"
     assert gate_runtime._normalize_phone("+7 999 123-45-67") == "009991234567"
@@ -1001,6 +1042,25 @@ def test_find_existing_phone_user_ptr_reuses_numeric_phone_row_even_if_key_type_
     assert user_ptr == 33
 
 
+def test_find_existing_phone_user_ptr_matches_number_when_phone_is_empty():
+    cursor = _RowCursor(
+        [
+            SimpleNamespace(
+                UserPtr=34,
+                Phone=None,
+                Number="009111253128",
+                NumberU="009111253128",
+                KeyType=6,
+                Deleted=False,
+            ),
+        ]
+    )
+
+    user_ptr = gate_runtime._find_existing_user_ptr(cursor, "Phone", "009111253128", key_type_value=6)
+
+    assert user_ptr == 34
+
+
 def test_cleanup_conflicting_phone_rows_deletes_other_phone_identities_and_clears_vehicle_contact_phone():
     cursor = _ConflictCleanupCursor(
         [
@@ -1008,6 +1068,7 @@ def test_cleanup_conflicting_phone_rows_deletes_other_phone_identities_and_clear
             SimpleNamespace(UserPtr=41, Phone="79111253128", Number="009111253128", KeyType=6, Deleted=False),
             SimpleNamespace(UserPtr=40, Phone="009111253128", Number="A182DC178", KeyType=3, Deleted=False),
             SimpleNamespace(UserPtr=39, Phone="89111253128", Number="A135BC178", KeyType=3, Deleted=True),
+            SimpleNamespace(UserPtr=38, Phone=None, Number="009111253128", NumberU="009111253128", KeyType=6, Deleted=False),
         ]
     )
 
@@ -1020,8 +1081,18 @@ def test_cleanup_conflicting_phone_rows_deletes_other_phone_identities_and_clear
 
     assert any(sql == "DELETE FROM AccessTable WHERE UserPtr = ?" and params == (41,) for sql, params in cursor.commands)
     assert any(
-        "UPDATE Users\n                SET Deleted = ?, UseExpiry = ?, ExpiryDate = ?, ExpiryTime = ?" in sql
-        and params == (True, False, None, None, 41)
+        "UPDATE Users" in sql
+        and "PURGED" in str(params)
+        and params[:6] == (True, False, None, None, None, None)
+        and params[-1] == 41
+        for sql, params in cursor.commands
+    )
+    assert any(sql == "DELETE FROM AccessTable WHERE UserPtr = ?" and params == (38,) for sql, params in cursor.commands)
+    assert any(
+        "UPDATE Users" in sql
+        and "PURGED" in str(params)
+        and params[:6] == (True, False, None, None, None, None)
+        and params[-1] == 38
         for sql, params in cursor.commands
     )
     assert any(sql == "UPDATE Users SET Phone = ? WHERE UserPtr = ?" and params == (None, 40) for sql, params in cursor.commands)
