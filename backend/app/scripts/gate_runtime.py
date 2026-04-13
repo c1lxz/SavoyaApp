@@ -1412,12 +1412,10 @@ def _upsert_real_user(
             cursor.execute("UPDATE Users SET [Number] = ? WHERE UserPtr = ?", (normalized_key_value, existing_user_ptr))
         if phone_number is not None and key_type != "Phone":
             cursor.execute("UPDATE Users SET Phone = ? WHERE UserPtr = ?", (_normalize_contact_phone(phone_number), existing_user_ptr))
-        if last_name is not None:
-            cursor.execute("UPDATE Users SET [LastName] = ? WHERE UserPtr = ?", (last_name, existing_user_ptr))
-        if first_name is not None:
-            cursor.execute("UPDATE Users SET [FirstName] = ? WHERE UserPtr = ?", (first_name, existing_user_ptr))
-        if father_name is not None:
-            cursor.execute("UPDATE Users SET [FatherName] = ? WHERE UserPtr = ?", (father_name, existing_user_ptr))
+        cursor.execute(
+            "UPDATE Users SET [LastName] = ?, [FirstName] = ?, [FatherName] = ? WHERE UserPtr = ?",
+            (last_name, first_name, father_name, existing_user_ptr),
+        )
         if key_type == "Phone":
             _apply_user_defaults(
                 cursor,

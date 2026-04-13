@@ -9,6 +9,7 @@ param(
     [string]$SystemDbPath = "",
     [int[]]$GsmAccessPointId = @(),
     [switch]$ClearContactPhone,
+    [switch]$PurgeAll,
     [switch]$Apply,
     [switch]$Preview
 )
@@ -198,6 +199,9 @@ foreach ($pointId in $resolvedGsmIds) {
 if ($ClearContactPhone) {
     $commandArgs += "--clear-contact-phone"
 }
+if ($PurgeAll) {
+    $commandArgs += "--purge-all"
+}
 if ($Apply) {
     $commandArgs += "--apply"
 }
@@ -211,7 +215,7 @@ Write-Host "Python: $($pythonCommand.Executable)"
 if ($pythonProbe.Count -ge 2) {
     Write-Host "Python probe: $($pythonProbe[0])-bit, pyodbc $($pythonProbe[1])"
 }
-Write-Host "Mode: $(if ($Apply) { 'APPLY' } else { 'DRY-RUN' })"
+Write-Host "Mode: $(if ($Apply) { 'APPLY' } else { 'DRY-RUN' })$(if ($PurgeAll) { ' + PURGE-ALL' } else { '' })"
 
 $commandPreview = Format-CommandPreview -Executable $pythonCommand.Executable -Arguments $commandArgs
 Write-Host "Command: $commandPreview"

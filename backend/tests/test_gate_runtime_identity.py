@@ -440,8 +440,8 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
         for sql, params in cursor.commands
     )
     assert any(
-        sql == "UPDATE Users SET [LastName] = ? WHERE UserPtr = ?"
-        and params == ("009991234567", 42)
+        sql == "UPDATE Users SET [LastName] = ?, [FirstName] = ?, [FatherName] = ? WHERE UserPtr = ?"
+        and params == ("009991234567", None, None, 42)
         for sql, params in cursor.commands
     )
     assert any(

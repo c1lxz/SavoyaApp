@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import sqlite3
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -41,7 +43,13 @@ def _load_access_ids(cursor: Any, user_ptr: int) -> list[int]:
         """,
         (user_ptr,),
     ).fetchall()
-    return [int(getattr(row, "RdrPtr", row[0])) for row in rows]
+    result: list[int] = []
+    for row in rows:
+        raw_reader_ptr = getattr(row, "RdrPtr", None)
+        if raw_reader_ptr is None:
+            raw_reader_ptr = row[0]
+        result.append(int(raw_reader_ptr))
+    return result
 
 
 def _resolve_gsm_access_point_ids(cursor: Any, gate_runtime: Any, explicit_ids: list[int]) -> list[int]:
@@ -74,7 +82,12 @@ def _resolve_gsm_access_point_ids(cursor: Any, gate_runtime: Any, explicit_ids: 
     return resolved
 
 
-def _collect_phone_rows(cursor: Any, gate_runtime: Any, normalized_phone: str, gsm_ids: list[int]) -> tuple[Any | None, str, list[dict[str, Any]]]:
+def _collect_gate_rows(
+    cursor: Any,
+    gate_runtime: Any,
+    normalized_phone: str,
+    gsm_ids: list[int],
+) -> tuple[Any | None, str, list[dict[str, Any]]]:
     phone_key_type_value = gate_runtime._sample_key_type(cursor, "Phone", gsm_ids)
     expected_phone = gate_runtime._format_phone_for_storage(cursor, normalized_phone)
     rows = cursor.execute(
@@ -85,10 +98,15 @@ def _collect_phone_rows(cursor: Any, gate_runtime: Any, normalized_phone: str, g
             Number,
             NumberU,
             Phone,
+            LastName,
+            FirstName,
+            FatherName,
             Deleted,
             UseExpiry,
             ExpiryDate,
-            ExpiryTime
+            ExpiryTime,
+            Status,
+            LockDate
         FROM Users
         ORDER BY UserPtr DESC
         """
@@ -130,8 +148,15 @@ def _collect_phone_rows(cursor: Any, gate_runtime: Any, normalized_phone: str, g
     return phone_key_type_value, expected_phone, result
 
 
-def _candidate_score(item: dict[str, Any], *, normalized_phone: str, expected_phone: str, gsm_ids: list[int], phone_key_type_value: Any | None) -> tuple[int, int]:
+def _candidate_score(
+    item: dict[str, Any],
+    *,
+    expected_phone: str,
+    gsm_ids: list[int],
+    phone_key_type_value: Any | None,
+) -> tuple[int, int]:
     row = item["row"]
+    gsm_set = set(gsm_ids)
     score = 0
     if not bool(getattr(row, "Deleted", False)):
         score += 1000
@@ -139,15 +164,15 @@ def _candidate_score(item: dict[str, Any], *, normalized_phone: str, expected_ph
         score += 300
     if phone_key_type_value is not None and getattr(row, "KeyType", None) == phone_key_type_value:
         score += 100
-    if str(getattr(row, "Number", "") or "") == normalized_phone:
-        score += 50
-    if str(getattr(row, "NumberU", "") or "") == normalized_phone:
-        score += 50
+    if item["number_match"]:
+        score += 60
+    if item["number_u_match"]:
+        score += 60
     if str(getattr(row, "Phone", "") or "") == expected_phone:
-        score += 25
+        score += 40
     if sorted(item["gsm_access_ids"]) == sorted(gsm_ids):
         score += 25
-    score -= 10 * len([point_id for point_id in item["access_ids"] if point_id not in set(gsm_ids)])
+    score -= 10 * len([point_id for point_id in item["access_ids"] if point_id not in gsm_set])
     if bool(getattr(row, "UseExpiry", False)):
         expiry = item["expiry"]
         if expiry is None:
@@ -159,7 +184,13 @@ def _candidate_score(item: dict[str, Any], *, normalized_phone: str, expected_ph
     return score, item["user_ptr"]
 
 
-def _pick_keep_user_ptr(items: list[dict[str, Any]], *, normalized_phone: str, expected_phone: str, gsm_ids: list[int], phone_key_type_value: Any | None) -> int | None:
+def _pick_keep_user_ptr(
+    items: list[dict[str, Any]],
+    *,
+    expected_phone: str,
+    gsm_ids: list[int],
+    phone_key_type_value: Any | None,
+) -> int | None:
     active_items = [item for item in items if not bool(getattr(item["row"], "Deleted", False))]
     if not active_items:
         return None
@@ -167,7 +198,6 @@ def _pick_keep_user_ptr(items: list[dict[str, Any]], *, normalized_phone: str, e
         active_items,
         key=lambda item: _candidate_score(
             item,
-            normalized_phone=normalized_phone,
             expected_phone=expected_phone,
             gsm_ids=gsm_ids,
             phone_key_type_value=phone_key_type_value,
@@ -176,8 +206,19 @@ def _pick_keep_user_ptr(items: list[dict[str, Any]], *, normalized_phone: str, e
     return int(best["user_ptr"])
 
 
-def _plan_action(item: dict[str, Any], *, keep_user_ptr: int | None, clear_contact_phone: bool) -> str | None:
+def _plan_gate_action(
+    item: dict[str, Any],
+    *,
+    keep_user_ptr: int | None,
+    clear_contact_phone: bool,
+    purge_all: bool,
+) -> str | None:
     row = item["row"]
+    if purge_all:
+        if item["phone_match"] or item["number_match"] or item["number_u_match"]:
+            return "purge_gate_user"
+        return None
+
     if bool(getattr(row, "Deleted", False)):
         return None
     if keep_user_ptr is not None and item["user_ptr"] == keep_user_ptr:
@@ -189,7 +230,7 @@ def _plan_action(item: dict[str, Any], *, keep_user_ptr: int | None, clear_conta
     return None
 
 
-def _apply_action(cursor: Any, action: str, user_ptr: int) -> None:
+def _apply_gate_action(cursor: Any, action: str, user_ptr: int) -> None:
     if action == "deactivate":
         cursor.execute("DELETE FROM AccessTable WHERE UserPtr = ?", (user_ptr,))
         cursor.execute(
@@ -201,23 +242,158 @@ def _apply_action(cursor: Any, action: str, user_ptr: int) -> None:
             (True, False, None, None, None, user_ptr),
         )
         return
+
+    if action == "purge_gate_user":
+        scrub_token = uuid.uuid4().hex[:10].upper()
+        cursor.execute("DELETE FROM AccessTable WHERE UserPtr = ?", (user_ptr,))
+        cursor.execute(
+            """
+            UPDATE Users
+            SET
+                Deleted = ?,
+                UseExpiry = ?,
+                ExpiryDate = ?,
+                ExpiryTime = ?,
+                LockDate = ?,
+                [Phone] = ?,
+                [Number] = ?,
+                [NumberU] = ?,
+                [LastName] = ?,
+                [FirstName] = ?,
+                [FatherName] = ?,
+                [Status] = ?
+            WHERE UserPtr = ?
+            """,
+            (
+                True,
+                False,
+                None,
+                None,
+                None,
+                None,
+                f"PURGED-{user_ptr}-{scrub_token}",
+                f"PURGED-{scrub_token}",
+                None,
+                None,
+                None,
+                0,
+                user_ptr,
+            ),
+        )
+        return
+
     if action == "clear_phone":
         cursor.execute("UPDATE Users SET Phone = ? WHERE UserPtr = ?", (None, user_ptr))
         return
+
     if action == "keep":
         return
-    raise ValueError(f"Unsupported cleanup action: {action}")
+
+    raise ValueError(f"Unsupported Gate cleanup action: {action}")
+
+
+def _resolve_backend_db_path(project_root: Path) -> Path | None:
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if not database_url:
+        return None
+
+    prefixes = (
+        "sqlite+aiosqlite:///",
+        "sqlite:///",
+    )
+    raw_path: str | None = None
+    for prefix in prefixes:
+        if database_url.startswith(prefix):
+            raw_path = database_url[len(prefix) :]
+            break
+    if raw_path is None:
+        return None
+
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = (project_root / path).resolve()
+    return path
+
+
+def _collect_backend_requests(db_path: Path, normalized_phone: str, gate_runtime: Any) -> list[dict[str, Any]]:
+    if not db_path.exists():
+        return []
+
+    connection = sqlite3.connect(db_path)
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            """
+            SELECT
+                id,
+                resident_id,
+                key_type,
+                key_value,
+                gate_key_id,
+                contact_phone,
+                status,
+                created_at,
+                cancelled_at
+            FROM requests
+            ORDER BY id DESC
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        key_type = str(row["key_type"] or "")
+        key_value_match = key_type == "Phone" and _normalize_phone_candidate(row["key_value"], gate_runtime) == normalized_phone
+        contact_phone_match = _normalize_phone_candidate(row["contact_phone"], gate_runtime) == normalized_phone
+        if not (key_value_match or contact_phone_match):
+            continue
+        result.append(
+            {
+                "id": int(row["id"]),
+                "resident_id": int(row["resident_id"]),
+                "key_type": key_type,
+                "key_value": row["key_value"],
+                "gate_key_id": row["gate_key_id"],
+                "contact_phone": row["contact_phone"],
+                "status": row["status"],
+                "created_at": row["created_at"],
+                "cancelled_at": row["cancelled_at"],
+            }
+        )
+    return result
+
+
+def _apply_backend_request_purge(db_path: Path, request_ids: list[int]) -> int:
+    if not request_ids:
+        return 0
+    connection = sqlite3.connect(db_path)
+    try:
+        cursor = connection.cursor()
+        cursor.executemany("DELETE FROM requests WHERE id = ?", [(request_id,) for request_id in request_ids])
+        deleted = int(cursor.rowcount or 0)
+        connection.commit()
+        return deleted
+    finally:
+        connection.close()
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Deactivate duplicate Gate GSM/phone users for the specified phone numbers."
+        description=(
+            "Inspect or clean Gate phone/GSM users for the specified numbers. "
+            "Default mode de-duplicates GSM identities; --purge-all removes every matching Gate row "
+            "and matching backend request."
+        )
     )
     parser.add_argument("phones", nargs="+", help="Phone numbers to inspect and clean up.")
     parser.add_argument("--mdb", default=os.environ.get("GATE_MDB_PATH"))
     parser.add_argument("--systemdb", default=os.environ.get("GATE_SYSTEMDB_PATH") or os.environ.get("GATE_MDW_PATH"))
     parser.add_argument("--uid", default=os.environ.get("GATE_MDB_UID") or os.environ.get("GATE_UID"))
-    parser.add_argument("--pwd", default=os.environ.get("GATE_MDB_PWD") if os.environ.get("GATE_MDB_PWD") is not None else os.environ.get("GATE_PWD"))
+    parser.add_argument(
+        "--pwd",
+        default=os.environ.get("GATE_MDB_PWD") if os.environ.get("GATE_MDB_PWD") is not None else os.environ.get("GATE_PWD"),
+    )
     parser.add_argument("--driver", default=os.environ.get("GATE_ODBC_DRIVER") or "Microsoft Access Driver (*.mdb, *.accdb)")
     parser.add_argument(
         "--gsm-access-point-id",
@@ -230,9 +406,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--clear-contact-phone",
         action="store_true",
-        help="Also clear Phone on non-phone rows that still carry the same contact number.",
+        help="In dedupe mode, also clear Phone on non-phone rows that still carry the same contact number.",
     )
-    parser.add_argument("--apply", action="store_true", help="Write cleanup changes into the MDB. Default is dry-run.")
+    parser.add_argument(
+        "--purge-all",
+        action="store_true",
+        help="Purge all Gate users and backend requests related to the specified phone numbers.",
+    )
+    parser.add_argument("--apply", action="store_true", help="Write cleanup changes into the MDB and backend DB. Default is dry-run.")
     return parser.parse_args()
 
 
@@ -267,103 +448,146 @@ def main() -> int:
 
     from backend.app.scripts import gate_runtime
 
+    backend_db_path = _resolve_backend_db_path(PROJECT_ROOT)
+    gate_plans: list[dict[str, Any]] = []
+    backend_plans: list[dict[str, Any]] = []
+
     with gate_runtime._readonly_cursor() as (_conn, cursor):
         gsm_ids = _resolve_gsm_access_point_ids(cursor, gate_runtime, args.gsm_access_point_ids)
         if not gsm_ids:
             raise SystemExit("No GSM access points were resolved. Pass --gsm-access-point-id explicitly.")
 
-        phone_plans: list[dict[str, Any]] = []
         for raw_phone in args.phones:
             normalized_phone = gate_runtime._normalize_phone(raw_phone)
-            phone_key_type_value, expected_phone, items = _collect_phone_rows(cursor, gate_runtime, normalized_phone, gsm_ids)
-            keep_user_ptr = _pick_keep_user_ptr(
-                items,
-                normalized_phone=normalized_phone,
-                expected_phone=expected_phone,
-                gsm_ids=gsm_ids,
-                phone_key_type_value=phone_key_type_value,
-            )
-            planned = [
+            phone_key_type_value, expected_phone, items = _collect_gate_rows(cursor, gate_runtime, normalized_phone, gsm_ids)
+            keep_user_ptr = None
+            if not args.purge_all:
+                keep_user_ptr = _pick_keep_user_ptr(
+                    items,
+                    expected_phone=expected_phone,
+                    gsm_ids=gsm_ids,
+                    phone_key_type_value=phone_key_type_value,
+                )
+            planned_gate_rows = [
                 {
                     **item,
-                    "action": _plan_action(
+                    "action": _plan_gate_action(
                         item,
                         keep_user_ptr=keep_user_ptr,
-                        clear_contact_phone=args.clear_contact_phone,
+                        clear_contact_phone=args.clear_contact_phone or args.purge_all,
+                        purge_all=args.purge_all,
                     ),
                 }
                 for item in items
             ]
-            phone_plans.append(
+            gate_plans.append(
                 {
                     "raw_phone": raw_phone,
                     "normalized_phone": normalized_phone,
                     "phone_key_type_value": phone_key_type_value,
                     "expected_phone": expected_phone,
                     "keep_user_ptr": keep_user_ptr,
-                    "items": planned,
+                    "items": planned_gate_rows,
+                }
+            )
+            backend_plans.append(
+                {
+                    "raw_phone": raw_phone,
+                    "normalized_phone": normalized_phone,
+                    "items": _collect_backend_requests(backend_db_path, normalized_phone, gate_runtime)
+                    if backend_db_path is not None
+                    else [],
                 }
             )
 
     print(f"MDB: {mdb_path}")
     print(f"SystemDB: {systemdb_path}")
     print(f"GSM reader ids: {gsm_ids}")
+    print(f"Mode: {'purge-all' if args.purge_all else 'dedupe'}")
+    print(f"Backend DB: {backend_db_path if backend_db_path is not None else '(not sqlite / not resolved)'}")
     print()
 
-    actionable = 0
-    for plan in phone_plans:
-        print(f"Phone: {plan['raw_phone']} -> {plan['normalized_phone']}")
-        print(f"Expected storage Phone: {plan['expected_phone']!r}")
-        print(f"Keep UserPtr: {plan['keep_user_ptr']}")
-        if not plan["items"]:
-            print("  no matching rows")
-            print()
-            continue
+    gate_actions = 0
+    backend_actions = 0
 
-        for item in plan["items"]:
-            row = item["row"]
-            action = item["action"] or "skip"
-            print(
-                "  "
-                f"UserPtr={item['user_ptr']} action={action} "
-                f"Deleted={bool(getattr(row, 'Deleted', False))} "
-                f"KeyType={getattr(row, 'KeyType', None)!r} "
-                f"Number={getattr(row, 'Number', None)!r} "
-                f"NumberU={getattr(row, 'NumberU', None)!r} "
-                f"Phone={getattr(row, 'Phone', None)!r} "
-                f"Access={item['access_ids']}"
-            )
-            if action in {"deactivate", "clear_phone"}:
-                actionable += 1
+    for gate_plan, backend_plan in zip(gate_plans, backend_plans):
+        print(f"Phone: {gate_plan['raw_phone']} -> {gate_plan['normalized_phone']}")
+        print(f"Expected storage Phone: {gate_plan['expected_phone']!r}")
+        print(f"Keep UserPtr: {gate_plan['keep_user_ptr']}")
+
+        if not gate_plan["items"]:
+            print("  Gate users: no matching rows")
+        else:
+            for item in gate_plan["items"]:
+                row = item["row"]
+                action = item["action"] or "skip"
+                print(
+                    "  "
+                    f"Gate UserPtr={item['user_ptr']} action={action} "
+                    f"Deleted={bool(getattr(row, 'Deleted', False))} "
+                    f"KeyType={getattr(row, 'KeyType', None)!r} "
+                    f"Number={getattr(row, 'Number', None)!r} "
+                    f"NumberU={getattr(row, 'NumberU', None)!r} "
+                    f"Phone={getattr(row, 'Phone', None)!r} "
+                    f"Access={item['access_ids']}"
+                )
+                if action in {"deactivate", "clear_phone", "purge_gate_user"}:
+                    gate_actions += 1
+
+        if not backend_plan["items"]:
+            print("  Backend requests: no matching rows")
+        else:
+            for item in backend_plan["items"]:
+                request_action = "delete_request" if args.purge_all else "report_only"
+                print(
+                    "  "
+                    f"Backend Request id={item['id']} action={request_action} "
+                    f"key_type={item['key_type']!r} key_value={item['key_value']!r} "
+                    f"contact_phone={item['contact_phone']!r} status={item['status']!r} "
+                    f"gate_key_id={item['gate_key_id']!r}"
+                )
+                if args.purge_all:
+                    backend_actions += 1
         print()
 
     if not args.apply:
-        print("Dry-run only. Re-run with --apply to write cleanup changes into the MDB.")
+        print("Dry-run only. Re-run with --apply to write cleanup changes.")
         return 0
 
-    if actionable == 0:
+    if gate_actions == 0 and backend_actions == 0:
         print("Nothing to change.")
         return 0
 
     with gate_runtime._transaction_cursor() as (_conn, cursor):
-        for plan in phone_plans:
+        for plan in gate_plans:
             normalized_phone = plan["normalized_phone"]
-            _phone_key_type_value, _expected_phone, items = _collect_phone_rows(cursor, gate_runtime, normalized_phone, gsm_ids)
-            keep_user_ptr = _pick_keep_user_ptr(
-                items,
-                normalized_phone=normalized_phone,
-                expected_phone=plan["expected_phone"],
-                gsm_ids=gsm_ids,
-                phone_key_type_value=plan["phone_key_type_value"],
-            )
+            _phone_key_type_value, expected_phone, items = _collect_gate_rows(cursor, gate_runtime, normalized_phone, gsm_ids)
+            keep_user_ptr = None
+            if not args.purge_all:
+                keep_user_ptr = _pick_keep_user_ptr(
+                    items,
+                    expected_phone=expected_phone,
+                    gsm_ids=gsm_ids,
+                    phone_key_type_value=plan["phone_key_type_value"],
+                )
             for item in items:
-                action = _plan_action(
+                action = _plan_gate_action(
                     item,
                     keep_user_ptr=keep_user_ptr,
-                    clear_contact_phone=args.clear_contact_phone,
+                    clear_contact_phone=args.clear_contact_phone or args.purge_all,
+                    purge_all=args.purge_all,
                 )
-                if action in {"deactivate", "clear_phone"}:
-                    _apply_action(cursor, action, int(item["user_ptr"]))
+                if action in {"deactivate", "clear_phone", "purge_gate_user"}:
+                    _apply_gate_action(cursor, action, int(item["user_ptr"]))
+
+    if args.purge_all and backend_db_path is not None and backend_db_path.exists():
+        deleted_requests = 0
+        for plan in backend_plans:
+            deleted_requests += _apply_backend_request_purge(
+                backend_db_path,
+                [int(item["id"]) for item in plan["items"]],
+            )
+        print(f"Backend requests deleted: {deleted_requests}")
 
     print("Cleanup applied.")
     return 0
