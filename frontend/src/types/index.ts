@@ -18,6 +18,7 @@ export type AuthResult = {
 
 export type CreatePassPayload = {
   carNumber?: string;
+  residentName?: string;
   plotNumber: string;
   phoneNumber?: string;
   expiresAt: string | null;

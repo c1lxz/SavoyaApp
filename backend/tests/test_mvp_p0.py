@@ -213,6 +213,39 @@ def test_create_temporary_phone_request_passes_resident_name_to_gate(client):
     assert captured[0]["resident_name"].startswith("User ")
 
 
+def test_create_temporary_phone_request_uses_explicit_resident_name(client):
+    headers, _ = _create_user_and_login(client)
+    captured: list[dict] = []
+    phone_number = f"+7999{str(uuid4().int)[:7]}"
+    original_add_temporary_key = gate_client.add_temporary_key
+
+    def _capture_gate_call(**kwargs):
+        captured.append(dict(kwargs))
+        return 5432
+
+    gate_client.add_temporary_key = _capture_gate_call
+    try:
+        response = client.post(
+            "/api/requests/",
+            headers=headers,
+            json={
+                "key_type": "Phone",
+                "key_value": phone_number,
+                "phone_number": phone_number,
+                "resident_name": "Иванов Иван",
+                "access_point_ids": [1],
+                "is_permanent": False,
+                "hours": 2,
+            },
+        )
+    finally:
+        gate_client.add_temporary_key = original_add_temporary_key
+
+    assert response.status_code == 200
+    assert captured
+    assert captured[0]["resident_name"] == "Иванов Иван"
+
+
 def test_create_temporary_phone_request_forces_gsm_access_points(client):
     headers, _ = _create_user_and_login(client)
     captured: list[dict] = []

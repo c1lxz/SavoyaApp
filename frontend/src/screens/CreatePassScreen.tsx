@@ -137,6 +137,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
 
     const success = await createPass({
       carNumber: normalizedCarNumber || undefined,
+      residentName: normalizedFullName || undefined,
       plotNumber: normalizedPlotNumber,
       phoneNumber: normalizedPhoneNumber || undefined,
       expiresAt: isPermanent ? null : toIsoDate(expiresAt),

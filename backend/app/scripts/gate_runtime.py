@@ -1000,6 +1000,13 @@ def _default_permission_template() -> dict[str, Any]:
     }
 
 
+def _default_phone_permission_template() -> dict[str, Any]:
+    template = _default_permission_template()
+    template["CardType"] = 0
+    template["CardCode"] = ""
+    return template
+
+
 def _permission_template_from_row(row: Any | None) -> dict[str, Any]:
     if row is None:
         return _default_permission_template()
@@ -1078,6 +1085,7 @@ def _permission_template_for_reader(
             return _permission_template_from_row(preferred_row)
         if matching_rows:
             return _permission_template_from_row(matching_rows[0])
+        return _default_phone_permission_template()
 
     row = cursor.execute(
         """

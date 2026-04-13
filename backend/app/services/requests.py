@@ -191,13 +191,14 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
         expires_at = utcnow() + timedelta(hours=hours)
 
     try:
+        resident_name = (payload.resident_name or "").strip() or user.name or user.login or "Resident"
         if is_permanent:
             gate_key_id = gate_client.add_permanent_key(
                 key_type=payload.key_type,
                 key_value=payload.key_value,
                 phone_number=payload.phone_number,
                 access_point_ids=resolved_access_point_ids,
-                resident_name=user.name or user.login or "Resident",
+                resident_name=resident_name,
             )
         else:
             gate_key_id = gate_client.add_temporary_key(
@@ -206,7 +207,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
                 phone_number=payload.phone_number,
                 expires_at=expires_at,
                 access_point_ids=resolved_access_point_ids,
-                resident_name=user.name or user.login or "Resident",
+                resident_name=resident_name,
             )
     except Exception as exc:
         raise RequestIntegrationError(

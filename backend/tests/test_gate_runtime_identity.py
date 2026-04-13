@@ -732,6 +732,44 @@ def test_permission_template_for_reader_skips_vehicle_rows_with_contact_phone(mo
     assert template["CardCode"] == "PHONE"
 
 
+def test_permission_template_for_reader_uses_phone_defaults_when_no_phone_template_exists(monkeypatch):
+    cursor = _TemplateSamplingCursor(
+        access_rows=[
+            SimpleNamespace(
+                InnerNum=11,
+                Always=False,
+                Schedule1=True,
+                Schedule2=False,
+                Schedule3=False,
+                Schedule4=False,
+                Schedule5=False,
+                Schedule6=False,
+                Schedule7=False,
+                RecordState=7,
+                APB=True,
+                Inside=True,
+                CardType=3,
+                CardCode="CAR",
+                NoEntry=True,
+                NoExit=True,
+                Phone="89991234567",
+                Number="A182DC178",
+                KeyType=3,
+                Deleted=False,
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *_args, **_kwargs: 6)
+
+    template = gate_runtime._permission_template_for_reader(cursor, 70, key_type="Phone")
+
+    assert template["Always"] is True
+    assert template["Schedule1"] is False
+    assert template["CardType"] == 0
+    assert template["CardCode"] == ""
+
+
 def test_sample_phone_storage_value_skips_vehicle_rows_with_contact_phone():
     cursor = _TemplateSamplingCursor(
         access_rows=[

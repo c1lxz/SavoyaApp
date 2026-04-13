@@ -61,6 +61,7 @@ class CreateRequestRequest(BaseModel):
     key_type: Literal["Phone", "VehicleNumber"]
     key_value: str
     phone_number: str | None = None
+    resident_name: str | None = None
     access_point_ids: list[int] = Field(min_length=1)
     is_permanent: bool = False
     is_courier: bool = False
@@ -80,6 +81,15 @@ class CreateRequestRequest(BaseModel):
         if value is None:
             return None
         return normalize_phone_key(value)
+
+    @field_validator("resident_name")
+    @classmethod
+    def validate_resident_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip():
+            return None
+        return normalize_full_name(value)
 
     @model_validator(mode="after")
     def validate_key_value(self) -> "CreateRequestRequest":
@@ -159,6 +169,7 @@ class CompatLoginPayload(BaseModel):
 
 class CompatCreatePassPayload(BaseModel):
     carNumber: str | None = None
+    residentName: str | None = None
     plotNumber: str
     phoneNumber: str | None = None
     expiresAt: str | None
@@ -183,6 +194,15 @@ class CompatCreatePassPayload(BaseModel):
             return None
         return value
 
+    @field_validator("residentName", mode="before")
+    @classmethod
+    def normalize_optional_resident_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("carNumber")
     @classmethod
     def validate_car_number(cls, value: str | None) -> str | None:
@@ -201,6 +221,13 @@ class CompatCreatePassPayload(BaseModel):
         if value is None:
             return None
         return normalize_phone_key(value)
+
+    @field_validator("residentName")
+    @classmethod
+    def validate_resident_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_full_name(value)
 
     @model_validator(mode="after")
     def validate_key_presence(self) -> "CompatCreatePassPayload":
