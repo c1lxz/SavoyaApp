@@ -199,6 +199,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
                 phone_number=payload.phone_number,
                 access_point_ids=resolved_access_point_ids,
                 resident_name=resident_name,
+                plot_number=payload.plot_number,
             )
         else:
             gate_key_id = gate_client.add_temporary_key(
@@ -208,6 +209,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
                 expires_at=expires_at,
                 access_point_ids=resolved_access_point_ids,
                 resident_name=resident_name,
+                plot_number=payload.plot_number,
             )
     except Exception as exc:
         raise RequestIntegrationError(

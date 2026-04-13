@@ -34,7 +34,7 @@ def test_add_permanent_key_forwards_phone_number_and_resident_name(monkeypatch):
     assert runtime.calls == [
         (
             "add_permanent_key",
-            ("Phone", "+79991234567", "+79991234567", [5, 6], "Test User"),
+            ("Phone", "+79991234567", "+79991234567", [5, 6], "Test User", None),
         )
     ]
 
@@ -57,6 +57,6 @@ def test_add_temporary_key_forwards_phone_number_expiry_and_resident_name(monkey
     assert runtime.calls == [
         (
             "add_temporary_key",
-            ("Phone", "+79991234567", "+79991234567", expires_at, [5, 6], "Test User"),
+            ("Phone", "+79991234567", "+79991234567", expires_at, [5, 6], "Test User", None),
         )
     ]

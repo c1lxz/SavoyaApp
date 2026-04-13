@@ -20,8 +20,9 @@ def add_permanent_key(
     access_point_ids: list[int],
     phone_number: str | None = None,
     resident_name: str = "Resident",
+    plot_number: str | None = None,
 ) -> int:
-    return _runtime().add_permanent_key(key_type, key_value, phone_number, access_point_ids, resident_name)
+    return _runtime().add_permanent_key(key_type, key_value, phone_number, access_point_ids, resident_name, plot_number)
 
 
 def add_temporary_key(
@@ -31,8 +32,17 @@ def add_temporary_key(
     access_point_ids: list[int],
     phone_number: str | None = None,
     resident_name: str = "Resident",
+    plot_number: str | None = None,
 ) -> int:
-    return _runtime().add_temporary_key(key_type, key_value, phone_number, expires_at, access_point_ids, resident_name)
+    return _runtime().add_temporary_key(
+        key_type,
+        key_value,
+        phone_number,
+        expires_at,
+        access_point_ids,
+        resident_name,
+        plot_number,
+    )
 
 
 def remove_key(key_id: int) -> bool:

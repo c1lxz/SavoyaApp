@@ -68,6 +68,7 @@ class GateClient:
         expires_at: datetime,
         access_point_ids: list[int],
         resident_name: str,
+        plot_number: str | None = None,
     ) -> int:
         if settings.gate_real_integration_enabled:
             result = self._run_bridge(
@@ -79,6 +80,7 @@ class GateClient:
                     "expires_at": expires_at.isoformat(),
                     "access_point_ids": access_point_ids,
                     "resident_name": resident_name,
+                    "plot_number": plot_number,
                 },
             )
             return int(result)
@@ -91,6 +93,7 @@ class GateClient:
         phone_number: str | None,
         access_point_ids: list[int],
         resident_name: str,
+        plot_number: str | None = None,
     ) -> int:
         if settings.gate_real_integration_enabled:
             result = self._run_bridge(
@@ -101,6 +104,7 @@ class GateClient:
                     "phone_number": phone_number,
                     "access_point_ids": access_point_ids,
                     "resident_name": resident_name,
+                    "plot_number": plot_number,
                 },
             )
             return int(result)

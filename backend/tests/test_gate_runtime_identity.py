@@ -297,6 +297,7 @@ def test_insert_real_user_uses_storage_phone_for_phone_keys(monkeypatch):
         normalized_key_value="009991234567",
         phone_number="+79991234567",
         resident_name="Phone User",
+        plot_number=None,
         is_visitor=True,
         expires_at=None,
     )
@@ -334,6 +335,7 @@ def test_insert_real_user_splits_expiry_date_and_time(monkeypatch):
         normalized_key_value="009991234567",
         phone_number="+79991234567",
         resident_name="Phone User",
+        plot_number=None,
         is_visitor=False,
         expires_at=datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc),
     )
@@ -369,6 +371,7 @@ def test_insert_real_phone_user_stores_date_only_expiry(monkeypatch):
         normalized_key_value="009991234567",
         phone_number="+79991234567",
         resident_name="Phone User",
+        plot_number=None,
         is_visitor=False,
         expires_at=datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc),
     )
@@ -424,6 +427,7 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
         normalized_key_value="009991234567",
         phone_number=None,
         resident_name="009991234567",
+        plot_number="301",
         is_visitor=True,
         expires_at=None,
         access_point_ids=[5, 6],
@@ -442,6 +446,11 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
     assert any(
         sql == "UPDATE Users SET [LastName] = ?, [FirstName] = ?, [FatherName] = ? WHERE UserPtr = ?"
         and params == ("009991234567", None, None, 42)
+        for sql, params in cursor.commands
+    )
+    assert any(
+        sql == "UPDATE Users SET [Details1] = ?, [Details2] = ? WHERE UserPtr = ?"
+        and params == ("301", "9991234567", 42)
         for sql, params in cursor.commands
     )
     assert any(
@@ -479,6 +488,7 @@ def test_upsert_existing_phone_user_verifies_final_state(monkeypatch):
         normalized_key_value="009991234567",
         phone_number=None,
         resident_name="Phone User",
+        plot_number=None,
         is_visitor=False,
         expires_at=None,
         access_point_ids=[5, 6],
@@ -491,6 +501,41 @@ def test_upsert_existing_phone_user_verifies_final_state(monkeypatch):
         "phone_key_type_value": 6,
         "access_point_ids": [5, 6],
     }
+
+
+def test_insert_real_phone_user_sets_gate_details(monkeypatch):
+    cursor = _FakeCursor()
+
+    monkeypatch.setattr(gate_runtime, "_sample_user_defaults", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        gate_runtime,
+        "_build_identity",
+        lambda *args, **kwargs: gate_runtime.RealGateIdentity(
+            number="009991234567",
+            phone="89991234567\n",
+            number_u="009991234567",
+            number_mifare=None,
+        ),
+    )
+    monkeypatch.setattr(gate_runtime, "_resolve_inserted_user_ptr", lambda *args, **kwargs: 55)
+
+    gate_runtime._insert_real_user(
+        cursor,
+        key_type_value=6,
+        key_type="Phone",
+        normalized_key_value="009991234567",
+        phone_number="+79991234567",
+        resident_name="Phone User",
+        plot_number="301",
+        is_visitor=False,
+        expires_at=None,
+    )
+
+    assert any(
+        sql == "UPDATE Users SET [Details1] = ?, [Details2] = ? WHERE UserPtr = ?"
+        and params == ("301", "89991234567", 55)
+        for sql, params in cursor.commands
+    )
 
 
 def test_apply_user_defaults_for_existing_phone_user_uses_other_phone_template():

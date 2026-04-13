@@ -661,6 +661,40 @@ def _normalize_contact_phone(value: str | None) -> str | None:
     return _normalize_phone(str(value))
 
 
+def _normalize_gate_detail(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _update_phone_user_details(
+    cursor: pyodbc.Cursor,
+    *,
+    user_ptr: int,
+    plot_number: str | None,
+    storage_phone: str | None,
+) -> None:
+    assignments: list[str] = []
+    params: list[Any] = []
+
+    normalized_plot = _normalize_gate_detail(plot_number)
+    if normalized_plot is not None:
+        assignments.append("[Details1] = ?")
+        params.append(normalized_plot)
+
+    normalized_storage_phone = _normalize_gate_detail(storage_phone)
+    if normalized_storage_phone is not None:
+        assignments.append("[Details2] = ?")
+        params.append(normalized_storage_phone)
+
+    if not assignments:
+        return
+
+    params.append(int(user_ptr))
+    cursor.execute(f"UPDATE Users SET {', '.join(assignments)} WHERE UserPtr = ?", params)
+
+
 def _normalize_optional_text(value: Any) -> str:
     if value is None:
         return ""
@@ -865,6 +899,7 @@ def _insert_real_user(
     normalized_key_value: str,
     phone_number: str | None,
     resident_name: str,
+    plot_number: str | None,
     is_visitor: bool,
     expires_at: datetime | None,
 ) -> int:
@@ -905,7 +940,15 @@ def _insert_real_user(
 
     sql = f"INSERT INTO Users ({', '.join(columns)}) VALUES ({', '.join(['?'] * len(params))})"
     cursor.execute(sql, params)
-    return _resolve_inserted_user_ptr(cursor, number_u=identity.number_u)
+    user_ptr = _resolve_inserted_user_ptr(cursor, number_u=identity.number_u)
+    if key_type == "Phone":
+        _update_phone_user_details(
+            cursor,
+            user_ptr=user_ptr,
+            plot_number=plot_number,
+            storage_phone=identity.phone,
+        )
+    return user_ptr
 
 
 def _reactivate_real_user(
@@ -917,6 +960,7 @@ def _reactivate_real_user(
     normalized_key_value: str,
     phone_number: str | None,
     resident_name: str,
+    plot_number: str | None,
     is_visitor: bool,
     expires_at: datetime | None,
 ) -> int:
@@ -940,6 +984,7 @@ def _reactivate_real_user(
         ACTIVE_USER_STATUS,
         None,
     ]
+    storage_phone: str | None = None
     if key_type_value is not None:
         assignments.append("[KeyType] = ?")
         params.append(key_type_value)
@@ -970,6 +1015,12 @@ def _reactivate_real_user(
     params.append(user_ptr)
     cursor.execute(f"UPDATE Users SET {', '.join(assignments)} WHERE UserPtr = ?", params)
     if key_type == "Phone":
+        _update_phone_user_details(
+            cursor,
+            user_ptr=user_ptr,
+            plot_number=plot_number,
+            storage_phone=storage_phone,
+        )
         _apply_user_defaults(cursor, user_ptr=user_ptr, key_type=key_type, exclude_user_ptr=user_ptr)
     return user_ptr
 
@@ -1377,6 +1428,7 @@ def _upsert_real_user(
     normalized_key_value: str,
     phone_number: str | None,
     resident_name: str,
+    plot_number: str | None,
     is_visitor: bool,
     expires_at: datetime | None,
     access_point_ids: list[int],
@@ -1415,6 +1467,12 @@ def _upsert_real_user(
             cursor.execute(
                 "UPDATE Users SET Phone = ?, [Number] = ?, [NumberU] = ? WHERE UserPtr = ?",
                 (storage_phone, normalized_key_value, normalized_key_value, existing_user_ptr),
+            )
+            _update_phone_user_details(
+                cursor,
+                user_ptr=existing_user_ptr,
+                plot_number=plot_number,
+                storage_phone=storage_phone,
             )
         else:
             cursor.execute("UPDATE Users SET [Number] = ? WHERE UserPtr = ?", (normalized_key_value, existing_user_ptr))
@@ -1465,6 +1523,7 @@ def _upsert_real_user(
             normalized_key_value=normalized_key_value,
             phone_number=phone_number,
             resident_name=resident_name,
+            plot_number=plot_number,
             is_visitor=is_visitor,
             expires_at=expires_at,
         )
@@ -1494,6 +1553,7 @@ def _upsert_real_user(
         normalized_key_value=normalized_key_value,
         phone_number=phone_number,
         resident_name=resident_name,
+        plot_number=plot_number,
         is_visitor=is_visitor,
         expires_at=expires_at,
     )
@@ -1523,6 +1583,7 @@ def add_permanent_key(
     phone_number: str | None,
     access_point_ids: list[int],
     resident_name: str = "Resident",
+    plot_number: str | None = None,
 ) -> int:
     validated_key_type = _validate_key_type(key_type)
     normalized_key_value = _normalize_key_value(validated_key_type, key_value)
@@ -1534,6 +1595,7 @@ def add_permanent_key(
             normalized_key_value=normalized_key_value,
             phone_number=phone_number,
             resident_name=resident_name,
+            plot_number=plot_number,
             is_visitor=False,
             expires_at=None,
             access_point_ids=validated_points,
@@ -1547,6 +1609,7 @@ def add_temporary_key(
     expires_at: datetime,
     access_point_ids: list[int],
     resident_name: str = "Resident",
+    plot_number: str | None = None,
 ) -> int:
     validated_key_type = _validate_key_type(key_type)
     normalized_key_value = _normalize_key_value(validated_key_type, key_value)
@@ -1562,6 +1625,7 @@ def add_temporary_key(
             normalized_key_value=normalized_key_value,
             phone_number=phone_number,
             resident_name=resident_name,
+            plot_number=plot_number,
             is_visitor=False if validated_key_type == "Phone" else True,
             expires_at=normalized_expires_at,
             access_point_ids=validated_points,
