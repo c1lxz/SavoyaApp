@@ -1135,6 +1135,86 @@ def _prune_access_permissions(cursor: pyodbc.Cursor, user_ptr: int, allowed_acce
         )
 
 
+def _verify_phone_user_state(
+    cursor: pyodbc.Cursor,
+    *,
+    user_ptr: int,
+    normalized_key_value: str,
+    phone_key_type_value: Any | None,
+    access_point_ids: Iterable[int],
+) -> None:
+    row = cursor.execute(
+        """
+        SELECT TOP 1
+            UserPtr,
+            KeyType,
+            [Number],
+            [NumberU],
+            [Phone],
+            Deleted,
+            Status
+        FROM Users
+        WHERE UserPtr = ?
+        """,
+        (user_ptr,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError(f"Gate phone user verification failed: UserPtr={user_ptr} was not found after write")
+
+    issues: list[str] = []
+    expected_phone = _format_phone_for_storage(cursor, normalized_key_value)
+    actual_number = str(getattr(row, "Number", "") or "")
+    actual_number_u = str(getattr(row, "NumberU", "") or "")
+    actual_phone = str(getattr(row, "Phone", "") or "")
+
+    if bool(getattr(row, "Deleted", False)):
+        issues.append("Deleted=True")
+    if phone_key_type_value is not None and getattr(row, "KeyType", None) != phone_key_type_value:
+        issues.append(f"KeyType={getattr(row, 'KeyType', None)!r}")
+    if actual_number != normalized_key_value:
+        issues.append(f"Number={actual_number!r}")
+    if actual_number_u != normalized_key_value:
+        issues.append(f"NumberU={actual_number_u!r}")
+    if actual_phone != expected_phone:
+        issues.append(f"Phone={actual_phone!r}")
+
+    raw_status = getattr(row, "Status", None)
+    try:
+        status_value = None if raw_status is None else int(raw_status)
+    except (TypeError, ValueError):
+        status_value = raw_status
+    if status_value is not None and status_value != ACTIVE_USER_STATUS:
+        issues.append(f"Status={raw_status!r}")
+
+    access_rows = cursor.execute(
+        """
+        SELECT RdrPtr
+        FROM AccessTable
+        WHERE UserPtr = ?
+        ORDER BY RdrPtr
+        """,
+        (user_ptr,),
+    ).fetchall()
+    actual_access_ids: list[int] = []
+    for item in access_rows:
+        raw_reader_ptr = getattr(item, "RdrPtr", None)
+        if raw_reader_ptr is None:
+            raw_reader_ptr = item[0]
+        actual_access_ids.append(int(raw_reader_ptr))
+    actual_access_ids.sort()
+    expected_access_ids = sorted(int(point_id) for point_id in access_point_ids)
+    if actual_access_ids != expected_access_ids:
+        issues.append(f"Access={actual_access_ids!r}")
+
+    if issues:
+        raise RuntimeError(
+            "Gate phone user verification failed for "
+            f"UserPtr={user_ptr}: expected Number/NumberU={normalized_key_value!r}, "
+            f"Phone={expected_phone!r}, Access={expected_access_ids!r}; "
+            f"got {', '.join(issues)}"
+        )
+
+
 def _inner_num_in_use(
     cursor: pyodbc.Cursor,
     access_point_id: int,
@@ -1355,6 +1435,13 @@ def _upsert_real_user(
         _ensure_access_permissions(cursor, existing_user_ptr, access_point_ids, key_type=key_type)
         if key_type == "Phone":
             _prune_access_permissions(cursor, existing_user_ptr, access_point_ids)
+            _verify_phone_user_state(
+                cursor,
+                user_ptr=existing_user_ptr,
+                normalized_key_value=normalized_key_value,
+                phone_key_type_value=key_type_value,
+                access_point_ids=access_point_ids,
+            )
         return existing_user_ptr
 
     reusable_user_ptr = _find_reusable_deleted_user_ptr(
@@ -1385,6 +1472,13 @@ def _upsert_real_user(
         _ensure_access_permissions(cursor, user_ptr, access_point_ids, key_type=key_type)
         if key_type == "Phone":
             _prune_access_permissions(cursor, user_ptr, access_point_ids)
+            _verify_phone_user_state(
+                cursor,
+                user_ptr=user_ptr,
+                normalized_key_value=normalized_key_value,
+                phone_key_type_value=key_type_value,
+                access_point_ids=access_point_ids,
+            )
         return user_ptr
 
     user_ptr = _insert_real_user(
@@ -1407,6 +1501,13 @@ def _upsert_real_user(
     _ensure_access_permissions(cursor, user_ptr, access_point_ids, key_type=key_type)
     if key_type == "Phone":
         _prune_access_permissions(cursor, user_ptr, access_point_ids)
+        _verify_phone_user_state(
+            cursor,
+            user_ptr=user_ptr,
+            normalized_key_value=normalized_key_value,
+            phone_key_type_value=key_type_value,
+            access_point_ids=access_point_ids,
+        )
     return user_ptr
 
 

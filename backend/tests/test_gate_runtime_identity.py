@@ -4,6 +4,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from backend.app.scripts import gate_runtime
 
 
@@ -58,6 +60,27 @@ class _AccessPruneCursor:
     def fetchall(self):
         if "SELECT RdrPtr FROM AccessTable WHERE UserPtr = ?" in self._last_sql:
             return list(self._rows)
+        raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
+
+
+class _PhoneVerificationCursor:
+    def __init__(self, user_row, access_rows) -> None:
+        self.user_row = user_row
+        self.access_rows = list(access_rows)
+        self._last_sql = ""
+
+    def execute(self, sql: str, params=None):
+        self._last_sql = sql
+        return self
+
+    def fetchone(self):
+        if "FROM Users" in self._last_sql and "WHERE UserPtr = ?" in self._last_sql:
+            return self.user_row
+        raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
+
+    def fetchall(self):
+        if "FROM AccessTable" in self._last_sql and "WHERE UserPtr = ?" in self._last_sql:
+            return list(self.access_rows)
         raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
 
 
@@ -393,6 +416,7 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
         "_prune_access_permissions",
         lambda _cursor, user_ptr, access_point_ids: observed.setdefault("prune", (user_ptr, list(access_point_ids))),
     )
+    monkeypatch.setattr(gate_runtime, "_verify_phone_user_state", lambda *_args, **_kwargs: None)
 
     user_ptr = gate_runtime._upsert_real_user(
         cursor,
@@ -430,6 +454,43 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
     assert observed["ensure"]["access_point_ids"] == [5, 6]
     assert observed["ensure"]["key_type"] == "Phone"
     assert observed["prune"] == (42, [5, 6])
+
+
+def test_upsert_existing_phone_user_verifies_final_state(monkeypatch):
+    cursor = _FakeCursor()
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 6)
+    monkeypatch.setattr(gate_runtime, "_find_existing_user_ptr", lambda *args, **kwargs: 42)
+    monkeypatch.setattr(gate_runtime, "_find_reusable_deleted_user_ptr", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_ensure_access_permissions", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_prune_access_permissions", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_cleanup_conflicting_phone_rows", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_apply_user_defaults", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_verify_phone_user_state",
+        lambda _cursor, **kwargs: observed.update(kwargs),
+    )
+
+    user_ptr = gate_runtime._upsert_real_user(
+        cursor,
+        key_type="Phone",
+        normalized_key_value="009991234567",
+        phone_number=None,
+        resident_name="Phone User",
+        is_visitor=False,
+        expires_at=None,
+        access_point_ids=[5, 6],
+    )
+
+    assert user_ptr == 42
+    assert observed == {
+        "user_ptr": 42,
+        "normalized_key_value": "009991234567",
+        "phone_key_type_value": 6,
+        "access_point_ids": [5, 6],
+    }
 
 
 def test_apply_user_defaults_for_existing_phone_user_uses_other_phone_template():
@@ -903,6 +964,64 @@ def test_prune_access_permissions_keeps_only_requested_readers():
         sql == "DELETE FROM AccessTable WHERE UserPtr = ? AND RdrPtr = ?" and params == (42, 19)
         for sql, params in cursor.commands
     )
+
+
+def test_verify_phone_user_state_accepts_expected_shape(monkeypatch):
+    cursor = _PhoneVerificationCursor(
+        SimpleNamespace(
+            UserPtr=42,
+            KeyType=6,
+            Number="009111253128",
+            NumberU="009111253128",
+            Phone="89111253128\n",
+            Deleted=False,
+            Status=0,
+        ),
+        [
+            SimpleNamespace(RdrPtr=5),
+            SimpleNamespace(RdrPtr=6),
+        ],
+    )
+
+    monkeypatch.setattr(gate_runtime, "_format_phone_for_storage", lambda *_args, **_kwargs: "89111253128\n")
+
+    gate_runtime._verify_phone_user_state(
+        cursor,
+        user_ptr=42,
+        normalized_key_value="009111253128",
+        phone_key_type_value=6,
+        access_point_ids=[6, 5],
+    )
+
+
+def test_verify_phone_user_state_raises_on_mismatch(monkeypatch):
+    cursor = _PhoneVerificationCursor(
+        SimpleNamespace(
+            UserPtr=42,
+            KeyType=3,
+            Number="89111253128",
+            NumberU="0F746E44BC47",
+            Phone="89111253128",
+            Deleted=False,
+            Status=0,
+        ),
+        [
+            SimpleNamespace(RdrPtr=5),
+            SimpleNamespace(RdrPtr=6),
+            SimpleNamespace(RdrPtr=19),
+        ],
+    )
+
+    monkeypatch.setattr(gate_runtime, "_format_phone_for_storage", lambda *_args, **_kwargs: "89111253128\n")
+
+    with pytest.raises(RuntimeError, match="Gate phone user verification failed"):
+        gate_runtime._verify_phone_user_state(
+            cursor,
+            user_ptr=42,
+            normalized_key_value="009111253128",
+            phone_key_type_value=6,
+            access_point_ids=[5, 6],
+        )
 
 
 def test_resolve_inserted_user_ptr_falls_back_when_identity_is_zero():
