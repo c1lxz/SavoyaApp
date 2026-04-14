@@ -164,7 +164,7 @@ def _build_compat_create_payloads(payload: CompatCreatePassPayload) -> list[Crea
             hours = 24
 
     default_access_point_ids = _runtime_default_access_point_ids()
-    phone_access_point_ids = _runtime_gsm_access_point_ids() or default_access_point_ids
+    phone_access_point_ids = _merge_access_point_ids(default_access_point_ids, _runtime_gsm_access_point_ids())
 
     requests: list[CreateRequestRequest] = []
     if payload.carNumber:

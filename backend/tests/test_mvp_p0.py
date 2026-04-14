@@ -246,7 +246,7 @@ def test_create_temporary_phone_request_uses_explicit_resident_name(client):
     assert captured[0]["resident_name"] == "Иванов Иван"
 
 
-def test_create_temporary_phone_request_forces_gsm_access_points(client):
+def test_create_temporary_phone_request_adds_gsm_access_points(client):
     headers, _ = _create_user_and_login(client)
     captured: list[dict] = []
     phone_number = f"+7999{str(uuid4().int)[:7]}"
@@ -278,7 +278,7 @@ def test_create_temporary_phone_request_forces_gsm_access_points(client):
 
     assert response.status_code == 200
     assert captured
-    assert captured[0]["access_point_ids"] == [5, 6]
+    assert captured[0]["access_point_ids"] == [1, 7, 19, 5, 6]
 
 
 def test_cleanup_broken_requests_cancels_invalid_gate_key_rows():

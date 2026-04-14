@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -252,22 +252,24 @@ def test_build_identity_for_phone_populates_required_number(monkeypatch):
 
 
 def test_split_access_expiry_separates_date_and_time():
+    local_expiry = datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
     expiry_date, expiry_time = gate_runtime._split_access_expiry(
         datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc),
         key_type="VehicleNumber",
     )
 
-    assert expiry_date == datetime(2026, 4, 13, 0, 0, 0)
-    assert expiry_time == datetime(1899, 12, 30, 7, 43, 29)
+    assert expiry_date == datetime.combine(local_expiry.date(), time.min)
+    assert expiry_time == datetime.combine(date(1899, 12, 30), local_expiry.time())
 
 
 def test_split_access_expiry_for_phone_uses_date_only_format():
+    local_expiry = datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
     expiry_date, expiry_time = gate_runtime._split_access_expiry(
         datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc),
         key_type="Phone",
     )
 
-    assert expiry_date == datetime(2026, 4, 13, 0, 0, 0)
+    assert expiry_date == datetime.combine(local_expiry.date(), time.min)
     assert expiry_time == datetime(1899, 12, 30, 0, 0, 0)
 
 
@@ -336,6 +338,7 @@ def test_insert_real_user_uses_storage_phone_for_phone_keys(monkeypatch):
 
 def test_insert_real_user_splits_expiry_date_and_time(monkeypatch):
     cursor = _FakeCursor()
+    local_expiry = datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
 
     monkeypatch.setattr(gate_runtime, "_sample_user_defaults", lambda *args, **kwargs: {})
     monkeypatch.setattr(
@@ -364,14 +367,15 @@ def test_insert_real_user_splits_expiry_date_and_time(monkeypatch):
 
     assert any(
         sql.startswith("INSERT INTO Users")
-        and datetime(2026, 4, 13, 0, 0, 0) in params
-        and datetime(1899, 12, 30, 7, 43, 29) in params
+        and datetime.combine(local_expiry.date(), time.min) in params
+        and datetime.combine(date(1899, 12, 30), local_expiry.time()) in params
         for sql, params in cursor.commands
     )
 
 
 def test_insert_real_phone_user_stores_date_only_expiry(monkeypatch):
     cursor = _FakeCursor()
+    local_expiry = datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
 
     monkeypatch.setattr(gate_runtime, "_sample_user_defaults", lambda *args, **kwargs: {})
     monkeypatch.setattr(
@@ -400,7 +404,7 @@ def test_insert_real_phone_user_stores_date_only_expiry(monkeypatch):
 
     assert any(
         sql.startswith("INSERT INTO Users")
-        and datetime(2026, 4, 13, 0, 0, 0) in params
+        and datetime.combine(local_expiry.date(), time.min) in params
         and datetime(1899, 12, 30, 0, 0, 0) in params
         for sql, params in cursor.commands
     )

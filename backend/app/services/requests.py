@@ -32,12 +32,25 @@ class RequestIntegrationError(Exception):
         self.message = message
 
 
+def _merge_access_point_ids(*groups: list[int]) -> list[int]:
+    merged: list[int] = []
+    seen: set[int] = set()
+    for group in groups:
+        for item in group:
+            point_id = int(item)
+            if point_id in seen:
+                continue
+            seen.add(point_id)
+            merged.append(point_id)
+    return merged
+
+
 def _resolved_access_point_ids(*, key_type: str, requested_ids: list[int]) -> list[int]:
-    normalized_requested = [int(item) for item in requested_ids]
+    normalized_requested = _merge_access_point_ids(requested_ids)
     if key_type != "Phone":
         return normalized_requested
     configured_gsm = list(settings.gsm_access_point_ids)
-    return configured_gsm or normalized_requested
+    return _merge_access_point_ids(normalized_requested, configured_gsm)
 
 
 def resolve_request_status(is_permanent: bool, expires_at: datetime | None) -> str:
