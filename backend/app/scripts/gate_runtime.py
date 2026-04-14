@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import tempfile
+import time as time_module
 import uuid
 from collections import Counter
 from contextlib import contextmanager
@@ -29,6 +31,8 @@ _DEFAULT_ODBC_DRIVER = "Microsoft Access Driver (*.mdb, *.accdb)"
 _REQUIRED_TABLES = {"Users", "Readers", "AccessTable"}
 ALLOWED_KEY_TYPES = {"Phone", "VehicleNumber"}
 WIEGAND_BITS = 26
+_GATETERM_UI_TRANSPORTS = {"gateterm_ui", "gate_terminal_ui", "gateterm"}
+_GATETERM_ACCESS_WINDOW_TITLE = "Управление точками доступа"
 _VEHICLE_LOOKALIKE_MAP = {
     "A": "А",
     "B": "В",
@@ -1981,6 +1985,302 @@ def _send_wiegand26(access_point_id: int, credential: dict[str, Any], external_k
     )
 
 
+def _configured_open_transport() -> str:
+    return (_env("GATE_WIEGAND_TRANSPORT", default="dry_run") or "dry_run").strip().lower()
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = _env(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = _env(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw.strip())
+    except ValueError:
+        return default
+
+
+def _gateterm_ui_row_override() -> dict[int, int]:
+    raw = _env("GATE_GATETERM_UI_ROW_MAP_JSON")
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    resolved: dict[int, int] = {}
+    for key, value in parsed.items():
+        try:
+            resolved[int(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return resolved
+
+
+def _gateterm_ui_visible_rows(cursor: pyodbc.Cursor) -> list[dict[str, Any]]:
+    rows = cursor.execute(
+        """
+        SELECT
+            r.RdrPtr,
+            r.Num,
+            r.Name AS ReaderName,
+            d.DevPtr,
+            d.PortPtr,
+            d.Address,
+            d.Name AS DeviceName,
+            d.DevMode,
+            d.AutoNumbers,
+            d.Dinner
+        FROM Readers AS r
+        INNER JOIN Devices AS d ON d.DevPtr = r.DevPtr
+        ORDER BY d.DevPtr, r.Num
+        """
+    ).fetchall()
+
+    visible_rows: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            reader_num = int(row.Num)
+        except (TypeError, ValueError):
+            continue
+        if bool(getattr(row, "Dinner", False)):
+            continue
+
+        dev_mode = int(getattr(row, "DevMode", 0) or 0)
+        auto_numbers = bool(getattr(row, "AutoNumbers", False))
+        if reader_num != 1 and dev_mode == 1:
+            continue
+
+        visible_rows.append(
+            {
+                "access_point_id": int(row.RdrPtr),
+                "reader_num": reader_num,
+                "reader_name": str(row.ReaderName or ""),
+                "device_id": int(row.DevPtr),
+                "device_address": int(row.Address),
+                "device_name": str(row.DeviceName or ""),
+                "dev_mode": dev_mode,
+                "auto_numbers": auto_numbers,
+            }
+        )
+    return visible_rows
+
+
+def _current_gate_events_db_path() -> Path:
+    mdb_path, _ = _resolve_gate_paths()
+    return mdb_path.parent / "Events" / f"n{datetime.now():%y%m%d}.mdb"
+
+
+def _latest_gate_open_event(access_point_id: int) -> dict[str, Any] | None:
+    events_db = _current_gate_events_db_path()
+    if not events_db.exists():
+        return None
+
+    _, systemdb_path = _resolve_gate_paths()
+    temp_dir = Path(tempfile.mkdtemp(prefix="gate-event-ro-"))
+    temp_events = temp_dir / events_db.name
+    temp_systemdb = temp_dir / "Gate.mdw"
+    try:
+        shutil.copy2(events_db, temp_events)
+        shutil.copy2(systemdb_path, temp_systemdb)
+        conn = pyodbc.connect(_build_connection_string(temp_events, temp_systemdb))
+        cursor = conn.cursor()
+        try:
+            row = cursor.execute(
+                """
+                SELECT TOP 1
+                    [Index],
+                    [DateTime],
+                    EventType,
+                    EventCode,
+                    DevPtr,
+                    RdrPtr,
+                    OperatorID,
+                    Unit,
+                    Message,
+                    [Name]
+                FROM Events
+                WHERE RdrPtr = ?
+                  AND EventType = 5
+                  AND EventCode = 208
+                ORDER BY [Index] DESC
+                """,
+                (access_point_id,),
+            ).fetchone()
+        finally:
+            cursor.close()
+            conn.close()
+    finally:
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    if row is None:
+        return None
+    event_time = row[1]
+    return {
+        "index": int(row[0]),
+        "time": event_time.isoformat() if isinstance(event_time, datetime) else str(event_time),
+        "event_type": int(row[2]),
+        "event_code": int(row[3]),
+        "device_id": int(row[4]),
+        "access_point_id": int(row[5]),
+        "operator_id": int(row[6]),
+        "unit": str(row[7] or ""),
+        "message": str(row[8] or ""),
+        "name": str(row[9] or ""),
+    }
+
+
+def _wait_for_gate_open_event(access_point_id: int, previous_index: int | None, timeout_seconds: float) -> dict[str, Any] | None:
+    deadline = time_module.monotonic() + timeout_seconds
+    while time_module.monotonic() <= deadline:
+        event = _latest_gate_open_event(access_point_id)
+        if event is not None and (previous_index is None or event["index"] > previous_index):
+            return event
+        time_module.sleep(0.25)
+    return None
+
+
+def _find_gateterm_access_window(app: Any) -> Any | None:
+    for window in app.windows():
+        try:
+            if _GATETERM_ACCESS_WINDOW_TITLE in str(window.window_text()):
+                return app.window(handle=window.handle)
+        except Exception:
+            continue
+    return None
+
+
+def _open_gateterm_access_window(app: Any) -> Any | None:
+    window = _find_gateterm_access_window(app)
+    if window is not None:
+        return window
+
+    for candidate in app.windows():
+        try:
+            if "GATE Terminal" not in str(candidate.window_text()):
+                continue
+            candidate.set_focus()
+            candidate.menu_select("Управление->Точки доступа")
+            time_module.sleep(0.75)
+            return _find_gateterm_access_window(app)
+        except Exception:
+            continue
+    return None
+
+
+def _open_access_point_via_gateterm_ui(cursor: pyodbc.Cursor, access_point_id: int, external_key_id: str | None = None) -> GateOpenResponse:
+    visible_rows = _gateterm_ui_visible_rows(cursor)
+    row_map = {int(item["access_point_id"]): index for index, item in enumerate(visible_rows)}
+    row_map.update(_gateterm_ui_row_override())
+
+    if access_point_id not in row_map:
+        return GateOpenResponse(
+            success=False,
+            error_code="gateterm_ui_row_not_visible",
+            message="GateTerm access-point window does not expose this reader for UI opening",
+            details={
+                "transport": "gateterm_ui",
+                "external_key_id": external_key_id,
+                "visible_access_point_ids": [int(item["access_point_id"]) for item in visible_rows],
+                "visible_rows": visible_rows,
+            },
+        )
+
+    try:
+        from pywinauto import Application
+    except ImportError as exc:
+        return GateOpenResponse(
+            success=False,
+            error_code="gateterm_ui_dependency_missing",
+            message=f"pywinauto is required for GateTerm UI transport: {exc}",
+            details={"transport": "gateterm_ui", "external_key_id": external_key_id},
+        )
+
+    gate_term_exe = _env("GATE_GATETERM_EXE", default=r"C:\GATE\Terminal\GateTerm.exe")
+    if not gate_term_exe:
+        return GateOpenResponse(
+            success=False,
+            error_code="gateterm_ui_not_configured",
+            message="GATE_GATETERM_EXE is not configured",
+            details={"transport": "gateterm_ui", "external_key_id": external_key_id},
+        )
+
+    previous_event = _latest_gate_open_event(access_point_id)
+    previous_index = int(previous_event["index"]) if previous_event is not None else None
+
+    try:
+        app = Application(backend="win32").connect(path=gate_term_exe)
+        window = _open_gateterm_access_window(app)
+        if window is None:
+            raise RuntimeError("GateTerm access-point window is not open and could not be opened from the menu")
+
+        window.set_focus()
+        grid = window.child_window(class_name="MSFlexGridWndClass")
+        button = window.child_window(control_id=11, class_name="ThunderRT6CommandButton")
+        rect = grid.rectangle()
+
+        row_index = int(row_map[access_point_id])
+        row_height = _env_int("GATE_GATETERM_UI_ROW_HEIGHT", 16)
+        header_height = _env_int("GATE_GATETERM_UI_HEADER_HEIGHT", 17)
+        x_offset = _env_int("GATE_GATETERM_UI_X_OFFSET", 70)
+        y_offset = header_height + (row_height * row_index) + max(row_height // 2, 1)
+        if y_offset <= 0 or rect.top + y_offset >= rect.bottom:
+            raise RuntimeError(f"Computed GateTerm row coordinate is outside the grid: row_index={row_index}")
+
+        grid.click_input(coords=(x_offset, y_offset))
+        button.click_input()
+    except Exception as exc:
+        return GateOpenResponse(
+            success=False,
+            error_code="gateterm_ui_error",
+            message=f"GateTerm UI open failed: {exc}",
+            details={
+                "transport": "gateterm_ui",
+                "external_key_id": external_key_id,
+                "access_point_id": access_point_id,
+                "row_index": row_map.get(access_point_id),
+                "visible_rows": visible_rows,
+            },
+        )
+
+    timeout_seconds = _env_float("GATE_GATETERM_UI_VERIFY_TIMEOUT_SECONDS", 6.0)
+    observed_event = _wait_for_gate_open_event(access_point_id, previous_index, timeout_seconds)
+    details = {
+        "transport": "gateterm_ui",
+        "external_key_id": external_key_id,
+        "access_point_id": access_point_id,
+        "row_index": int(row_map[access_point_id]),
+        "visible_rows": visible_rows,
+        "previous_event": previous_event,
+        "observed_event": observed_event,
+    }
+    if observed_event is None:
+        return GateOpenResponse(
+            success=False,
+            error_code="gateterm_ui_event_not_observed",
+            message="GateTerm UI command was sent, but no matching Gate operator event was observed",
+            details=details,
+        )
+
+    return GateOpenResponse(
+        success=True,
+        message=f"Access point {access_point_id} opened via GateTerm UI",
+        details=details,
+    )
+
+
 def open_access_point(access_point_id: int, external_key_id: str | None = None) -> dict[str, Any]:
     if not isinstance(access_point_id, int) or access_point_id <= 0:
         raise ValueError("access_point_id must be a positive integer")
@@ -2036,6 +2336,19 @@ def open_access_point(access_point_id: int, external_key_id: str | None = None) 
                 "error_code": result.error_code,
                 "message": result.message,
                 "details": result.details,
+            }
+
+        if _configured_open_transport() in _GATETERM_UI_TRANSPORTS:
+            transport_result = _open_access_point_via_gateterm_ui(
+                cursor,
+                access_point_id=access_point_id,
+                external_key_id=external_key_id,
+            )
+            return {
+                "success": transport_result.success,
+                "error_code": transport_result.error_code,
+                "message": transport_result.message,
+                "details": transport_result.details,
             }
 
         credential = _build_synthetic_wiegand_credential(user_ptr=user_ptr, access_point_id=access_point_id)

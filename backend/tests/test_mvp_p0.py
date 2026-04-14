@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -9,7 +9,7 @@ from sqlalchemy import select
 from backend.app.database import SessionLocal
 from backend.app.models import Request, User
 from backend.app.services.auth import hash_password
-from backend.app.services.requests import cleanup_broken_requests
+from backend.app.services.requests import cleanup_broken_requests, cleanup_expired_requests
 from backend.app.services import requests as request_service
 from backend.app.services.gate import gate_client
 
@@ -310,6 +310,45 @@ def test_cleanup_broken_requests_cancels_invalid_gate_key_rows():
             assert refreshed.cancelled_at is not None
 
     asyncio.run(scenario())
+
+
+def test_cleanup_expired_requests_can_skip_gate_key_removal():
+    login = f"expired_cleanup_{uuid4().hex[:8]}"
+    password = "demo123"
+    user_id = asyncio.run(_ensure_user(login, password, is_active=True))
+    removed_key_ids: list[int] = []
+    original_remove_key = gate_client.remove_key
+    gate_client.remove_key = lambda key_id: removed_key_ids.append(int(key_id)) or True
+
+    async def scenario() -> None:
+        async with SessionLocal() as session:
+            expired = Request(
+                resident_id=user_id,
+                key_type="VehicleNumber",
+                key_value=f"X{uuid4().hex[:6]}",
+                gate_key_id=424242,
+                access_point_ids=[1],
+                is_permanent=False,
+                status="active",
+                expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+                created_at=datetime.now(timezone.utc) - timedelta(hours=2),
+            )
+            session.add(expired)
+            await session.commit()
+
+            changed = await cleanup_expired_requests(session, remove_gate_keys=False)
+            assert changed >= 1
+
+            refreshed = await session.get(Request, expired.id)
+            assert refreshed is not None
+            assert refreshed.status == "expired"
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        gate_client.remove_key = original_remove_key
+
+    assert removed_key_ids == []
 
 
 def test_create_request_returns_502_when_gate_returns_invalid_key_id(client):

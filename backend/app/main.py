@@ -18,6 +18,7 @@ from .services.auth import ensure_admin_user, ensure_bootstrap_test_users, ensur
 from .services.requests import (
     cleanup_broken_requests,
     cleanup_duplicate_requests,
+    cleanup_expired_requests,
     ensure_active_request_unique_index,
     ensure_requests_schema,
 )
@@ -137,6 +138,9 @@ async def startup_event() -> None:
         duplicate_count = await cleanup_duplicate_requests(session)
         if duplicate_count:
             logging.info("Cleaned up %s duplicate active requests", duplicate_count)
+        expired_count = await cleanup_expired_requests(session, remove_gate_keys=False)
+        if expired_count:
+            logging.info("Marked %s expired active requests as expired", expired_count)
         await ensure_active_request_unique_index(session)
         await ensure_demo_user(session)
         await ensure_admin_user(session)

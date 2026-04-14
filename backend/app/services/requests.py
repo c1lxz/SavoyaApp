@@ -377,7 +377,7 @@ async def has_access_to_point(session: AsyncSession, user_id: int, access_point_
     return False
 
 
-async def cleanup_expired_requests(session: AsyncSession) -> int:
+async def cleanup_expired_requests(session: AsyncSession, *, remove_gate_keys: bool = True) -> int:
     now = utcnow()
     query = await session.execute(
         select(Request).where(
@@ -399,7 +399,7 @@ async def cleanup_expired_requests(session: AsyncSession) -> int:
                 Request.id != req.id, Request.key_value == req.key_value, Request.status == "active"
             )
         )
-        if int(other_query.scalar_one()) == 0 and req.gate_key_id:
+        if remove_gate_keys and int(other_query.scalar_one()) == 0 and req.gate_key_id:
             gate_client.remove_key(req.gate_key_id)
         changed += 1
 
