@@ -31,6 +31,7 @@ _DEFAULT_ODBC_DRIVER = "Microsoft Access Driver (*.mdb, *.accdb)"
 _REQUIRED_TABLES = {"Users", "Readers", "AccessTable"}
 ALLOWED_KEY_TYPES = {"Phone", "VehicleNumber"}
 WIEGAND_BITS = 26
+_ACCESS_RECORD_STATE_PENDING_SYNC = 2
 _GATETERM_UI_TRANSPORTS = {"gateterm_ui", "gate_terminal_ui", "gateterm"}
 _GATETERM_ACCESS_WINDOW_TITLE = "Управление точками доступа"
 _VEHICLE_LOOKALIKE_MAP = {
@@ -591,34 +592,7 @@ def _sample_user_defaults(
             params,
         ).fetchone()
     else:
-        rows = cursor.execute(
-            """
-            SELECT TOP 100
-                UserPtr,
-                GroupPtr,
-                IdleNotLimited,
-                NoFacility,
-                BgPtr,
-                SendSms,
-                SendMail,
-                UniPassMode,
-                Phone,
-                Number,
-                KeyType,
-                Deleted
-            FROM Users
-            ORDER BY UserPtr DESC
-            """
-        ).fetchall()
-        row = next(
-            (
-                item
-                for item in rows
-                if (exclude_user_ptr is None or int(getattr(item, "UserPtr", 0) or 0) != int(exclude_user_ptr))
-                and _is_phone_identity_row(item)
-            ),
-            None,
-        )
+        row = _sample_phone_user_defaults(cursor, exclude_user_ptr=exclude_user_ptr)
 
     if row is None:
         return {}
@@ -951,6 +925,13 @@ def _split_access_expiry(
     return expiry_date, expiry_time
 
 
+def _access_lock_date(expires_at: datetime | None) -> datetime | None:
+    if expires_at is None:
+        return None
+    current_local = datetime.now().astimezone().replace(tzinfo=None)
+    return datetime.combine(current_local.date(), time.min)
+
+
 def _insert_real_user(
     cursor: pyodbc.Cursor,
     *,
@@ -992,6 +973,7 @@ def _insert_real_user(
     add("UseExpiry", expiry_date is not None)
     add("ExpiryDate", expiry_date)
     add("ExpiryTime", expiry_time)
+    add("LockDate", _access_lock_date(expires_at))
     add("Visitor", is_visitor)
     add("Status", ACTIVE_USER_STATUS)
 
@@ -1025,6 +1007,7 @@ def _reactivate_real_user(
     expires_at: datetime | None,
 ) -> int:
     expiry_date, expiry_time = _split_access_expiry(expires_at, key_type=key_type)
+    lock_date = _access_lock_date(expires_at)
     last_name, first_name, father_name = _split_name(resident_name)
     assignments = [
         "[Deleted] = ?",
@@ -1042,7 +1025,7 @@ def _reactivate_real_user(
         expiry_time,
         is_visitor,
         ACTIVE_USER_STATUS,
-        None,
+        lock_date,
     ]
     storage_phone: str | None = None
     if key_type_value is not None:
@@ -1413,7 +1396,7 @@ def _ensure_access_permissions(
             template["Schedule5"],
             template["Schedule6"],
             template["Schedule7"],
-            template["RecordState"],
+            _ACCESS_RECORD_STATE_PENDING_SYNC,
             template["APB"],
             template["Inside"],
             template["CardType"],
@@ -1502,6 +1485,7 @@ def _upsert_real_user(
     )
     if existing_user_ptr is not None:
         expiry_date, expiry_time = _split_access_expiry(expires_at, key_type=key_type)
+        lock_date = _access_lock_date(expires_at)
         last_name, first_name, father_name = _split_name(resident_name)
         cursor.execute(
             """
@@ -1516,7 +1500,7 @@ def _upsert_real_user(
                 expiry_time,
                 is_visitor,
                 ACTIVE_USER_STATUS,
-                None,
+                lock_date,
                 existing_user_ptr,
             ),
         )
@@ -2140,6 +2124,106 @@ def _latest_gate_open_event(access_point_id: int) -> dict[str, Any] | None:
         "message": str(row[8] or ""),
         "name": str(row[9] or ""),
     }
+
+
+def _sample_phone_user_defaults(cursor: pyodbc.Cursor, *, exclude_user_ptr: int | None = None) -> Any | None:
+    phone_key_type_value = _sample_key_type(cursor, "Phone")
+    rows = cursor.execute(
+        """
+        SELECT TOP 1000
+            u.UserPtr,
+            u.GroupPtr,
+            u.IdleNotLimited,
+            u.NoFacility,
+            u.BgPtr,
+            u.SendSms,
+            u.SendMail,
+            u.UniPassMode,
+            u.Phone,
+            u.Number,
+            u.NumberU,
+            u.KeyType,
+            u.Deleted,
+            u.Status,
+            COUNT(a.RdrPtr) AS GsmAccessCount
+        FROM (Users AS u
+            INNER JOIN AccessTable AS a ON a.UserPtr = u.UserPtr)
+            INNER JOIN Readers AS r ON r.RdrPtr = a.RdrPtr
+        WHERE r.Name IS NOT NULL
+          AND (r.Name LIKE '%GSM%' OR r.Name LIKE '%Р“РЎРњ%' OR r.Name LIKE '%РіСЃРј%')
+        GROUP BY
+            u.UserPtr,
+            u.GroupPtr,
+            u.IdleNotLimited,
+            u.NoFacility,
+            u.BgPtr,
+            u.SendSms,
+            u.SendMail,
+            u.UniPassMode,
+            u.Phone,
+            u.Number,
+            u.NumberU,
+            u.KeyType,
+            u.Deleted,
+            u.Status
+        ORDER BY u.UserPtr DESC
+        """
+    ).fetchall()
+    candidates = [
+        item
+        for item in rows
+        if (exclude_user_ptr is None or int(getattr(item, "UserPtr", 0) or 0) != int(exclude_user_ptr))
+        and _is_phone_identity_row(item, phone_key_type_value=phone_key_type_value)
+        and _is_active_user_status(getattr(item, "Status", None))
+        and int(getattr(item, "GsmAccessCount", 0) or 0) > 0
+    ]
+    if not candidates:
+        rows = cursor.execute(
+            """
+            SELECT TOP 100
+                UserPtr,
+                GroupPtr,
+                IdleNotLimited,
+                NoFacility,
+                BgPtr,
+                SendSms,
+                SendMail,
+                UniPassMode,
+                Phone,
+                Number,
+                NumberU,
+                KeyType,
+                Deleted,
+                Status
+            FROM Users
+            ORDER BY UserPtr DESC
+            """
+        ).fetchall()
+        return next(
+            (
+                item
+                for item in rows
+                if (exclude_user_ptr is None or int(getattr(item, "UserPtr", 0) or 0) != int(exclude_user_ptr))
+                and _is_phone_identity_row(item, phone_key_type_value=phone_key_type_value)
+                and _is_active_user_status(getattr(item, "Status", None))
+            ),
+            None,
+        )
+
+    group_counts = Counter(getattr(item, "GroupPtr", None) for item in candidates)
+    dominant_group = group_counts.most_common(1)[0][0]
+    for item in candidates:
+        if getattr(item, "GroupPtr", None) == dominant_group:
+            return item
+    return candidates[0]
+
+
+def _is_active_user_status(raw_status: Any) -> bool:
+    try:
+        status_value = None if raw_status is None else int(raw_status)
+    except (TypeError, ValueError):
+        status_value = raw_status
+    return status_value is None or status_value == ACTIVE_USER_STATUS
 
 
 def _wait_for_gate_open_event(access_point_id: int, previous_index: int | None, timeout_seconds: float) -> dict[str, Any] | None:

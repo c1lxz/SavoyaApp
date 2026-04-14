@@ -376,8 +376,10 @@ def test_insert_real_user_splits_expiry_date_and_time(monkeypatch):
 def test_insert_real_phone_user_stores_date_only_expiry(monkeypatch):
     cursor = _FakeCursor()
     local_expiry = datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+    lock_date = datetime(2026, 4, 12, 0, 0, 0)
 
     monkeypatch.setattr(gate_runtime, "_sample_user_defaults", lambda *args, **kwargs: {})
+    monkeypatch.setattr(gate_runtime, "_access_lock_date", lambda expires_at: lock_date)
     monkeypatch.setattr(
         gate_runtime,
         "_build_identity",
@@ -406,6 +408,7 @@ def test_insert_real_phone_user_stores_date_only_expiry(monkeypatch):
         sql.startswith("INSERT INTO Users")
         and datetime.combine(local_expiry.date(), time.min) in params
         and datetime(1899, 12, 30, 0, 0, 0) in params
+        and lock_date in params
         for sql, params in cursor.commands
     )
 
@@ -489,6 +492,43 @@ def test_upsert_existing_phone_user_heals_number_field(monkeypatch):
     assert observed["ensure"]["access_point_ids"] == [5, 6]
     assert observed["ensure"]["key_type"] == "Phone"
     assert observed["prune"] == (42, [5, 6])
+
+
+def test_upsert_existing_temporary_phone_user_sets_lock_date(monkeypatch):
+    cursor = _FakeCursor()
+    lock_date = datetime(2026, 4, 12, 0, 0, 0)
+
+    monkeypatch.setenv("GATE_PHONE_WRITE_FORMAT", "local_10")
+    monkeypatch.delenv("GATE_PHONE_STORAGE_FORMAT", raising=False)
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 6)
+    monkeypatch.setattr(gate_runtime, "_find_existing_user_ptr", lambda *args, **kwargs: 42)
+    monkeypatch.setattr(gate_runtime, "_find_reusable_deleted_user_ptr", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_access_lock_date", lambda expires_at: lock_date)
+    monkeypatch.setattr(gate_runtime, "_ensure_access_permissions", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_prune_access_permissions", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_verify_phone_user_state", lambda *_args, **_kwargs: None)
+
+    user_ptr = gate_runtime._upsert_real_user(
+        cursor,
+        key_type="Phone",
+        normalized_key_value="009991234567",
+        phone_number=None,
+        resident_name="Phone User",
+        plot_number=None,
+        is_visitor=False,
+        expires_at=datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc),
+        access_point_ids=[5, 6],
+    )
+
+    assert user_ptr == 42
+    assert any(
+        "SET Deleted = ?, UseExpiry = ?, ExpiryDate = ?, ExpiryTime = ?, Visitor = ?, Status = ?, LockDate = ?"
+        in sql
+        and params[1] is True
+        and params[6] == lock_date
+        and params[7] == 42
+        for sql, params in cursor.commands
+    )
 
 
 def test_upsert_existing_phone_user_verifies_final_state(monkeypatch):
@@ -609,6 +649,70 @@ def test_apply_user_defaults_for_existing_phone_user_uses_other_phone_template()
     )
 
 
+def test_sample_phone_user_defaults_prefers_dominant_gsm_group(monkeypatch):
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 6)
+    cursor = _TemplateSamplingCursor(
+        access_rows=[
+            SimpleNamespace(
+                UserPtr=99,
+                GroupPtr=2,
+                IdleNotLimited=True,
+                NoFacility=True,
+                BgPtr=9,
+                SendSms=False,
+                SendMail=False,
+                UniPassMode=5,
+                Phone="89991234567\n",
+                Number="009991234567",
+                NumberU="009991234567",
+                KeyType=6,
+                Deleted=False,
+                Status=0,
+                GsmAccessCount=2,
+            ),
+            SimpleNamespace(
+                UserPtr=98,
+                GroupPtr=1,
+                IdleNotLimited=False,
+                NoFacility=False,
+                BgPtr=0,
+                SendSms=True,
+                SendMail=True,
+                UniPassMode=0,
+                Phone="89990001122\n",
+                Number="0099990001122",
+                NumberU="0099990001122",
+                KeyType=6,
+                Deleted=False,
+                Status=0,
+                GsmAccessCount=2,
+            ),
+            SimpleNamespace(
+                UserPtr=97,
+                GroupPtr=1,
+                IdleNotLimited=False,
+                NoFacility=False,
+                BgPtr=0,
+                SendSms=True,
+                SendMail=True,
+                UniPassMode=0,
+                Phone="89990003344\n",
+                Number="0099990003344",
+                NumberU="0099990003344",
+                KeyType=6,
+                Deleted=False,
+                Status=0,
+                GsmAccessCount=2,
+            ),
+        ]
+    )
+
+    defaults = gate_runtime._sample_user_defaults(cursor, "Phone")
+
+    assert defaults["GroupPtr"] == 1
+    assert defaults["NoFacility"] is False
+
+
 def test_user_is_active_rejects_non_zero_status():
     cursor = _UserActiveCursor(
         SimpleNamespace(
@@ -694,7 +798,10 @@ def test_ensure_access_permissions_updates_existing_rows(monkeypatch):
     gate_runtime._ensure_access_permissions(cursor, 42, [70], key_type="Phone")
 
     assert any(
-        "UPDATE AccessTable" in sql and params[0] == 77 and params[-2:] == (42, 70)
+        "UPDATE AccessTable" in sql
+        and params[0] == 77
+        and params[9] == gate_runtime._ACCESS_RECORD_STATE_PENDING_SYNC
+        and params[-2:] == (42, 70)
         for sql, params in cursor.commands
     )
 
@@ -726,7 +833,9 @@ def test_ensure_access_permissions_inserts_new_rows_with_unique_inner_num(monkey
     gate_runtime._ensure_access_permissions(cursor, 42, [70], key_type="Phone")
 
     assert any(
-        "INSERT INTO AccessTable" in sql and params[:3] == (70, 42, 101)
+        "INSERT INTO AccessTable" in sql
+        and params[:3] == (70, 42, 101)
+        and params[11] == gate_runtime._ACCESS_RECORD_STATE_PENDING_SYNC
         for sql, params in cursor.commands
     )
 
@@ -758,7 +867,10 @@ def test_ensure_access_permissions_reassigns_conflicting_inner_num(monkeypatch):
     gate_runtime._ensure_access_permissions(cursor, 42, [70], key_type="Phone")
 
     assert any(
-        "UPDATE AccessTable" in sql and params[0] == 101 and params[-2:] == (42, 70)
+        "UPDATE AccessTable" in sql
+        and params[0] == 101
+        and params[9] == gate_runtime._ACCESS_RECORD_STATE_PENDING_SYNC
+        and params[-2:] == (42, 70)
         for sql, params in cursor.commands
     )
 
