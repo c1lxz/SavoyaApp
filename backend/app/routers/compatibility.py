@@ -212,10 +212,18 @@ async def compat_login(
 ) -> CompatAuthResult:
     client_ip = request.client.host if request.client else "unknown"
     limiter = request.app.state.login_rate_limiter
-    if not limiter.is_allowed(f"compat:{client_ip}:{payload.login.lower()}"):
+    ip_limiter = request.app.state.login_ip_rate_limiter
+    rate_limit_key = f"compat:{client_ip}:{payload.login.lower()}"
+    ip_rate_limit_key = f"compat:{client_ip}"
+    if not limiter.is_allowed(rate_limit_key) or not ip_limiter.is_allowed(ip_rate_limit_key):
         return CompatAuthResult(success=False, error="Too many login attempts")
 
     user, token, error_code = await login_with_password(session, payload.login, payload.password)
+    if user is None or token is None:
+        limiter.record_failure(rate_limit_key)
+        ip_limiter.record_failure(ip_rate_limit_key)
+    else:
+        limiter.reset(rate_limit_key)
     if error_code == "inactive_user":
         return CompatAuthResult(success=False, error="User is inactive")
     if user is None or token is None:
@@ -233,8 +241,15 @@ async def compat_login(
 @router.post("/auth/register", response_model=CompatRegisterAccountResult)
 async def compat_register_account(
     payload: CompatRegisterAccountPayload,
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
 ) -> CompatRegisterAccountResult:
+    client_ip = request.client.host if request.client else "unknown"
+    limiter = request.app.state.registration_rate_limiter
+    rate_limit_key = f"register:{client_ip}"
+    if not limiter.is_allowed(rate_limit_key):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many registration attempts")
+
     try:
         user, password = await create_user_account(
             session,
@@ -244,10 +259,13 @@ async def compat_register_account(
             require_password_change=True,
         )
     except UserAccountError as exc:
+        limiter.record_event(rate_limit_key)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT if exc.code == "phone_already_exists" else status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": exc.code, "message": exc.message},
         ) from exc
+
+    limiter.record_event(rate_limit_key)
 
     return CompatRegisterAccountResult(
         login=user.login or "",

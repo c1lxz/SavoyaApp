@@ -6,9 +6,11 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .utils.input_safety import (
+    normalize_account_phone,
     normalize_full_name,
     normalize_login,
     normalize_password,
+    normalize_strong_password,
     normalize_phone_key,
     normalize_plot_number,
     normalize_vehicle_number,
@@ -151,7 +153,7 @@ class CompatRegisterAccountPayload(BaseModel):
     @field_validator("phoneNumber")
     @classmethod
     def validate_phone_number(cls, value: str) -> str:
-        return normalize_phone_key(value)
+        return normalize_account_phone(value)
 
     @field_validator("plotNumber")
     @classmethod
@@ -173,7 +175,7 @@ class CompatChangePasswordPayload(BaseModel):
     @field_validator("newPassword", "repeatPassword")
     @classmethod
     def validate_password(cls, value: str) -> str:
-        return normalize_password(value)
+        return normalize_strong_password(value)
 
     @model_validator(mode="after")
     def validate_password_match(self) -> "CompatChangePasswordPayload":
@@ -403,7 +405,7 @@ class AdminCreateUserPayload(BaseModel):
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, value: str) -> str:
-        return normalize_phone_key(value)
+        return normalize_account_phone(value)
 
     @field_validator("plot_number")
     @classmethod

@@ -1,5 +1,6 @@
 node_modules/
 .venv/
+.env
 .expo/
 .expo-shared/
 npm-debug.*
@@ -22,3 +23,5 @@ backup_*.mdb
 backup_*.db
 logs/
 temp/
+certificate.key
+certificate.crt

@@ -30,6 +30,15 @@ from .services.user_accounts import ensure_users_schema
 settings = get_settings()
 logging.basicConfig(level=logging.INFO)
 _FRONTEND_DIST_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+_SENSITIVE_CACHE_PREFIXES = (
+    "/auth",
+    "/user",
+    "/passes",
+    "/gates",
+    "/access",
+    "/requests",
+    "/api",
+)
 
 
 def _split_host_and_port(raw_host: str | None) -> str:
@@ -96,6 +105,11 @@ def _is_allowed_host(raw_host: str | None) -> bool:
                     return True
     return False
 
+
+def _is_sensitive_cache_path(path: str) -> bool:
+    normalized = (path or "").strip()
+    return any(normalized == prefix or normalized.startswith(f"{prefix}/") for prefix in _SENSITIVE_CACHE_PREFIXES)
+
 app = FastAPI(
     title=settings.app_name,
     debug=settings.debug,
@@ -106,13 +120,21 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_allow_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 app.state.login_rate_limiter = LoginRateLimiter(
     attempts=settings.login_rate_limit_attempts,
     window_seconds=settings.login_rate_limit_window_seconds,
+)
+app.state.login_ip_rate_limiter = LoginRateLimiter(
+    attempts=settings.login_ip_rate_limit_attempts,
+    window_seconds=settings.login_ip_rate_limit_window_seconds,
+)
+app.state.registration_rate_limiter = LoginRateLimiter(
+    attempts=settings.registration_rate_limit_attempts,
+    window_seconds=settings.registration_rate_limit_window_seconds,
 )
 
 
@@ -126,11 +148,20 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "").lower()
+    if forwarded_proto == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    if _is_sensitive_cache_path(request.url.path) or request.headers.get("authorization"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
     return response
 
 
 @app.on_event("startup")
 async def startup_event() -> None:
+    settings.validate_runtime_security()
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

@@ -13,7 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..models import User
-from ..utils.input_safety import normalize_full_name, normalize_login, normalize_password, normalize_phone_key, normalize_plot_number
+from ..utils.input_safety import (
+    normalize_account_phone,
+    normalize_full_name,
+    normalize_login,
+    normalize_password,
+    normalize_plot_number,
+)
 
 settings = get_settings()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -89,7 +95,7 @@ def decrypt_visible_password(ciphertext: str | None) -> str | None:
 def set_user_password(user: User, password: str, *, require_change: bool) -> None:
     normalized = normalize_password(password)
     user.password_hash = pwd_context.hash(normalized)
-    user.password_encrypted = encrypt_visible_password(normalized)
+    user.password_encrypted = encrypt_visible_password(normalized) if require_change else None
     user.password_change_required = require_change
 
 
@@ -137,6 +143,23 @@ async def ensure_users_schema(session: AsyncSession) -> None:
         await session.execute(text(statement))
         await session.commit()
 
+    await clear_stale_visible_passwords(session)
+
+
+async def clear_stale_visible_passwords(session: AsyncSession) -> int:
+    result = await session.execute(
+        text(
+            """
+            UPDATE users
+            SET password_encrypted = NULL
+            WHERE password_change_required = 0
+              AND password_encrypted IS NOT NULL
+            """
+        )
+    )
+    await session.commit()
+    return int(result.rowcount or 0)
+
 
 def _validate_full_name_words(full_name: str) -> str:
     normalized = normalize_full_name(full_name)
@@ -173,6 +196,20 @@ async def _generate_login(session: AsyncSession, *, full_name: str, plot_number:
         suffix += 1
 
 
+async def _find_existing_user_id_by_phone(session: AsyncSession, normalized_phone: str) -> int | None:
+    query = await session.execute(select(User.id, User.phone).where(User.phone.is_not(None)))
+    for raw_user_id, raw_phone in query.all():
+        if raw_phone is None:
+            continue
+        try:
+            candidate_phone = normalize_account_phone(str(raw_phone))
+        except ValueError:
+            continue
+        if candidate_phone == normalized_phone:
+            return int(raw_user_id)
+    return None
+
+
 async def create_user_account(
     session: AsyncSession,
     *,
@@ -182,11 +219,11 @@ async def create_user_account(
     require_password_change: bool = True,
 ) -> tuple[User, str]:
     normalized_name = _validate_full_name_words(full_name)
-    normalized_phone = normalize_phone_key(phone_number)
+    normalized_phone = normalize_account_phone(phone_number)
     normalized_plot = normalize_plot_number(plot_number)
 
-    phone_query = await session.execute(select(User.id).where(User.phone == normalized_phone))
-    if phone_query.scalar_one_or_none() is not None:
+    existing_user_id = await _find_existing_user_id_by_phone(session, normalized_phone)
+    if existing_user_id is not None:
         raise UserAccountError(code="phone_already_exists", message="Пользователь с таким номером уже существует")
 
     owner_index = await _next_owner_index(session, normalized_plot)
@@ -220,10 +257,11 @@ async def update_user_password(session: AsyncSession, *, user: User, new_passwor
 
 
 def build_admin_user_payload(user: User) -> dict[str, str | int | bool | None | datetime]:
+    visible_password = decrypt_visible_password(user.password_encrypted) if user.password_change_required else None
     return {
         "id": user.id,
         "login": user.login,
-        "password": decrypt_visible_password(user.password_encrypted),
+        "password": visible_password,
         "full_name": user.name,
         "phone": user.phone,
         "plot_number": user.plot_number or user.apartment,

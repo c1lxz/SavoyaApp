@@ -15,6 +15,25 @@ type PasswordChangePromptModalProps = {
   onDismiss: () => void;
 };
 
+const validatePasswordStrength = (value: string): string | null => {
+  if (value.length < 10) {
+    return 'Пароль должен содержать минимум 10 символов';
+  }
+  if (!/[a-z]/.test(value)) {
+    return 'Добавьте строчную букву';
+  }
+  if (!/[A-Z]/.test(value)) {
+    return 'Добавьте заглавную букву';
+  }
+  if (!/\d/.test(value)) {
+    return 'Добавьте цифру';
+  }
+  if (!/[^A-Za-z0-9]/.test(value)) {
+    return 'Добавьте специальный символ';
+  }
+  return null;
+};
+
 export const PasswordChangePromptModal = ({
   visible,
   loading,
@@ -51,6 +70,12 @@ export const PasswordChangePromptModal = ({
       return;
     }
 
+    const passwordError = validatePasswordStrength(newPassword);
+    if (passwordError) {
+      setFormError(passwordError);
+      return;
+    }
+
     setFormError(null);
     await onSubmit(newPassword, repeatPassword);
   };
@@ -83,6 +108,8 @@ export const PasswordChangePromptModal = ({
           <Text style={styles.description}>
             Смените пароль сейчас или продолжите работу с временным паролем и сделайте это позже.
           </Text>
+
+          <Text style={styles.hint}>Минимум 10 символов: строчная, заглавная, цифра и спецсимвол.</Text>
 
           <View style={styles.form}>
             <AppInput
@@ -166,6 +193,11 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     fontSize: 15,
     lineHeight: 22,
+  },
+  hint: {
+    color: theme.colors.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
   },
   form: {
     gap: theme.spacing.md,

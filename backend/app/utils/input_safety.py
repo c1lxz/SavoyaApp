@@ -41,6 +41,21 @@ def normalize_password(value: str) -> str:
     return value
 
 
+def normalize_strong_password(value: str) -> str:
+    normalized = normalize_password(value)
+    if len(normalized) < 10:
+        raise ValueError("password must contain at least 10 characters")
+    if not any(ch.islower() for ch in normalized):
+        raise ValueError("password must contain a lowercase letter")
+    if not any(ch.isupper() for ch in normalized):
+        raise ValueError("password must contain an uppercase letter")
+    if not any(ch.isdigit() for ch in normalized):
+        raise ValueError("password must contain a digit")
+    if not any(not ch.isalnum() for ch in normalized):
+        raise ValueError("password must contain a special character")
+    return normalized
+
+
 def normalize_plot_number(value: str) -> str:
     normalized = normalize_plain_text(value, max_length=20, field_name="plot_number")
     if not _PLOT_RE.fullmatch(normalized):
@@ -58,6 +73,18 @@ def normalize_phone_key(value: str) -> str:
     if len(digits) < 7 or len(digits) > 15:
         raise ValueError("phone must contain 7 to 15 digits")
     return normalized
+
+
+def normalize_account_phone(value: str) -> str:
+    normalized = normalize_phone_key(value)
+    digits = "".join(ch for ch in normalized if ch.isdigit())
+    if digits.startswith("00") and len(digits) > 2:
+        digits = digits[2:]
+    if len(digits) == 10 and digits.startswith("9"):
+        return f"+7{digits}"
+    if len(digits) == 11 and digits[0] in {"7", "8"}:
+        return f"+7{digits[-10:]}"
+    return f"+{digits}"
 
 
 def normalize_vehicle_number(value: str) -> str:

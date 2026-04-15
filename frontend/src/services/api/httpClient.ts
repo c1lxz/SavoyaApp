@@ -6,6 +6,18 @@ type RequestOptions = {
   body?: unknown;
 };
 
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+
+const isLoopbackHost = (hostname: string): boolean => LOOPBACK_HOSTS.has(hostname.toLowerCase());
+
+const resolveRequestUrl = (path: string): URL => {
+  if (typeof window !== 'undefined') {
+    return new URL(`${API_BASE_URL}${path}`, window.location.origin);
+  }
+
+  return new URL(`${API_BASE_URL}${path}`);
+};
+
 const resolveErrorMessage = (payload: unknown): string | null => {
   if (typeof payload === 'string') {
     return payload;
@@ -49,13 +61,23 @@ const resolveErrorMessage = (payload: unknown): string | null => {
 
 export const apiRequest = async <T>(path: string, options: RequestOptions = {}): Promise<T> => {
   const token = getAccessToken();
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const requestUrl = resolveRequestUrl(path);
+
+  if (typeof window !== 'undefined' && token && requestUrl.protocol !== 'https:' && !isLoopbackHost(requestUrl.hostname)) {
+    throw new Error('Небезопасное соединение с API заблокировано');
+  }
+
+  const response = await fetch(requestUrl.toString(), {
     method: options.method ?? 'GET',
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: options.body ? JSON.stringify(options.body) : undefined,
+    credentials: 'omit',
+    cache: 'no-store',
+    redirect: 'error',
+    referrerPolicy: 'no-referrer',
   });
 
   if (!response.ok) {

@@ -7,6 +7,8 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./backend_test.db"
 os.environ["GATE_OPEN_SUCCESS_RATE"] = "1.0"
 os.environ["GATE_REAL_INTEGRATION_ENABLED"] = "False"
 os.environ["DEBUG"] = "False"
+os.environ["ENVIRONMENT"] = "test"
+os.environ["SECRET_KEY"] = "test-secret-key-for-pytest-2026-very-long"
 os.environ["BOOTSTRAP_DEMO_USER"] = "True"
 
 import pytest
@@ -34,10 +36,13 @@ def client():
 
 @pytest.fixture(autouse=True)
 def reset_login_rate_limiter():
-    limiter = app.state.login_rate_limiter
-    limiter._events.clear()
+    app.state.login_rate_limiter._events.clear()
+    app.state.login_ip_rate_limiter._events.clear()
+    app.state.registration_rate_limiter._events.clear()
     yield
-    limiter._events.clear()
+    app.state.login_rate_limiter._events.clear()
+    app.state.login_ip_rate_limiter._events.clear()
+    app.state.registration_rate_limiter._events.clear()
 
 
 async def _reset_database_state() -> None:

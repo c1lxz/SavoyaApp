@@ -67,6 +67,13 @@ const statusLabel = (item: AdminUserItem) => {
 
 const statusColor = (item: AdminUserItem) => (item.isActive ? theme.colors.success : theme.colors.danger);
 
+const passwordLabel = (item: AdminUserItem) => {
+  if (item.password) {
+    return `${item.password}${item.passwordChangeRequired ? '\nНужно сменить' : ''}`;
+  }
+  return item.passwordChangeRequired ? 'Временный пароль недоступен' : 'Скрыт после смены';
+};
+
 const ActionButton = ({
   title,
   icon,
@@ -108,7 +115,7 @@ const UsersTable = ({
       {users.map((item, index) => (
         <View key={item.id} style={[styles.tableRow, index % 2 === 1 ? styles.tableRowAlt : null]}>
           <TableCell width={COLUMNS.login}>{item.login}</TableCell>
-          <TableCell width={COLUMNS.password}>{item.password ? `${item.password}${item.passwordChangeRequired ? '\nНужно сменить' : ''}` : 'Недоступно'}</TableCell>
+          <TableCell width={COLUMNS.password}>{passwordLabel(item)}</TableCell>
           <TableCell width={COLUMNS.fullName}>{item.fullName || '-'}</TableCell>
           <TableCell width={COLUMNS.phone}>{item.phone || '-'}</TableCell>
           <TableCell width={COLUMNS.plot}>{item.plotNumber || '-'}</TableCell>

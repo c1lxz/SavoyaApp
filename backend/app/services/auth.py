@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..models import User
 from ..utils.jwt import create_access_token
+from ..utils.input_safety import normalize_account_phone
 from .user_accounts import set_user_password
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -31,7 +32,7 @@ async def ensure_demo_user(session: AsyncSession) -> None:
         user = User(login=settings.demo_login)
         session.add(user)
 
-    user.phone = settings.demo_phone
+    user.phone = normalize_account_phone(settings.demo_phone)
     user.name = settings.demo_full_name
     user.apartment = settings.demo_plot_number
     user.is_admin = False
@@ -55,7 +56,7 @@ async def ensure_admin_user(session: AsyncSession) -> None:
         user = User(login=settings.admin_login)
         session.add(user)
 
-    user.phone = settings.admin_phone
+    user.phone = normalize_account_phone(settings.admin_phone)
     user.name = settings.admin_full_name
     user.apartment = settings.admin_plot_number
     user.is_admin = True
@@ -79,7 +80,7 @@ async def ensure_bootstrap_test_users(session: AsyncSession) -> None:
             user = User(login=payload["login"])
             session.add(user)
 
-        user.phone = payload["phone"]
+        user.phone = normalize_account_phone(payload["phone"])
         user.name = payload["name"] or f"Test User {payload['login']}"
         user.apartment = payload["plot_number"] or None
         user.is_admin = False

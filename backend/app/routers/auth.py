@@ -27,10 +27,18 @@ def _to_user_response(user: User) -> UserResponse:
 async def login(payload: LoginRequest, request: Request, session: AsyncSession = Depends(get_db_session)) -> TokenResponse:
     client_ip = request.client.host if request.client else "unknown"
     limiter = request.app.state.login_rate_limiter
-    if not limiter.is_allowed(f"api:{client_ip}:{payload.login.lower()}"):
+    ip_limiter = request.app.state.login_ip_rate_limiter
+    rate_limit_key = f"api:{client_ip}:{payload.login.lower()}"
+    ip_rate_limit_key = f"api:{client_ip}"
+    if not limiter.is_allowed(rate_limit_key) or not ip_limiter.is_allowed(ip_rate_limit_key):
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many login attempts")
 
     user, token, error_code = await login_with_password(session, payload.login, payload.password)
+    if user is None or token is None:
+        limiter.record_failure(rate_limit_key)
+        ip_limiter.record_failure(ip_rate_limit_key)
+    else:
+        limiter.reset(rate_limit_key)
     if error_code == "inactive_user":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Пользователь деактивирован")
     if user is None or token is None:

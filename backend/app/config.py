@@ -2,20 +2,23 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from .utils.input_safety import normalize_strong_password
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    environment: str = "development"
     app_name: str = "GateApp Backend"
-    debug: bool = True
+    debug: bool = False
     api_prefix: str = "/api"
     cors_allow_origins_json: str = (
-        '["http://xn--80aaachc8cmu1au8c1f.xn--p1ai", "https://xn--80aaachc8cmu1au8c1f.xn--p1ai", '
-        '"http://www.xn--80aaachc8cmu1au8c1f.xn--p1ai", "https://www.xn--80aaachc8cmu1au8c1f.xn--p1ai", '
+        '["https://xn--80aaachc8cmu1au8c1f.xn--p1ai", "https://www.xn--80aaachc8cmu1au8c1f.xn--p1ai", '
         '"http://localhost", "http://127.0.0.1", "http://localhost:80", "http://127.0.0.1:80", '
         '"http://localhost:8081", "http://127.0.0.1:8081", "http://localhost:8082", "http://127.0.0.1:8082", '
         '"http://localhost:8083", "http://127.0.0.1:8083", "http://localhost:19006", "http://127.0.0.1:19006"]'
@@ -30,7 +33,9 @@ class Settings(BaseSettings):
 
     secret_key: str = "change-me"
     algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60 * 24 * 30
+    access_token_expire_minutes: int = 60 * 12
+    jwt_issuer: str = "savoya-backend"
+    jwt_audience: str = "savoya-clients"
 
     # v1 login/password bootstrap account
     demo_login: str = "demo"
@@ -67,6 +72,10 @@ class Settings(BaseSettings):
     gate_event_poll_limit: int = 200
     login_rate_limit_attempts: int = 5
     login_rate_limit_window_seconds: int = 300
+    login_ip_rate_limit_attempts: int = 20
+    login_ip_rate_limit_window_seconds: int = 300
+    registration_rate_limit_attempts: int = 5
+    registration_rate_limit_window_seconds: int = 900
 
     @property
     def gate_action_map(self) -> dict[str, int]:
@@ -115,6 +124,55 @@ class Settings(BaseSettings):
                 }
             )
         return users
+
+    @property
+    def normalized_environment(self) -> str:
+        return self.environment.strip().lower() or "development"
+
+    @property
+    def is_production(self) -> bool:
+        return self.normalized_environment == "production"
+
+    def validate_runtime_security(self) -> None:
+        if not self.is_production:
+            return
+
+        issues: list[str] = []
+        secret_key = self.secret_key.strip()
+        if len(secret_key) < 32 or secret_key == "change-me":
+            issues.append("SECRET_KEY must be a long random value (minimum 32 characters)")
+        if self.debug:
+            issues.append("DEBUG must be False in production")
+        if self.docs_enabled:
+            issues.append("DOCS_ENABLED must be False in production")
+        if self.bootstrap_demo_user:
+            issues.append("BOOTSTRAP_DEMO_USER must be False in production")
+        if self.bootstrap_test_users:
+            issues.append("BOOTSTRAP_TEST_USERS_JSON must be empty in production")
+        if self.access_token_expire_minutes > 60 * 24:
+            issues.append("ACCESS_TOKEN_EXPIRE_MINUTES must not exceed 1440 in production")
+        if "*" in self.allowed_hosts:
+            issues.append("ALLOWED_HOSTS_JSON must not contain '*' in production")
+        if "*" in self.cors_allow_origins:
+            issues.append("CORS_ALLOW_ORIGINS_JSON must not contain '*' in production")
+        for origin in self.cors_allow_origins:
+            parsed = urlparse(origin)
+            hostname = (parsed.hostname or "").lower()
+            if hostname in {"localhost", "127.0.0.1", "::1", "testserver"}:
+                continue
+            if parsed.scheme != "https":
+                issues.append(f"CORS origin must use https in production: {origin}")
+        if self.bootstrap_admin_user:
+            try:
+                normalize_strong_password(self.admin_password)
+            except ValueError:
+                issues.append("ADMIN_PASSWORD must satisfy the strong password policy when BOOTSTRAP_ADMIN_USER=True")
+        if self.database_url == "postgresql+asyncpg://user:password@localhost:5432/gate_app":
+            issues.append("DATABASE_URL is still using the placeholder value")
+
+        if issues:
+            joined = "\n".join(f"- {issue}" for issue in issues)
+            raise RuntimeError(f"Insecure production configuration detected:\n{joined}")
 
 
 @lru_cache
