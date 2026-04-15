@@ -6,8 +6,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppBackground } from '@/components/AppBackground';
 import { AppButton } from '@/components/AppButton';
-import { DatePickerModal } from '@/components/DatePickerModal';
 import { AppInput } from '@/components/AppInput';
+import { DatePickerModal } from '@/components/DatePickerModal';
 import { ScreenHeader } from '@/components/ScreenHeader';
 import { RootStackParamList } from '@/navigation/types';
 import { loadCreatePassDraft, saveCreatePassDraft } from '@/services/formMemory';
@@ -15,7 +15,7 @@ import { useAuthStore } from '@/store/authStore';
 import { usePassesStore } from '@/store/passesStore';
 import { theme } from '@/theme';
 import { goBackOrHome } from '@/utils/backNavigation';
-import { formatDate, toIsoDate } from '@/utils/date';
+import { formatDate, formatDateInput, parseDateInput, toIsoDate } from '@/utils/date';
 import { getLayoutMetrics } from '@/utils/layout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CreatePass'>;
@@ -46,12 +46,12 @@ export const CreatePassScreen = ({ navigation }: Props) => {
   const [phoneNumber, setPhoneNumber] = useState(user?.phoneNumber ?? '');
   const [isPermanent, setIsPermanent] = useState(false);
   const [isCourier, setIsCourier] = useState(false);
-  const [expiresAt, setExpiresAt] = useState(new Date());
+  const [expiresAtInput, setExpiresAtInput] = useState('');
   const [showPicker, setShowPicker] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [draftLoaded, setDraftLoaded] = useState(false);
 
-  const dateLabel = formatDate(expiresAt);
+  const parsedExpiresAt = parseDateInput(expiresAtInput);
 
   useEffect(() => {
     let isCancelled = false;
@@ -89,11 +89,28 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     });
   }, [carNumber, draftLoaded, fullName, isCourier, phoneNumber, user?.id]);
 
+  const onExpiresAtChange = (value: string) => {
+    setExpiresAtInput(formatDateInput(value));
+    if (formError) {
+      setFormError(null);
+    }
+  };
+
+  const onDatePicked = (value: Date) => {
+    setExpiresAtInput(formatDate(value));
+    setShowPicker(false);
+    if (formError) {
+      setFormError(null);
+    }
+  };
+
   const onCreate = async () => {
     const normalizedFullName = fullName.trim();
     const normalizedCarNumber = carNumber.trim().toUpperCase();
     const normalizedPlotNumber = plotNumber.trim();
     const normalizedPhoneNumber = phoneNumber.replace(/\D/g, '');
+    const normalizedExpiresAtInput = expiresAtInput.trim();
+    const normalizedExpiresAt = parseDateInput(normalizedExpiresAtInput);
 
     if (!normalizedFullName || !hasAtLeastTwoWords(normalizedFullName)) {
       setFormError('Введите фамилию и имя');
@@ -125,6 +142,16 @@ export const CreatePassScreen = ({ navigation }: Props) => {
       return;
     }
 
+    if (!isPermanent && !normalizedExpiresAtInput) {
+      setFormError('Введите дату окончания');
+      return;
+    }
+
+    if (!isPermanent && !normalizedExpiresAt) {
+      setFormError('Введите дату в формате ДД.ММ.ГГГГ');
+      return;
+    }
+
     setFormError(null);
 
     if (user && (normalizedFullName !== user.fullName || normalizedPlotNumber !== user.plotNumber)) {
@@ -140,7 +167,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
       residentName: normalizedFullName || undefined,
       plotNumber: normalizedPlotNumber,
       phoneNumber: normalizedPhoneNumber || undefined,
-      expiresAt: isPermanent ? null : toIsoDate(expiresAt),
+      expiresAt: isPermanent ? null : toIsoDate(normalizedExpiresAt as Date),
       isPermanent,
       isCourier,
     });
@@ -204,22 +231,34 @@ export const CreatePassScreen = ({ navigation }: Props) => {
                 rightSlot={phoneNumber ? renderClearButton(() => setPhoneNumber('')) : null}
               />
 
-              <View style={[styles.dateWrap, isPermanent && styles.dateDisabled]}>
-                <Text style={[styles.dateLabel, { fontSize: metrics.bodyFontSize }]}>Дата окончания</Text>
-                <Pressable
-                  style={[styles.dateButton, { minHeight: metrics.isCompactHeight ? 56 : 62 }]}
-                  onPress={() => setShowPicker(true)}
-                  disabled={isPermanent}
-                >
-                  <Text style={styles.dateValue}>{dateLabel}</Text>
-                  <View style={styles.dateIconWrap}>
-                    <MaterialCommunityIcons
-                      name="calendar-month-outline"
-                      size={24}
-                      color={theme.colors.textSecondary}
-                    />
-                  </View>
-                </Pressable>
+              <View style={isPermanent && styles.dateDisabled}>
+                <AppInput
+                  label="Дата окончания"
+                  value={expiresAtInput}
+                  onChangeText={onExpiresAtChange}
+                  placeholder="ДД.ММ.ГГГГ"
+                  keyboardType="number-pad"
+                  maxLength={10}
+                  editable={!isPermanent}
+                  rightSlot={
+                    <>
+                      {expiresAtInput ? renderClearButton(() => setExpiresAtInput('')) : null}
+                      <Pressable
+                        onPress={() => setShowPicker(true)}
+                        hitSlop={12}
+                        disabled={isPermanent}
+                        accessibilityRole="button"
+                        accessibilityLabel="Открыть календарь"
+                      >
+                        <MaterialCommunityIcons
+                          name="calendar-month-outline"
+                          size={24}
+                          color={theme.colors.textSecondary}
+                        />
+                      </Pressable>
+                    </>
+                  }
+                />
               </View>
 
               <Pressable
@@ -267,7 +306,12 @@ export const CreatePassScreen = ({ navigation }: Props) => {
           </View>
         </ScrollView>
 
-        <DatePickerModal visible={showPicker} value={expiresAt} onChange={setExpiresAt} onClose={() => setShowPicker(false)} />
+        <DatePickerModal
+          visible={showPicker}
+          value={parsedExpiresAt ?? new Date()}
+          onChange={onDatePicked}
+          onClose={() => setShowPicker(false)}
+        />
       </SafeAreaView>
     </AppBackground>
   );
@@ -290,38 +334,8 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   form: {},
-  dateWrap: {
-    gap: 8,
-  },
   dateDisabled: {
     opacity: 0.6,
-  },
-  dateLabel: {
-    color: theme.colors.textSecondary,
-    marginLeft: 4,
-  },
-  dateButton: {
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.inputBg,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingLeft: theme.spacing.md,
-    paddingRight: theme.spacing.md,
-    gap: 14,
-  },
-  dateValue: {
-    flex: 1,
-    color: theme.colors.textPrimary,
-    fontSize: 19,
-  },
-  dateIconWrap: {
-    minWidth: 34,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingRight: 6,
   },
   checkboxRow: {
     flexDirection: 'row',

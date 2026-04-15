@@ -26,7 +26,7 @@ const openByType = async (type: GateAction, set: (partial: Partial<GateStore>) =
       return;
     }
 
-    set({ gateState: 'error', result, error: result.message });
+    set({ gateState: 'error', result, error: null });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Ошибка сети';
     set({ gateState: 'error', result: null, error: message });

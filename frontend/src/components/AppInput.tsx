@@ -19,7 +19,13 @@ export const AppInput = ({ label, icon, rightSlot, style, ...props }: AppInputPr
   return (
     <View style={styles.wrapper}>
       {label ? <Text style={[styles.label, { fontSize: metrics.bodyFontSize }]}>{label}</Text> : null}
-      <View style={[styles.inputRow, { minHeight: metrics.isCompactHeight ? 56 : 62 }]}>
+      <View
+        style={[
+          styles.inputRow,
+          { minHeight: metrics.isCompactHeight ? 56 : 62 },
+          hasRightSlot && styles.inputRowWithRightSlot,
+        ]}
+      >
         {icon ? <MaterialCommunityIcons name={icon} size={24} color={theme.colors.textSecondary} /> : null}
         <TextInput
           placeholderTextColor={theme.colors.textMuted}
@@ -49,22 +55,29 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.inputBg,
     paddingLeft: theme.spacing.md,
-    paddingRight: theme.spacing.sm,
+    paddingRight: theme.spacing.md,
+  },
+  inputRowWithRightSlot: {
+    gap: 10,
   },
   input: {
     flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
     color: theme.colors.textPrimary,
     fontSize: 19,
     paddingVertical: 0,
   },
   inputWithRightSlot: {
-    paddingRight: theme.spacing.sm,
+    paddingRight: 0,
   },
   rightSlot: {
     minWidth: 40,
+    flexShrink: 0,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-end',
+    gap: 4,
     paddingLeft: 4,
-    paddingRight: 8,
   },
 });

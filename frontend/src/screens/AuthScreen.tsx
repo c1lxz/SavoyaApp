@@ -23,8 +23,8 @@ export const AuthScreen = ({ navigation }: Props) => {
   const loginState = useAuthStore((state) => state.loginState);
   const error = useAuthStore((state) => state.error);
 
-  const [loginValue, setLoginValue] = useState('demo');
-  const [password, setPassword] = useState('demo123');
+  const [loginValue, setLoginValue] = useState('');
+  const [password, setPassword] = useState('');
   const [secure, setSecure] = useState(true);
 
   const onSubmit = async () => {

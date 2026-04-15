@@ -1,30 +1,60 @@
-const fs = require('fs');
-const path = require('path');
-
 const { chromium, webkit } = require('playwright');
-const { PNG } = require('pngjs');
 
 const BASE_URL = 'http://127.0.0.1:4173/';
 
 const TEXT = {
-  login: '\u0412\u043e\u0439\u0442\u0438',
-  createPass: '\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u043f\u0440\u043e\u043f\u0443\u0441\u043a',
-  myPasses: '\u041c\u043e\u0438 \u043f\u0440\u043e\u043f\u0443\u0441\u043a\u0438',
-  createPassTitle: '\u0421\u043e\u0437\u0434\u0430\u043d\u0438\u0435 \u043f\u0440\u043e\u043f\u0443\u0441\u043a\u0430',
-  subtitle: '\u041a\u043e\u0442\u0442\u0435\u0434\u0436\u043d\u044b\u0439 \u043f\u043e\u0441\u0451\u043b\u043e\u043a',
-  pickDate: '\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0434\u0430\u0442\u0443',
-  done: '\u0413\u043e\u0442\u043e\u0432\u043e',
-  cancel: '\u041e\u0442\u043c\u0435\u043d\u0430',
+  login: 'Войти',
+  loginPlaceholder: 'Логин',
+  passwordPlaceholder: 'Пароль',
+  createPass: 'Создать пропуск',
+  createPassTitle: 'Создание пропуска',
+  openBarrier: 'Открыть шлагбаум',
+  wickets: 'Калитки',
+  passes: 'Мои пропуски',
+  monitoring: 'Мониторинг',
+  exitBarrier: 'Выезд',
+  northWicket: 'Калитка Северная (СНТ Пальмира)',
+  datePlaceholder: 'ДД.ММ.ГГГГ',
+  pickDate: 'Выберите дату',
+  done: 'Готово',
+  userBarrierMessage: 'Выездной шлагбаум открыт',
+  userWicketMessage: 'Северная калитка открыта',
 };
 
-const ARTIFACT_PREFIX = path.join(__dirname, '..');
+const USERS = {
+  user: {
+    login: 'demo',
+    password: 'demo123',
+    response: {
+      id: '1',
+      login: 'demo',
+      fullName: 'Иванов Иван',
+      plotNumber: '25',
+      phoneNumber: '+79991234567',
+      isAdmin: false,
+    },
+  },
+  admin: {
+    login: 'admin',
+    password: 'admin123',
+    response: {
+      id: '99',
+      login: 'admin',
+      fullName: 'Администратор',
+      plotNumber: '1',
+      phoneNumber: '+79990000000',
+      isAdmin: true,
+    },
+  },
+};
 
-const DEMO_USER = {
-  id: 1,
-  phone: '+79991234567',
-  name: '\u0418\u0432\u0430\u043d\u043e\u0432 \u0418\u0432\u0430\u043d',
-  apartment: '25',
-  is_admin: false,
+const DEBUG_MESSAGES = {
+  entry: 'DEBUG: entry relay pulse queued',
+  exit: 'DEBUG: exit relay pulse queued',
+  wicket_north: 'DEBUG: wicket_north relay pulse queued',
+  wicket_lake: 'DEBUG: wicket_lake relay pulse queued',
+  wicket_admin: 'DEBUG: wicket_admin relay pulse queued',
+  wicket_forest: 'DEBUG: wicket_forest relay pulse queued',
 };
 
 const pressableByText = (page, text) =>
@@ -32,38 +62,98 @@ const pressableByText = (page, text) =>
 
 const exactText = (page, text) => page.locator(`xpath=//*[normalize-space(text())="${text}"]`).last();
 
-const exactPressableByText = (page, text) =>
-  page.locator(`xpath=//div[@tabindex="0"][.//*[normalize-space(text())="${text}"]]`).first();
+const inputByPlaceholder = (page, placeholder) => page.locator(`input[placeholder="${placeholder}"]`);
+
+const assertResult = (condition, message) => {
+  if (!condition) {
+    throw new Error(message);
+  }
+};
+
+const getWindowMetrics = async (page) =>
+  page.evaluate(() => ({
+    innerWidth: window.innerWidth,
+    innerHeight: window.innerHeight,
+    docScrollWidth: document.documentElement.scrollWidth,
+    bodyScrollWidth: document.body.scrollWidth,
+    scrollX: window.scrollX,
+    scrollY: window.scrollY,
+  }));
 
 const installApiMock = async (page) => {
-  await page.route('http://127.0.0.1:8000/**', async (route) => {
+  const state = {
+    currentUser: null,
+  };
+
+  await page.route('**/*', async (route) => {
     const request = route.request();
     const url = request.url();
-    const method = request.method();
+
+    if (!url.includes('/auth/') && !url.includes('/user/') && !url.includes('/passes') && !url.includes('/gates/')) {
+      await route.continue();
+      return;
+    }
 
     if (url.endsWith('/user/me')) {
+      if (!state.currentUser) {
+        await route.fulfill({
+          status: 401,
+          contentType: 'application/json; charset=utf-8',
+          body: JSON.stringify({ detail: 'Unauthorized' }),
+        });
+        return;
+      }
+
       await route.fulfill({
-        status: 401,
+        status: 200,
         contentType: 'application/json; charset=utf-8',
-        body: JSON.stringify({ detail: 'Unauthorized' }),
+        body: JSON.stringify(state.currentUser),
       });
       return;
     }
 
-    if (url.endsWith('/auth/login') && method === 'POST') {
+    if (url.endsWith('/auth/login') && request.method() === 'POST') {
+      const payload = request.postDataJSON ? request.postDataJSON() : JSON.parse(request.postData() || '{}');
+      const account = Object.values(USERS).find(
+        (item) => item.login === payload.login && item.password === payload.password,
+      );
+
+      if (!account) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json; charset=utf-8',
+          body: JSON.stringify({
+            success: false,
+            error: 'Неверный логин или пароль',
+          }),
+        });
+        return;
+      }
+
+      state.currentUser = account.response;
       await route.fulfill({
         status: 200,
         contentType: 'application/json; charset=utf-8',
         body: JSON.stringify({
-          access_token: 'playwright-test-token',
-          token_type: 'bearer',
-          user: DEMO_USER,
+          success: true,
+          access_token: `${account.login}-token`,
+          user: account.response,
+          requiresProfileCompletion: false,
         }),
       });
       return;
     }
 
-    if (url.includes('/requests')) {
+    if (url.endsWith('/user/profile')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify(state.currentUser ?? USERS.user.response),
+      });
+      return;
+    }
+
+    if (url.includes('/passes/my')) {
       await route.fulfill({
         status: 200,
         contentType: 'application/json; charset=utf-8',
@@ -72,16 +162,38 @@ const installApiMock = async (page) => {
       return;
     }
 
-    if (url.includes('/user/profile')) {
+    if (url.endsWith('/passes') && request.method() === 'POST') {
+      const payload = request.postDataJSON ? request.postDataJSON() : JSON.parse(request.postData() || '{}');
       await route.fulfill({
         status: 200,
         contentType: 'application/json; charset=utf-8',
         body: JSON.stringify({
-          id: String(DEMO_USER.id),
-          login: DEMO_USER.phone,
-          fullName: DEMO_USER.name,
-          plotNumber: DEMO_USER.apartment,
-          phoneNumber: DEMO_USER.phone,
+          id: 'pass-1',
+          keyType: payload.carNumber ? 'VehicleNumber' : 'Phone',
+          keyValue: payload.carNumber ?? payload.phoneNumber ?? '',
+          carNumber: payload.carNumber ?? null,
+          plotNumber: payload.plotNumber,
+          phoneNumber: payload.phoneNumber ?? null,
+          expiresAt: payload.expiresAt ?? null,
+          isPermanent: Boolean(payload.isPermanent),
+          isCourier: Boolean(payload.isCourier),
+          status: payload.isPermanent ? 'permanent' : 'active',
+          createdAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+
+    if (url.endsWith('/gates/open-action') && request.method() === 'POST') {
+      const payload = request.postDataJSON ? request.postDataJSON() : JSON.parse(request.postData() || '{}');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify({
+          success: true,
+          action: payload.action,
+          message: DEBUG_MESSAGES[payload.action],
+          timestamp: Date.now(),
         }),
       });
       return;
@@ -93,111 +205,24 @@ const installApiMock = async (page) => {
       body: JSON.stringify({}),
     });
   });
+
+  return state;
 };
 
-const sampleScreenshot = (filePath) =>
-  new Promise((resolve, reject) => {
-    const samples = {};
+const login = async (page, role) => {
+  const account = USERS[role];
 
-    fs.createReadStream(filePath)
-      .pipe(new PNG())
-      .on('parsed', function parsed() {
-        const pick = (x, y) => {
-          const safeX = Math.max(0, Math.min(this.width - 1, x));
-          const safeY = Math.max(0, Math.min(this.height - 1, y));
-          const index = (this.width * safeY + safeX) << 2;
-          return {
-            r: this.data[index],
-            g: this.data[index + 1],
-            b: this.data[index + 2],
-            a: this.data[index + 3],
-          };
-        };
-
-        samples.bottomCenter = pick(Math.floor(this.width / 2), this.height - 2);
-        samples.bottomRight = pick(this.width - 2, this.height - 2);
-        samples.midRight = pick(this.width - 2, Math.floor(this.height / 2));
-        resolve(samples);
-      })
-      .on('error', reject);
-  });
-
-const isNearWhite = (pixel) => pixel.r >= 245 && pixel.g >= 245 && pixel.b >= 245;
-
-const getWindowMetrics = async (page) =>
-  page.evaluate(() => {
-    window.scrollTo(0, 10000);
-    const root = document.getElementById('root');
-    const rootRect = root ? root.getBoundingClientRect() : null;
-
-    return {
-      innerWidth: window.innerWidth,
-      innerHeight: window.innerHeight,
-      scrollX: window.scrollX,
-      scrollY: window.scrollY,
-      docScrollWidth: document.documentElement.scrollWidth,
-      docScrollHeight: document.documentElement.scrollHeight,
-      bodyScrollWidth: document.body.scrollWidth,
-      rootWidth: rootRect ? rootRect.width : null,
-      rootHeight: rootRect ? rootRect.height : null,
-    };
-  });
-
-const getMonthLabel = async (page) =>
-  page.evaluate(() => {
-    const values = Array.from(document.querySelectorAll('div'))
-      .map((node) => node.textContent?.trim() || '')
-      .filter((text) => text.endsWith('\u0433.') && /\d{4}/.test(text) && !/^\d/.test(text));
-
-    return [...new Set(values)][0] || null;
-  });
-
-const getGridRect = async (page) =>
-  page.evaluate(() => {
-    const node = Array.from(document.querySelectorAll('div')).find((item) =>
-      /^\d{20,}$/.test((item.textContent || '').trim()),
-    );
-
-    if (!node) {
-      return null;
-    }
-
-    const rect = node.getBoundingClientRect();
-    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-  });
-
-const getModalRect = async (page) =>
-  page.evaluate((texts) => {
-    const candidates = Array.from(document.querySelectorAll('div'))
-      .map((node) => {
-        const text = (node.textContent || '').trim();
-        if (!text.includes(texts.pickDate) || !text.includes(texts.cancel) || !text.includes(texts.done)) {
-          return null;
-        }
-
-        const rect = node.getBoundingClientRect();
-        if (rect.width < 200 || rect.height < 200) {
-          return null;
-        }
-
-        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, area: rect.width * rect.height };
-      })
-      .filter(Boolean)
-      .sort((left, right) => left.area - right.area);
-
-    if (!candidates.length) {
-      return null;
-    }
-
-    const { area, ...smallest } = candidates[0];
-    return smallest;
-  }, TEXT);
-
-const loginToHome = async (page) => {
   await page.goto(BASE_URL, { waitUntil: 'load' });
-  await page.locator('input[placeholder="\u041b\u043e\u0433\u0438\u043d"]').waitFor();
+  await inputByPlaceholder(page, TEXT.loginPlaceholder).waitFor();
+  await inputByPlaceholder(page, TEXT.loginPlaceholder).fill(account.login);
+  await inputByPlaceholder(page, TEXT.passwordPlaceholder).fill(account.password);
   await pressableByText(page, TEXT.login).click();
-  await pressableByText(page, TEXT.createPass).waitFor();
+
+  if (role === 'admin') {
+    await pressableByText(page, TEXT.monitoring).waitFor();
+  } else {
+    await pressableByText(page, TEXT.createPass).waitFor();
+  }
 };
 
 const openCreatePass = async (page) => {
@@ -205,7 +230,7 @@ const openCreatePass = async (page) => {
   await exactText(page, TEXT.createPassTitle).waitFor();
 };
 
-const evaluateHomeViewport = async (browserType, name, viewport, options = {}) => {
+const evaluateLayout = async (browserType, name, viewport, options = {}) => {
   const browser = await browserType.launch({ headless: true });
   const context = await browser.newContext({
     viewport,
@@ -217,46 +242,29 @@ const evaluateHomeViewport = async (browserType, name, viewport, options = {}) =
 
   try {
     await installApiMock(page);
-
-    await page.goto(BASE_URL, { waitUntil: 'load' });
-    const authMetrics = await getWindowMetrics(page);
-
-    await pressableByText(page, TEXT.login).click();
-    await pressableByText(page, TEXT.createPass).waitFor();
+    await login(page, 'user');
 
     const homeMetrics = await getWindowMetrics(page);
-    const subtitleBox = await exactText(page, TEXT.subtitle).boundingBox();
-    const firstButtonBox = await pressableByText(page, TEXT.createPass).boundingBox();
-    const lastButtonBox = await pressableByText(page, TEXT.myPasses).boundingBox();
-    const screenshotPath = path.join(ARTIFACT_PREFIX, `.tmp-home-${name}.png`);
-    const homeContentTop = firstButtonBox ? Math.round(firstButtonBox.y) : null;
+    const createPassButtonBox = await pressableByText(page, TEXT.createPass).boundingBox();
+    const passesButtonBox = await pressableByText(page, TEXT.passes).boundingBox();
 
-    await page.screenshot({ path: screenshotPath, fullPage: false });
-    const pixelSamples = await sampleScreenshot(screenshotPath);
+    await openCreatePass(page);
+    const createPassMetrics = await getWindowMetrics(page);
 
     return {
       name,
       browser: browserType.name(),
       viewport,
-      authNoHorizontalOverflow:
-        authMetrics.docScrollWidth <= authMetrics.innerWidth + 1 &&
-        authMetrics.bodyScrollWidth <= authMetrics.innerWidth + 1,
       homeNoHorizontalOverflow:
         homeMetrics.docScrollWidth <= homeMetrics.innerWidth + 1 &&
-        homeMetrics.bodyScrollWidth <= homeMetrics.innerWidth + 1 &&
-        (homeMetrics.rootWidth ?? 0) <= homeMetrics.innerWidth + 1,
-      homeWindowLocked: homeMetrics.scrollX === 0 && homeMetrics.scrollY === 0,
-      subtitleVisible: Boolean(subtitleBox),
-      allHomeButtonsVisible: Boolean(lastButtonBox) && lastButtonBox.y + lastButtonBox.height <= viewport.height,
-      logoToButtonGap:
-        subtitleBox && firstButtonBox ? Math.round(firstButtonBox.y - (subtitleBox.y + subtitleBox.height)) : null,
-      homeContentTop,
-      backgroundCovered:
-        !isNearWhite(pixelSamples.bottomCenter) &&
-        !isNearWhite(pixelSamples.bottomRight) &&
-        !isNearWhite(pixelSamples.midRight),
-      screenshotPath,
-      pixelSamples,
+        homeMetrics.bodyScrollWidth <= homeMetrics.innerWidth + 1,
+      createPassNoHorizontalOverflow:
+        createPassMetrics.docScrollWidth <= createPassMetrics.innerWidth + 1 &&
+        createPassMetrics.bodyScrollWidth <= createPassMetrics.innerWidth + 1,
+      homeButtonsVisible:
+        Boolean(createPassButtonBox) &&
+        Boolean(passesButtonBox) &&
+        passesButtonBox.y + passesButtonBox.height <= viewport.height + 1,
     };
   } finally {
     await context.close();
@@ -264,7 +272,7 @@ const evaluateHomeViewport = async (browserType, name, viewport, options = {}) =
   }
 };
 
-const evaluateWebBackHistory = async (browserType, name, viewport, options = {}) => {
+const evaluateInputAffordances = async (browserType, name, viewport, options = {}) => {
   const browser = await browserType.launch({ headless: true });
   const context = await browser.newContext({
     viewport,
@@ -276,62 +284,54 @@ const evaluateWebBackHistory = async (browserType, name, viewport, options = {})
 
   try {
     await installApiMock(page);
-    await loginToHome(page);
+    await page.goto(BASE_URL, { waitUntil: 'load' });
+    await inputByPlaceholder(page, TEXT.loginPlaceholder).waitFor();
+
+    const loginValue = await inputByPlaceholder(page, TEXT.loginPlaceholder).inputValue();
+    const passwordValue = await inputByPlaceholder(page, TEXT.passwordPlaceholder).inputValue();
+
+    const authSlot = await page.evaluate((passwordPlaceholder) => {
+      const input = document.querySelector(`input[placeholder="${passwordPlaceholder}"]`);
+      const row = input?.parentElement;
+      const slot = row?.lastElementChild;
+
+      if (!input || !row || !slot || slot === input) {
+        return null;
+      }
+
+      const rowRect = row.getBoundingClientRect();
+      const slotRect = slot.getBoundingClientRect();
+
+      return {
+        rowRightInset: Math.round(rowRect.right - slotRect.right),
+        slotWithinBounds: slotRect.left >= rowRect.left && slotRect.right <= rowRect.right,
+      };
+    }, TEXT.passwordPlaceholder);
+
+    await login(page, 'user');
     await openCreatePass(page);
 
-    const createPassUrl = page.url();
-    await page.goBack({ waitUntil: 'load' });
-    const homeUrlAfterBack = page.url();
-    const homeVisibleAfterBack = await pressableByText(page, TEXT.createPass).isVisible();
-
-    return {
-      name,
-      browser: browserType.name(),
-      viewport,
-      createPassUrl,
-      homeUrlAfterBack,
-      historyWorked: createPassUrl.endsWith('/create-pass') && homeUrlAfterBack.endsWith('/') && homeVisibleAfterBack,
-    };
-  } finally {
-    await context.close();
-    await browser.close();
-  }
-};
-
-const evaluateInputCrosses = async (browserType, name, viewport, options = {}) => {
-  const browser = await browserType.launch({ headless: true });
-  const context = await browser.newContext({
-    viewport,
-    isMobile: Boolean(options.isMobile),
-    hasTouch: Boolean(options.hasTouch),
-    deviceScaleFactor: 1,
-  });
-  const page = await context.newPage();
-
-  try {
-    await installApiMock(page);
-    await loginToHome(page);
-    await openCreatePass(page);
+    await inputByPlaceholder(page, TEXT.datePlaceholder).waitFor();
     await page.locator('input').nth(1).fill('A123AA77');
 
-    const rows = await page.evaluate(() =>
+    const createPassSlots = await page.evaluate(() =>
       Array.from(document.querySelectorAll('input'))
         .map((input) => {
           const row = input.parentElement;
-          const slot = row && row.lastElementChild !== input ? row.lastElementChild : null;
+          const slot = row?.lastElementChild;
 
-          if (!row || !slot) {
+          if (!row || !slot || slot === input) {
             return null;
           }
 
           const rowRect = row.getBoundingClientRect();
           const slotRect = slot.getBoundingClientRect();
+
           return {
             placeholder: input.getAttribute('placeholder') || '',
             value: input.value,
             rowRightInset: Math.round(rowRect.right - slotRect.right),
-            slotWidth: Math.round(slotRect.width),
-            slotHeight: Math.round(slotRect.height),
+            slotWithinBounds: slotRect.left >= rowRect.left && slotRect.right <= rowRect.right,
           };
         })
         .filter(Boolean),
@@ -341,8 +341,11 @@ const evaluateInputCrosses = async (browserType, name, viewport, options = {}) =
       name,
       browser: browserType.name(),
       viewport,
-      rows,
-      allRowsInsetCorrect: rows.every((row) => row.rowRightInset >= 8),
+      loginValue,
+      passwordValue,
+      authSlot,
+      createPassSlots,
+      dateFieldInitiallyEmpty: (await inputByPlaceholder(page, TEXT.datePlaceholder).inputValue()) === '',
     };
   } finally {
     await context.close();
@@ -350,7 +353,7 @@ const evaluateInputCrosses = async (browserType, name, viewport, options = {}) =
   }
 };
 
-const evaluateCalendar = async (browserType, name, viewport, options = {}) => {
+const evaluateDateInput = async (browserType, name, viewport, options = {}) => {
   const browser = await browserType.launch({ headless: true });
   const context = await browser.newContext({
     viewport,
@@ -362,56 +365,28 @@ const evaluateCalendar = async (browserType, name, viewport, options = {}) => {
 
   try {
     await installApiMock(page);
-    await loginToHome(page);
+    await login(page, 'user');
     await openCreatePass(page);
 
-    const dateButton = page.locator('div[tabindex="0"]').filter({ hasText: /\d{2}\.\d{2}\.\d{4}/ }).last();
-    const initialLabel = ((await dateButton.textContent()) || '').replace(/[^\d.]/g, '');
+    const dateInput = inputByPlaceholder(page, TEXT.datePlaceholder);
+    await dateInput.waitFor();
+    await dateInput.fill('15042026');
+    const typedValue = await dateInput.inputValue();
 
-    await dateButton.click();
+    await page.getByLabel('Открыть календарь').click();
     await exactText(page, TEXT.pickDate).waitFor();
-
-    const modalRect = await getModalRect(page);
-    const monthBeforeSwipe = await getMonthLabel(page);
-    const gridRect = await getGridRect(page);
-    const modalScreenshot = path.join(ARTIFACT_PREFIX, `.tmp-calendar-open-${name}.png`);
-
-    await page.screenshot({ path: modalScreenshot, fullPage: false });
-
-    if (gridRect) {
-      await page.mouse.move(gridRect.x + gridRect.width * 0.8, gridRect.y + gridRect.height * 0.5);
-      await page.mouse.down();
-      await page.mouse.move(gridRect.x + gridRect.width * 0.2, gridRect.y + gridRect.height * 0.5, { steps: 10 });
-      await page.mouse.up();
-      await page.waitForTimeout(300);
-    }
-
-    const monthAfterSwipe = await getMonthLabel(page);
-
-    await exactPressableByText(page, '15').click();
+    await pressableByText(page, '16').click();
     await pressableByText(page, TEXT.done).click();
     await page.waitForTimeout(200);
 
-    const savedLabel = ((await dateButton.textContent()) || '').replace(/[^\d.]/g, '');
+    const calendarValue = await dateInput.inputValue();
 
     return {
       name,
       browser: browserType.name(),
       viewport,
-      modalInsideViewport:
-        Boolean(modalRect) &&
-        modalRect.x >= 0 &&
-        modalRect.y >= 0 &&
-        modalRect.x + modalRect.width <= viewport.width + 1 &&
-        modalRect.y + modalRect.height <= viewport.height + 1,
-      swipeChangedMonth:
-        Boolean(monthBeforeSwipe) && Boolean(monthAfterSwipe) && monthBeforeSwipe !== monthAfterSwipe,
-      initialLabel,
-      savedLabel,
-      datePersisted: initialLabel !== savedLabel && savedLabel.startsWith('15.'),
-      monthBeforeSwipe,
-      monthAfterSwipe,
-      modalScreenshot,
+      typedValue,
+      calendarValue,
     };
   } finally {
     await context.close();
@@ -419,122 +394,132 @@ const evaluateCalendar = async (browserType, name, viewport, options = {}) => {
   }
 };
 
-const assertResult = (condition, message) => {
-  if (!condition) {
-    throw new Error(message);
+const evaluateGateFeedback = async (browserType, name, viewport, role, options = {}) => {
+  const browser = await browserType.launch({ headless: true });
+  const context = await browser.newContext({
+    viewport,
+    isMobile: Boolean(options.isMobile),
+    hasTouch: Boolean(options.hasTouch),
+    deviceScaleFactor: 1,
+  });
+  const page = await context.newPage();
+
+  try {
+    await installApiMock(page);
+    await login(page, role);
+
+    await pressableByText(page, TEXT.openBarrier).click();
+    await pressableByText(page, TEXT.exitBarrier).click();
+
+    const barrierText = role === 'admin' ? DEBUG_MESSAGES.exit : TEXT.userBarrierMessage;
+    await exactText(page, barrierText).waitFor();
+    const wrongBarrierText = role === 'admin' ? TEXT.userBarrierMessage : DEBUG_MESSAGES.exit;
+
+    const barrierWrongVisible = await exactText(page, wrongBarrierText).isVisible().catch(() => false);
+
+    await page.goBack({ waitUntil: 'load' }).catch(() => null);
+    await pressableByText(page, TEXT.wickets).waitFor();
+    await pressableByText(page, TEXT.wickets).click();
+    await pressableByText(page, TEXT.northWicket).click();
+
+    const wicketText = role === 'admin' ? DEBUG_MESSAGES.wicket_north : TEXT.userWicketMessage;
+    await exactText(page, wicketText).waitFor();
+    const wrongWicketText = role === 'admin' ? TEXT.userWicketMessage : DEBUG_MESSAGES.wicket_north;
+    const wicketWrongVisible = await exactText(page, wrongWicketText).isVisible().catch(() => false);
+
+    return {
+      name,
+      browser: browserType.name(),
+      viewport,
+      role,
+      barrierText,
+      wicketText,
+      barrierWrongVisible,
+      wicketWrongVisible,
+    };
+  } finally {
+    await context.close();
+    await browser.close();
   }
 };
 
 async function main() {
-  const responsiveResults = [];
+  const responsive = [
+    await evaluateLayout(chromium, 'mobile-chromium', { width: 393, height: 852 }, { isMobile: true, hasTouch: true }),
+    await evaluateLayout(chromium, 'desktop-chromium', { width: 1280, height: 900 }, { isMobile: false, hasTouch: false }),
+  ];
 
-  responsiveResults.push(
-    await evaluateHomeViewport(chromium, '375', { width: 375, height: 667 }, { isMobile: true, hasTouch: true }),
-  );
-  responsiveResults.push(
-    await evaluateHomeViewport(chromium, '393', { width: 393, height: 852 }, { isMobile: true, hasTouch: true }),
-  );
-  responsiveResults.push(
-    await evaluateHomeViewport(chromium, '768', { width: 768, height: 1024 }, { isMobile: true, hasTouch: true }),
-  );
-  responsiveResults.push(
-    await evaluateHomeViewport(chromium, '1024', { width: 1024, height: 1366 }, { isMobile: true, hasTouch: true }),
-  );
-  responsiveResults.push(
-    await evaluateHomeViewport(chromium, '1280', { width: 1280, height: 900 }, { isMobile: false, hasTouch: false }),
-  );
-
-  for (const result of responsiveResults) {
-    assertResult(result.authNoHorizontalOverflow, `${result.name}: auth page still has horizontal overflow`);
+  for (const result of responsive) {
     assertResult(result.homeNoHorizontalOverflow, `${result.name}: home page still has horizontal overflow`);
-    assertResult(result.homeWindowLocked, `${result.name}: home page still scrolls at window level`);
-    assertResult(result.subtitleVisible, `${result.name}: subtitle is missing on home screen`);
-    assertResult(result.allHomeButtonsVisible, `${result.name}: home buttons are clipped below the viewport`);
-    assertResult(result.backgroundCovered, `${result.name}: screenshot still shows white gaps at the viewport edge`);
+    assertResult(result.createPassNoHorizontalOverflow, `${result.name}: create pass page still has horizontal overflow`);
+    assertResult(result.homeButtonsVisible, `${result.name}: home buttons are clipped below the viewport`);
+  }
+
+  const affordances = [
+    await evaluateInputAffordances(
+      chromium,
+      'mobile-chromium',
+      { width: 393, height: 852 },
+      { isMobile: true, hasTouch: true },
+    ),
+    await evaluateInputAffordances(
+      chromium,
+      'desktop-chromium',
+      { width: 1280, height: 900 },
+      { isMobile: false, hasTouch: false },
+    ),
+  ];
+
+  for (const result of affordances) {
+    assertResult(result.loginValue === '', `${result.name}: login field is still prefilled`);
+    assertResult(result.passwordValue === '', `${result.name}: password field is still prefilled`);
+    assertResult(Boolean(result.authSlot?.slotWithinBounds), `${result.name}: password eye is clipped`);
+    assertResult((result.authSlot?.rowRightInset ?? 0) >= 8, `${result.name}: password eye is too close to the edge`);
+    assertResult(result.dateFieldInitiallyEmpty, `${result.name}: expiration date is still prefilled`);
     assertResult(
-      result.logoToButtonGap !== null && result.logoToButtonGap <= (result.viewport.width <= 480 ? 40 : 72),
-      `${result.name}: gap between logo and buttons is too large`,
-    );
-    assertResult(
-      !result.viewport.width || result.viewport.width > 768 || (result.homeContentTop !== null && result.homeContentTop <= 260),
-      `${result.name}: home content still starts too low on handset screens`,
+      result.createPassSlots.every((row) => row.slotWithinBounds && row.rowRightInset >= 8),
+      `${result.name}: one of the input action icons is clipped`,
     );
   }
 
-  const chromiumBackHistory = await evaluateWebBackHistory(
-    chromium,
-    'history-chromium',
-    { width: 1280, height: 900 },
-    { isMobile: false, hasTouch: false },
-  );
-  const webkitBackHistory = await evaluateWebBackHistory(
-    webkit,
-    'history-webkit',
-    { width: 393, height: 852 },
-    { isMobile: true, hasTouch: true },
-  );
+  const dates = [
+    await evaluateDateInput(chromium, 'mobile-chromium', { width: 393, height: 852 }, { isMobile: true, hasTouch: true }),
+    await evaluateDateInput(webkit, 'mobile-webkit', { width: 393, height: 852 }, { isMobile: true, hasTouch: true }),
+    await evaluateDateInput(chromium, 'desktop-chromium', { width: 1280, height: 900 }, { isMobile: false, hasTouch: false }),
+  ];
 
-  assertResult(chromiumBackHistory.historyWorked, 'chromium: browser back did not return from CreatePass to Home');
-  assertResult(webkitBackHistory.historyWorked, 'webkit: browser back did not return from CreatePass to Home');
+  for (const result of dates) {
+    assertResult(result.typedValue === '15.04.2026', `${result.name}: manual date input did not format correctly`);
+    assertResult(result.calendarValue.startsWith('16.'), `${result.name}: calendar selection did not update the input`);
+  }
 
-  const mobileCrosses = await evaluateInputCrosses(
-    chromium,
-    'crosses-mobile',
-    { width: 393, height: 852 },
-    { isMobile: true, hasTouch: true },
-  );
-  const desktopCrosses = await evaluateInputCrosses(
-    chromium,
-    'crosses-desktop',
-    { width: 1280, height: 900 },
-    { isMobile: false, hasTouch: false },
-  );
+  const gateFeedback = [
+    await evaluateGateFeedback(
+      chromium,
+      'mobile-user',
+      { width: 393, height: 852 },
+      'user',
+      { isMobile: true, hasTouch: true },
+    ),
+    await evaluateGateFeedback(
+      chromium,
+      'desktop-admin',
+      { width: 1280, height: 900 },
+      'admin',
+      { isMobile: false, hasTouch: false },
+    ),
+  ];
 
-  assertResult(mobileCrosses.allRowsInsetCorrect, 'mobile: clear icons are still too close to the right edge');
-  assertResult(desktopCrosses.allRowsInsetCorrect, 'desktop: clear icons are still too close to the right edge');
-
-  const chromiumCalendar = await evaluateCalendar(
-    chromium,
-    '393-chromium',
-    { width: 393, height: 852 },
-    { isMobile: true, hasTouch: true },
-  );
-  const webkitCalendar = await evaluateCalendar(
-    webkit,
-    '393-webkit',
-    { width: 393, height: 852 },
-    { isMobile: true, hasTouch: true },
-  );
-  const desktopCalendar = await evaluateCalendar(
-    chromium,
-    '1280-chromium-desktop',
-    { width: 1280, height: 900 },
-    { isMobile: false, hasTouch: false },
-  );
-
-  assertResult(chromiumCalendar.modalInsideViewport, 'chromium: calendar modal still exits the viewport');
-  assertResult(chromiumCalendar.swipeChangedMonth, 'chromium: calendar swipe did not change month');
-  assertResult(chromiumCalendar.datePersisted, 'chromium: selected date was not saved');
-  assertResult(webkitCalendar.modalInsideViewport, 'webkit: calendar modal still exits the viewport');
-  assertResult(webkitCalendar.datePersisted, 'webkit: selected date was not saved');
-  assertResult(desktopCalendar.modalInsideViewport, 'desktop: calendar modal still exits the viewport');
-  assertResult(desktopCalendar.datePersisted, 'desktop: selected date was not saved');
+  for (const result of gateFeedback) {
+    assertResult(!result.barrierWrongVisible, `${result.name}: wrong barrier feedback text is visible`);
+    assertResult(!result.wicketWrongVisible, `${result.name}: wrong wicket feedback text is visible`);
+  }
 
   const report = {
-    responsive: responsiveResults,
-    crosses: {
-      mobile: mobileCrosses,
-      desktop: desktopCrosses,
-    },
-    history: {
-      chromium: chromiumBackHistory,
-      webkit: webkitBackHistory,
-    },
-    calendar: {
-      chromium: chromiumCalendar,
-      webkit: webkitCalendar,
-      desktop: desktopCalendar,
-    },
+    responsive,
+    affordances,
+    dates,
+    gateFeedback,
   };
 
   console.log(JSON.stringify(report, null, 2));

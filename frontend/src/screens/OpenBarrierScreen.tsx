@@ -7,9 +7,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppBackground } from '@/components/AppBackground';
 import { ScreenHeader } from '@/components/ScreenHeader';
 import { RootStackParamList } from '@/navigation/types';
+import { useAuthStore } from '@/store/authStore';
 import { useGateStore } from '@/store/gateStore';
 import { theme } from '@/theme';
 import { goBackOrHome } from '@/utils/backNavigation';
+import { getGateActionFeedback } from '@/utils/gateActionFeedback';
 import { getLayoutMetrics } from '@/utils/layout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'OpenBarrier'>;
@@ -38,6 +40,7 @@ export const OpenBarrierScreen = ({ navigation }: Props) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
 
+  const user = useAuthStore((state) => state.user);
   const gateState = useGateStore((state) => state.gateState);
   const result = useGateStore((state) => state.result);
   const error = useGateStore((state) => state.error);
@@ -50,6 +53,7 @@ export const OpenBarrierScreen = ({ navigation }: Props) => {
   }, [resetGateState]);
 
   const isLoading = gateState === 'loading';
+  const feedbackMessage = result ? getGateActionFeedback(result, Boolean(user?.isAdmin)) : null;
 
   return (
     <AppBackground>
@@ -80,7 +84,7 @@ export const OpenBarrierScreen = ({ navigation }: Props) => {
                       size={22}
                       color={result.success ? theme.colors.success : theme.colors.danger}
                     />
-                    <Text style={[styles.feedbackText, !result.success && styles.feedbackError]}>{result.message}</Text>
+                    <Text style={[styles.feedbackText, !result.success && styles.feedbackError]}>{feedbackMessage}</Text>
                   </View>
                 </View>
               ) : null}
