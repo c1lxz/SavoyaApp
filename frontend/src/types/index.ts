@@ -59,7 +59,7 @@ export type AdminResidentSummary = {
   plotNumber: string;
 };
 
-export type AdminRequestStatus = 'active' | 'expired' | 'permanent' | 'cancelled';
+export type AdminRequestStatus = 'active' | 'expired' | 'permanent' | 'cancelled' | 'completed';
 
 export type AdminRequestItem = {
   id: string;

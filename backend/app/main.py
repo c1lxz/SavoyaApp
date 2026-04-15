@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +16,7 @@ from .database import Base, SessionLocal, engine
 from .routers import access, admin, auth, compatibility, gate, requests, user
 from .security import LoginRateLimiter
 from .services.auth import ensure_admin_user, ensure_bootstrap_test_users, ensure_demo_user
+from .services.gate_event_worker import courier_gate_event_worker
 from .services.requests import (
     cleanup_broken_requests,
     cleanup_duplicate_requests,
@@ -152,6 +154,24 @@ async def startup_event() -> None:
         except Exception:
             logging.exception("Failed to ensure admin permanent Gate request")
         await ensure_bootstrap_test_users(session)
+
+    if settings.gate_real_integration_enabled and settings.gate_event_poll_enabled:
+        existing_task = getattr(app.state, "courier_gate_event_task", None)
+        if existing_task is None or existing_task.done():
+            app.state.courier_gate_event_task = asyncio.create_task(courier_gate_event_worker())
+            logging.info("Started Gate exit event courier worker")
+
+
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+    task = getattr(app.state, "courier_gate_event_task", None)
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 app.include_router(auth.router, prefix=settings.api_prefix)

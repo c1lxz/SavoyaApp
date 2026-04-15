@@ -37,6 +37,10 @@ const statusMeta: Record<
     label: 'Отменена',
     color: theme.colors.textMuted,
   },
+  completed: {
+    label: 'Завершена',
+    color: theme.colors.textMuted,
+  },
 };
 
 const ActionButton = ({ label, icon, onPress }: { label: string; icon: string; onPress: () => void }) => (

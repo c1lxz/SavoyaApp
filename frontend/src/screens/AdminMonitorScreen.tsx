@@ -24,14 +24,9 @@ const MOSCOW_TIMEZONE = 'Europe/Moscow';
 const COLUMNS = {
   time: 156,
   name: 210,
-  phone: 160,
   point: 250,
   event: 240,
   status: 104,
-  source: 134,
-  key: 170,
-  code: 96,
-  gate: 118,
 } as const;
 
 const TABLE_WIDTH = Object.values(COLUMNS).reduce((sum, width) => sum + width, 0);
@@ -70,30 +65,8 @@ const statusLabel = (item: AdminMonitorEventItem): string => {
 const actorName = (item: AdminMonitorEventItem): string =>
   item.actorName || item.actorLogin || item.gateName || 'Не определён';
 
-const actorPhone = (item: AdminMonitorEventItem): string => item.actorPhone || '-';
-
 const pointName = (item: AdminMonitorEventItem): string =>
   item.accessPointName || item.gateUnit || (item.accessPointId ? `Точка ${item.accessPointId}` : '-');
-
-const sourceName = (item: AdminMonitorEventItem): string => {
-  if (item.actorUserId || item.source === 'app') {
-    return 'Приложение';
-  }
-  return 'Gate';
-};
-
-const keyLabel = (item: AdminMonitorEventItem): string => {
-  if (item.keyType && item.keyValue) {
-    return `${item.keyType}: ${item.keyValue}`;
-  }
-  if (item.appRequestId) {
-    return `Заявка ${item.appRequestId}`;
-  }
-  if (item.gateKeyId) {
-    return `Gate ${item.gateKeyId}`;
-  }
-  return '-';
-};
 
 const eventLabel = (item: AdminMonitorEventItem): string => {
   if (item.message) {
@@ -103,20 +76,6 @@ const eventLabel = (item: AdminMonitorEventItem): string => {
     return 'Команда открытия';
   }
   return 'Событие Gate';
-};
-
-const gateCodeLabel = (item: AdminMonitorEventItem): string => {
-  if (item.gateEventCode == null) {
-    return '-';
-  }
-  return String(item.gateEventCode);
-};
-
-const gateIndexLabel = (item: AdminMonitorEventItem): string => {
-  if (item.gateEventIndex == null) {
-    return '-';
-  }
-  return String(item.gateEventIndex);
 };
 
 const TableCell = ({
@@ -146,14 +105,9 @@ const MonitorTable = ({ events }: { events: AdminMonitorEventItem[] }) => (
       <View style={[styles.tableRow, styles.tableHeader]}>
         <TableCell header width={COLUMNS.time}>Время</TableCell>
         <TableCell header width={COLUMNS.name}>ФИО</TableCell>
-        <TableCell header width={COLUMNS.phone}>Номер</TableCell>
         <TableCell header width={COLUMNS.point}>Точка доступа</TableCell>
         <TableCell header width={COLUMNS.event}>Событие</TableCell>
         <TableCell header width={COLUMNS.status}>Статус</TableCell>
-        <TableCell header width={COLUMNS.source}>Источник</TableCell>
-        <TableCell header width={COLUMNS.key}>Ключ</TableCell>
-        <TableCell header width={COLUMNS.code}>Код</TableCell>
-        <TableCell header width={COLUMNS.gate}>Gate ID</TableCell>
       </View>
 
       {events.map((item, index) => {
@@ -162,14 +116,9 @@ const MonitorTable = ({ events }: { events: AdminMonitorEventItem[] }) => (
           <View key={item.id} style={[styles.tableRow, index % 2 === 1 ? styles.tableRowAlt : null]}>
             <TableCell width={COLUMNS.time}>{formatMonitorTime(item.createdAt)}</TableCell>
             <TableCell width={COLUMNS.name}>{actorName(item)}</TableCell>
-            <TableCell width={COLUMNS.phone}>{actorPhone(item)}</TableCell>
             <TableCell width={COLUMNS.point}>{pointName(item)}</TableCell>
             <TableCell width={COLUMNS.event} color={color}>{eventLabel(item)}</TableCell>
             <TableCell width={COLUMNS.status} color={color}>{statusLabel(item)}</TableCell>
-            <TableCell width={COLUMNS.source}>{sourceName(item)}</TableCell>
-            <TableCell width={COLUMNS.key}>{keyLabel(item)}</TableCell>
-            <TableCell width={COLUMNS.code} color={color}>{gateCodeLabel(item)}</TableCell>
-            <TableCell width={COLUMNS.gate}>{gateIndexLabel(item)}</TableCell>
           </View>
         );
       })}

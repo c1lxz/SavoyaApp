@@ -29,6 +29,7 @@ const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
   { value: 'active', label: 'Активные' },
   { value: 'permanent', label: 'Постоянные' },
   { value: 'expired', label: 'Истекшие' },
+  { value: 'completed', label: 'Завершённые' },
   { value: 'cancelled', label: 'Отменённые' },
 ];
 

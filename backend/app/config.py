@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     courier_ttl_only_enabled: bool = True
     courier_default_hours: int = 2
     courier_max_hours: int = 12
+    gate_event_poll_enabled: bool = True
+    gate_event_poll_interval_seconds: float = 10.0
+    gate_event_poll_limit: int = 200
     login_rate_limit_attempts: int = 5
     login_rate_limit_window_seconds: int = 300
 
