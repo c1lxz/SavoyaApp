@@ -99,6 +99,8 @@ export type AdminMonitorEventItem = {
   actorPhone?: string | null;
   accessPointId?: number | null;
   accessPointName?: string | null;
+  keyType?: string | null;
+  keyValue?: string | null;
   requestId?: string | null;
   appRequestId?: number | null;
   gateKeyId?: number | null;
@@ -106,6 +108,7 @@ export type AdminMonitorEventItem = {
   gateEventCode?: number | null;
   gateUserPtr?: number | null;
   gateName?: string | null;
+  gateOriginalName?: string | null;
   gateUnit?: string | null;
   details?: Record<string, unknown> | null;
 };

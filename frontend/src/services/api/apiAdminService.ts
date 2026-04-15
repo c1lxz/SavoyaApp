@@ -45,6 +45,8 @@ type BackendAdminMonitorEventItem = {
   actor_phone?: string | null;
   access_point_id?: number | null;
   access_point_name?: string | null;
+  key_type?: string | null;
+  key_value?: string | null;
   request_id?: string | null;
   app_request_id?: number | null;
   gate_key_id?: number | null;
@@ -52,6 +54,7 @@ type BackendAdminMonitorEventItem = {
   gate_event_code?: number | null;
   gate_user_ptr?: number | null;
   gate_name?: string | null;
+  gate_original_name?: string | null;
   gate_unit?: string | null;
   details?: Record<string, unknown> | null;
 };
@@ -108,6 +111,8 @@ const mapMonitorEvent = (item: BackendAdminMonitorEventItem): AdminMonitorEventI
   actorPhone: item.actor_phone ?? null,
   accessPointId: item.access_point_id ?? null,
   accessPointName: item.access_point_name ?? null,
+  keyType: item.key_type ?? null,
+  keyValue: item.key_value ?? null,
   requestId: item.request_id ?? null,
   appRequestId: item.app_request_id ?? null,
   gateKeyId: item.gate_key_id ?? null,
@@ -115,6 +120,7 @@ const mapMonitorEvent = (item: BackendAdminMonitorEventItem): AdminMonitorEventI
   gateEventCode: item.gate_event_code ?? null,
   gateUserPtr: item.gate_user_ptr ?? null,
   gateName: item.gate_name ?? null,
+  gateOriginalName: item.gate_original_name ?? null,
   gateUnit: item.gate_unit ?? null,
   details: item.details ?? null,
 });

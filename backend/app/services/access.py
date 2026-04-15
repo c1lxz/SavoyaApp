@@ -7,7 +7,7 @@ from uuid import uuid4
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import AccessEventLog, AccessKey, AccessPermission, AccessPoint, Request
+from ..models import AccessEventLog, AccessKey, AccessPermission, AccessPoint, Request, User
 from ..utils.datetime import ensure_utc_datetime, utcnow
 from .gate import gate_client
 
@@ -312,6 +312,7 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
         user_id=user_id,
         access_point_id=access_point_id,
     )
+    user = await session.get(User, user_id)
 
     request_id = str(uuid4())
     event = AccessEventLog(
@@ -327,6 +328,11 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
             "request_db_id": request_item.id,
             "gate_key_id": request_item.gate_key_id,
             "key_external_id": access_key.external_id,
+            "key_type": request_item.key_type,
+            "key_value": request_item.key_value,
+            "actor_login": user.login if user is not None else None,
+            "actor_name": user.name if user is not None else None,
+            "actor_phone": user.phone if user is not None else None,
             "transport": "gateterm_ui",
         },
     )

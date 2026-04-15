@@ -338,6 +338,8 @@ class AdminMonitorEventItem(BaseModel):
     actor_phone: str | None = None
     access_point_id: int | None = None
     access_point_name: str | None = None
+    key_type: str | None = None
+    key_value: str | None = None
     request_id: str | None = None
     app_request_id: int | None = None
     gate_key_id: int | None = None
@@ -345,6 +347,7 @@ class AdminMonitorEventItem(BaseModel):
     gate_event_code: int | None = None
     gate_user_ptr: int | None = None
     gate_name: str | None = None
+    gate_original_name: str | None = None
     gate_unit: str | None = None
     details: dict | None = None
 
