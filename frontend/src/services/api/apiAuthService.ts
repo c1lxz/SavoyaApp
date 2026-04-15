@@ -1,13 +1,31 @@
-import { AuthResult, User } from '@/types';
+import { AuthResult, ChangePasswordPayload, RegisterAccountPayload, RegisterAccountResult, User } from '@/types';
 import { apiRequest } from '@/services/api/httpClient';
 import { getAccessToken, restoreAccessToken, setAccessToken } from '@/services/api/tokenStore';
 
 type CompatLoginResponse = {
   success: boolean;
-  user?: User;
+  user?: CompatUserResponse;
   error?: string;
   access_token?: string;
   requiresProfileCompletion?: boolean;
+  passwordChangeRequired?: boolean;
+};
+
+type CompatRegisterResponse = {
+  success: boolean;
+  login: string;
+  password: string;
+  user: CompatUserResponse;
+};
+
+type CompatUserResponse = {
+  id: string;
+  login: string;
+  fullName: string;
+  plotNumber: string;
+  phoneNumber: string;
+  isAdmin: boolean;
+  passwordChangeRequired?: boolean;
 };
 
 type BackendUser = {
@@ -16,9 +34,10 @@ type BackendUser = {
   name?: string | null;
   apartment?: string | null;
   is_admin?: boolean;
+  password_change_required?: boolean;
 };
 
-type ApiUser = BackendUser | User;
+type ApiUser = BackendUser | CompatUserResponse;
 
 type BackendTokenResponse = {
   access_token: string;
@@ -35,18 +54,22 @@ const mapBackendUser = (user: BackendUser): User => ({
   plotNumber: user.apartment ?? '',
   phoneNumber: user.phone ?? '',
   isAdmin: Boolean(user.is_admin),
+  passwordChangeRequired: Boolean(user.password_change_required),
+});
+
+const mapCompatUser = (user: CompatUserResponse): User => ({
+  id: String(user.id),
+  login: user.login ?? '',
+  fullName: user.fullName ?? '',
+  plotNumber: user.plotNumber ?? '',
+  phoneNumber: user.phoneNumber ?? '',
+  isAdmin: Boolean(user.isAdmin),
+  passwordChangeRequired: Boolean(user.passwordChangeRequired),
 });
 
 const mapApiUser = (user: ApiUser): User => {
   if ('isAdmin' in user) {
-    return {
-      id: String(user.id),
-      login: user.login ?? '',
-      fullName: user.fullName ?? '',
-      plotNumber: user.plotNumber ?? '',
-      phoneNumber: user.phoneNumber ?? '',
-      isAdmin: Boolean(user.isAdmin),
-    };
+    return mapCompatUser(user);
   }
 
   return mapBackendUser(user);
@@ -67,6 +90,7 @@ export const apiAuthService = {
         success: true,
         user: mappedUser,
         requiresProfileCompletion: !mappedUser.isAdmin && !Boolean(mappedUser.fullName.trim()),
+        passwordChangeRequired: Boolean(mappedUser.passwordChangeRequired),
       };
     }
 
@@ -79,20 +103,38 @@ export const apiAuthService = {
         user: mappedUser,
         error: result.error,
         requiresProfileCompletion: mappedUser.isAdmin ? false : Boolean(result.requiresProfileCompletion),
+        passwordChangeRequired: Boolean(result.passwordChangeRequired ?? mappedUser.passwordChangeRequired),
       };
     }
 
     return {
       success: result.success,
-      user: result.user,
+      user: result.user ? mapApiUser(result.user) : undefined,
       error: result.error,
       requiresProfileCompletion: result.user?.isAdmin ? false : result.requiresProfileCompletion,
+      passwordChangeRequired: result.passwordChangeRequired,
     };
   },
+
+  async registerAccount(payload: RegisterAccountPayload): Promise<RegisterAccountResult> {
+    const result = await apiRequest<CompatRegisterResponse>('/auth/register', {
+      method: 'POST',
+      body: payload,
+    });
+
+    return {
+      success: Boolean(result.success),
+      login: result.login,
+      password: result.password,
+      user: mapCompatUser(result.user),
+    };
+  },
+
   async logout(): Promise<void> {
     await setAccessToken(null);
     currentUser = null;
   },
+
   async getCurrentUser(): Promise<User | null> {
     if (currentUser) {
       return currentUser;
@@ -114,10 +156,21 @@ export const apiAuthService = {
       return null;
     }
   },
+
   async updateProfile(fullName: string, plotNumber?: string): Promise<User> {
     const updated = await apiRequest<ApiUser>('/user/profile', {
       method: 'PUT',
       body: { fullName, plotNumber },
+    });
+    const mappedUser = mapApiUser(updated);
+    currentUser = mappedUser;
+    return mappedUser;
+  },
+
+  async changePassword(payload: ChangePasswordPayload): Promise<User> {
+    const updated = await apiRequest<ApiUser>('/user/password', {
+      method: 'PUT',
+      body: payload,
     });
     const mappedUser = mapApiUser(updated);
     currentUser = mappedUser;

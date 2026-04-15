@@ -24,6 +24,9 @@ class User(Base):
     login: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     plot_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    owner_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    password_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    password_change_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     requests: Mapped[list["Request"]] = relationship(back_populates="resident")
     logs: Mapped[list["Log"]] = relationship(back_populates="user")

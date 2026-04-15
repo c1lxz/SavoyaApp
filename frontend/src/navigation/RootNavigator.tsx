@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Platform, StyleSheet } from 'react-native';
 import { DefaultTheme, NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -9,13 +9,16 @@ import { LoadingOverlay } from '@/components/LoadingOverlay';
 import { AdminHomeScreen } from '@/screens/AdminHomeScreen';
 import { AdminMonitorScreen } from '@/screens/AdminMonitorScreen';
 import { AdminRequestsScreen } from '@/screens/AdminRequestsScreen';
+import { AdminUsersScreen } from '@/screens/AdminUsersScreen';
 import { AuthScreen } from '@/screens/AuthScreen';
 import { CreatePassScreen } from '@/screens/CreatePassScreen';
 import { HomeScreen } from '@/screens/HomeScreen';
 import { MyPassesScreen } from '@/screens/MyPassesScreen';
 import { OpenBarrierScreen } from '@/screens/OpenBarrierScreen';
 import { ProfileSetupWebScreen } from '@/screens/ProfileSetupWebScreen';
+import { RegisterAccountScreen } from '@/screens/RegisterAccountScreen';
 import { WicketsScreen } from '@/screens/WicketsScreen';
+import { resolveInitialLoggedOutRoute, type LoggedOutRoute } from '@/services/authEntry';
 import { useAuthStore } from '@/store/authStore';
 import { theme } from '@/theme';
 import { RootStackParamList } from './types';
@@ -40,10 +43,12 @@ const linking: LinkingOptions<RootStackParamList> = {
   config: {
     screens: {
       Auth: 'auth',
+      RegisterAccount: 'register-account',
       ProfileSetup: 'profile-setup',
       Admin: 'admin',
       AdminMonitor: 'admin/monitor',
       AdminRequests: 'admin/requests',
+      AdminUsers: 'admin/users',
       Home: '',
       CreatePass: 'create-pass',
       OpenBarrier: 'open-barrier',
@@ -58,6 +63,7 @@ export const RootNavigator = () => {
   const requiresProfileCompletion = useAuthStore((state) => state.requiresProfileCompletion);
   const restoreSession = useAuthStore((state) => state.restoreSession);
   const restoreState = useAuthStore((state) => state.restoreState);
+  const [loggedOutRoute, setLoggedOutRoute] = useState<LoggedOutRoute | null>(null);
 
   useEffect(() => {
     if (restoreState === 'idle') {
@@ -65,7 +71,38 @@ export const RootNavigator = () => {
     }
   }, [restoreSession, restoreState]);
 
-  if (restoreState === 'idle' || restoreState === 'loading') {
+  useEffect(() => {
+    if (user) {
+      setLoggedOutRoute('Auth');
+    }
+  }, [user]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    if (restoreState === 'idle' || restoreState === 'loading' || user) {
+      return () => {
+        isCancelled = true;
+      };
+    }
+
+    setLoggedOutRoute(null);
+
+    const resolveRoute = async () => {
+      const route = await resolveInitialLoggedOutRoute();
+      if (!isCancelled) {
+        setLoggedOutRoute(route);
+      }
+    };
+
+    void resolveRoute();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [restoreState, user]);
+
+  if (restoreState === 'idle' || restoreState === 'loading' || (!user && !loggedOutRoute)) {
     return (
       <AppBackground>
         <SafeAreaView style={styles.loadingScreen}>
@@ -75,12 +112,27 @@ export const RootNavigator = () => {
     );
   }
 
+  const initialRouteName: keyof RootStackParamList = user
+    ? user.isAdmin
+      ? 'Admin'
+      : requiresProfileCompletion
+        ? 'ProfileSetup'
+        : 'Home'
+    : (loggedOutRoute ?? 'Auth');
+
   return (
     <NavigationContainer linking={linking} theme={navigationTheme}>
       <Stack.Navigator
-        initialRouteName={
-          user ? (user.isAdmin ? 'Admin' : requiresProfileCompletion ? 'ProfileSetup' : 'Home') : 'Auth'
+        key={
+          user
+            ? user.isAdmin
+              ? 'admin'
+              : requiresProfileCompletion
+                ? 'profile-setup'
+                : 'resident'
+            : `guest-${loggedOutRoute}`
         }
+        initialRouteName={initialRouteName}
         screenOptions={{
           headerShown: false,
           animation: Platform.OS === 'ios' ? 'slide_from_right' : Platform.OS === 'web' ? 'none' : 'fade',
@@ -94,6 +146,7 @@ export const RootNavigator = () => {
               <Stack.Screen name="Admin" component={AdminHomeScreen} />
               <Stack.Screen name="AdminMonitor" component={AdminMonitorScreen} />
               <Stack.Screen name="AdminRequests" component={AdminRequestsScreen} />
+              <Stack.Screen name="AdminUsers" component={AdminUsersScreen} />
               <Stack.Screen name="OpenBarrier" component={OpenBarrierScreen} />
               <Stack.Screen name="Wickets" component={WicketsScreen} />
             </>
@@ -109,7 +162,10 @@ export const RootNavigator = () => {
             </>
           )
         ) : (
-          <Stack.Screen name="Auth" component={AuthScreen} />
+          <>
+            <Stack.Screen name="RegisterAccount" component={RegisterAccountScreen} />
+            <Stack.Screen name="Auth" component={AuthScreen} />
+          </>
         )}
       </Stack.Navigator>
     </NavigationContainer>

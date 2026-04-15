@@ -153,6 +153,86 @@ def test_admin_requests_endpoint_supports_filters(client):
     assert body['items'][0]['status'] == 'permanent'
 
 
+def test_admin_users_crud_flow(client):
+    admin_login = f'admin_users_{uuid4().hex[:6]}'
+    admin_password = 'demo123'
+    asyncio.run(_ensure_user(admin_login, admin_password, full_name='Admin Users', plot_number='950', is_admin=True))
+
+    admin_token = _api_login(client, admin_login, admin_password)
+    phone_number = f"+7999{str(uuid4().int)[-7:]}"
+    plot_number = str(800 + (uuid4().int % 150))
+
+    create_response = client.post(
+        '/api/admin/users',
+        headers={'Authorization': f'Bearer {admin_token}'},
+        json={
+            'full_name': 'Sidorov Sidor',
+            'phone': phone_number,
+            'plot_number': plot_number,
+        },
+    )
+
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created['login'] == f'c1sidorov{plot_number}'
+    assert created['phone'] == phone_number
+    assert created['plot_number'] == plot_number
+    assert created['password']
+    assert created['password_change_required'] is True
+    assert created['is_active'] is True
+
+    user_id = created['id']
+    user_login = created['login']
+    user_password = created['password']
+
+    list_response = client.get(
+        f'/api/admin/users?search={user_login}',
+        headers={'Authorization': f'Bearer {admin_token}'},
+    )
+    assert list_response.status_code == 200
+    list_body = list_response.json()
+    assert list_body['total'] >= 1
+    listed = next(item for item in list_body['items'] if item['id'] == user_id)
+    assert listed['password'] == user_password
+    assert listed['full_name'] == 'Sidorov Sidor'
+
+    block_response = client.post(
+        f'/api/admin/users/{user_id}/block',
+        headers={'Authorization': f'Bearer {admin_token}'},
+    )
+    assert block_response.status_code == 200
+    assert block_response.json()['is_active'] is False
+
+    blocked_login = client.post('/auth/login', json={'login': user_login, 'password': user_password})
+    assert blocked_login.status_code == 200
+    assert blocked_login.json()['success'] is False
+    assert blocked_login.json()['error'] == 'User is inactive'
+
+    unblock_response = client.post(
+        f'/api/admin/users/{user_id}/unblock',
+        headers={'Authorization': f'Bearer {admin_token}'},
+    )
+    assert unblock_response.status_code == 200
+    assert unblock_response.json()['is_active'] is True
+
+    restored_login = client.post('/auth/login', json={'login': user_login, 'password': user_password})
+    assert restored_login.status_code == 200
+    assert restored_login.json()['success'] is True
+
+    delete_response = client.delete(
+        f'/api/admin/users/{user_id}',
+        headers={'Authorization': f'Bearer {admin_token}'},
+    )
+    assert delete_response.status_code == 200
+
+    after_delete = client.get(
+        f'/api/admin/users?search={user_login}',
+        headers={'Authorization': f'Bearer {admin_token}'},
+    )
+    assert after_delete.status_code == 200
+    assert not any(item['id'] == user_id for item in after_delete.json()['items'])
+
+
 def test_admin_monitor_endpoint_returns_app_open_events(client, monkeypatch):
     admin_login = f'admin_monitor_{uuid4().hex[:6]}'
     resident_login = f'resident_monitor_{uuid4().hex[:6]}'

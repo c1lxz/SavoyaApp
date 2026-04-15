@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..models import User
 from ..utils.jwt import create_access_token
+from .user_accounts import set_user_password
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 settings = get_settings()
@@ -36,8 +37,9 @@ async def ensure_demo_user(session: AsyncSession) -> None:
     user.is_admin = False
     user.is_active = True
     user.login = settings.demo_login
-    user.password_hash = hash_password(settings.demo_password)
     user.plot_number = settings.demo_plot_number
+    user.owner_index = 1
+    set_user_password(user, settings.demo_password, require_change=False)
     await session.commit()
 
 
@@ -59,8 +61,9 @@ async def ensure_admin_user(session: AsyncSession) -> None:
     user.is_admin = True
     user.is_active = True
     user.login = settings.admin_login
-    user.password_hash = hash_password(settings.admin_password)
     user.plot_number = settings.admin_plot_number
+    user.owner_index = None
+    set_user_password(user, settings.admin_password, require_change=False)
     await session.commit()
 
 
@@ -82,8 +85,9 @@ async def ensure_bootstrap_test_users(session: AsyncSession) -> None:
         user.is_admin = False
         user.is_active = True
         user.login = payload["login"]
-        user.password_hash = hash_password(payload["password"])
         user.plot_number = payload["plot_number"] or None
+        user.owner_index = user.owner_index or 1
+        set_user_password(user, payload["password"], require_change=False)
 
     await session.commit()
 

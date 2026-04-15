@@ -1,5 +1,14 @@
 import { apiRequest } from '@/services/api/httpClient';
-import { AdminMonitorEventItem, AdminMonitorResponse, AdminRequestItem, AdminRequestList, AdminRequestStatus } from '@/types';
+import {
+  AdminMonitorEventItem,
+  AdminMonitorResponse,
+  AdminRequestItem,
+  AdminRequestList,
+  AdminRequestStatus,
+  AdminUserItem,
+  AdminUserList,
+  RegisterAccountPayload,
+} from '@/types';
 
 type BackendAdminResident = {
   id: number;
@@ -65,11 +74,35 @@ type BackendAdminMonitorResponse = {
   gate_error?: string | null;
 };
 
+type BackendAdminUserItem = {
+  id: number;
+  login: string;
+  password?: string | null;
+  full_name?: string | null;
+  phone: string;
+  plot_number?: string | null;
+  owner_index?: number | null;
+  is_active: boolean;
+  password_change_required: boolean;
+  created_at: string;
+};
+
+type BackendAdminUserList = {
+  total: number;
+  items: BackendAdminUserItem[];
+};
+
 export type AdminRequestQuery = {
   search?: string;
   status?: AdminRequestStatus | 'all';
   keyType?: 'VehicleNumber' | 'Phone' | 'all';
   residentLogin?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type AdminUserQuery = {
+  search?: string;
   limit?: number;
   offset?: number;
 };
@@ -125,6 +158,19 @@ const mapMonitorEvent = (item: BackendAdminMonitorEventItem): AdminMonitorEventI
   details: item.details ?? null,
 });
 
+const mapAdminUser = (item: BackendAdminUserItem): AdminUserItem => ({
+  id: String(item.id),
+  login: item.login,
+  password: item.password ?? null,
+  fullName: item.full_name ?? '',
+  phone: item.phone,
+  plotNumber: item.plot_number ?? '',
+  ownerIndex: item.owner_index ?? null,
+  isActive: item.is_active,
+  passwordChangeRequired: item.password_change_required,
+  createdAt: item.created_at,
+});
+
 export const apiAdminService = {
   async getRequests(query: AdminRequestQuery = {}): Promise<AdminRequestList> {
     const params = new URLSearchParams();
@@ -155,6 +201,60 @@ export const apiAdminService = {
       total: result.total,
       items: result.items.map(mapAdminRequest),
     };
+  },
+
+  async getUsers(query: AdminUserQuery = {}): Promise<AdminUserList> {
+    const params = new URLSearchParams();
+
+    if (query.search?.trim()) {
+      params.set('search', query.search.trim());
+    }
+    if (query.limit) {
+      params.set('limit', String(query.limit));
+    }
+    if (query.offset) {
+      params.set('offset', String(query.offset));
+    }
+
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    const result = await apiRequest<BackendAdminUserList>(`/api/admin/users${suffix}`);
+
+    return {
+      total: result.total,
+      items: result.items.map(mapAdminUser),
+    };
+  },
+
+  async createUser(payload: RegisterAccountPayload): Promise<AdminUserItem> {
+    const result = await apiRequest<BackendAdminUserItem>('/api/admin/users', {
+      method: 'POST',
+      body: {
+        full_name: payload.fullName,
+        phone: payload.phoneNumber,
+        plot_number: payload.plotNumber,
+      },
+    });
+    return mapAdminUser(result);
+  },
+
+  async blockUser(userId: string): Promise<AdminUserItem> {
+    const result = await apiRequest<BackendAdminUserItem>(`/api/admin/users/${userId}/block`, {
+      method: 'POST',
+    });
+    return mapAdminUser(result);
+  },
+
+  async unblockUser(userId: string): Promise<AdminUserItem> {
+    const result = await apiRequest<BackendAdminUserItem>(`/api/admin/users/${userId}/unblock`, {
+      method: 'POST',
+    });
+    return mapAdminUser(result);
+  },
+
+  async deleteUser(userId: string): Promise<void> {
+    await apiRequest<void>(`/api/admin/users/${userId}`, {
+      method: 'DELETE',
+    });
   },
 
   async getMonitor(limit = 120): Promise<AdminMonitorResponse> {

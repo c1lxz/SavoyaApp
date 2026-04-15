@@ -30,6 +30,113 @@ def test_compat_login_failure(client):
     assert data['error'] == 'Invalid login or password'
 
 
+def test_compat_register_account_generates_credentials_and_requires_password_change(client):
+    plot_number = str(500 + (uuid4().int % 400))
+    phone_number = f"+7999{str(uuid4().int)[-7:]}"
+    response = client.post(
+        '/auth/register',
+        json={
+            'fullName': 'Ivanov Ivan',
+            'phoneNumber': phone_number,
+            'plotNumber': plot_number,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body['success'] is True
+    assert body['login'] == f'c1ivanov{plot_number}'
+    assert body['user']['plotNumber'] == plot_number
+    assert body['user']['passwordChangeRequired'] is True
+    assert len(body['password']) >= 10
+    assert body['password'] != '1234'
+
+    login_response = client.post('/auth/login', json={'login': body['login'], 'password': body['password']})
+    assert login_response.status_code == 200
+    login_body = login_response.json()
+    assert login_body['success'] is True
+    assert login_body['passwordChangeRequired'] is True
+    assert login_body['user']['login'] == body['login']
+
+
+def test_compat_register_account_increments_owner_index_for_same_plot(client):
+    plot_number = str(700 + (uuid4().int % 200))
+    first_phone_number = f"+7999{str(uuid4().int)[-7:]}"
+    second_phone_number = f"+7999{str(uuid4().int)[-7:]}"
+
+    first_response = client.post(
+        '/auth/register',
+        json={
+            'fullName': 'Ivanov Ivan',
+            'phoneNumber': first_phone_number,
+            'plotNumber': plot_number,
+        },
+    )
+    second_response = client.post(
+        '/auth/register',
+        json={
+            'fullName': 'Petrov Petr',
+            'phoneNumber': second_phone_number,
+            'plotNumber': plot_number,
+        },
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert first_response.json()['login'] == f'c1ivanov{plot_number}'
+    assert second_response.json()['login'] == f'c2petrov{plot_number}'
+
+
+def test_compat_change_password_updates_login_credentials(client):
+    plot_number = str(800 + (uuid4().int % 150))
+    phone_number = f"+7999{str(uuid4().int)[-7:]}"
+    register_response = client.post(
+        '/auth/register',
+        json={
+            'fullName': 'Sidorov Sidor',
+            'phoneNumber': phone_number,
+            'plotNumber': plot_number,
+        },
+    )
+    assert register_response.status_code == 200
+    register_body = register_response.json()
+
+    login_response = client.post(
+        '/auth/login',
+        json={'login': register_body['login'], 'password': register_body['password']},
+    )
+    assert login_response.status_code == 200
+    login_body = login_response.json()
+    assert login_body['success'] is True
+
+    token = login_body['access_token']
+    new_password = 'Strong!Pass91'
+    password_response = client.put(
+        '/user/password',
+        headers={'Authorization': f'Bearer {token}'},
+        json={'newPassword': new_password, 'repeatPassword': new_password},
+    )
+
+    assert password_response.status_code == 200
+    assert password_response.json()['passwordChangeRequired'] is False
+
+    old_login_response = client.post(
+        '/auth/login',
+        json={'login': register_body['login'], 'password': register_body['password']},
+    )
+    assert old_login_response.status_code == 200
+    assert old_login_response.json()['success'] is False
+
+    new_login_response = client.post(
+        '/auth/login',
+        json={'login': register_body['login'], 'password': new_password},
+    )
+    assert new_login_response.status_code == 200
+    new_login_body = new_login_response.json()
+    assert new_login_body['success'] is True
+    assert new_login_body['passwordChangeRequired'] is False
+
+
 def test_passes_create_and_list(client):
     login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
     token = login['access_token']

@@ -20,6 +20,7 @@ async def get_me(user: User = Depends(get_current_user)) -> UserResponse:
         name=user.name,
         apartment=user.apartment,
         is_admin=user.is_admin,
+        password_change_required=user.password_change_required,
     )
 
 

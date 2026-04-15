@@ -11,11 +11,14 @@ from ..dependencies import get_current_user
 from ..models import User
 from ..schemas import (
     CompatAuthResult,
+    CompatChangePasswordPayload,
     CompatCreatePassPayload,
     CompatGateActionResult,
     CompatLoginPayload,
     CompatOpenActionRequest,
     CompatPassItem,
+    CompatRegisterAccountPayload,
+    CompatRegisterAccountResult,
     CompatUpdateProfilePayload,
     CompatUser,
     CreateRequestRequest,
@@ -32,6 +35,7 @@ from ..services.requests import (
     list_my_requests,
     resolve_request_status,
 )
+from ..services.user_accounts import UserAccountError, create_user_account, update_user_password
 from ..utils.datetime import to_utc_isoformat, utcnow
 
 router = APIRouter(tags=["compatibility"])
@@ -61,6 +65,7 @@ def _compat_user(user: User) -> CompatUser:
         plotNumber=user.plot_number or user.apartment or "",
         phoneNumber=user.phone or "",
         isAdmin=user.is_admin,
+        passwordChangeRequired=user.password_change_required,
     )
 
 
@@ -221,6 +226,33 @@ async def compat_login(
         user=_compat_user(user),
         access_token=token,
         requiresProfileCompletion=not bool((user.name or "").strip()),
+        passwordChangeRequired=user.password_change_required,
+    )
+
+
+@router.post("/auth/register", response_model=CompatRegisterAccountResult)
+async def compat_register_account(
+    payload: CompatRegisterAccountPayload,
+    session: AsyncSession = Depends(get_db_session),
+) -> CompatRegisterAccountResult:
+    try:
+        user, password = await create_user_account(
+            session,
+            full_name=payload.fullName,
+            phone_number=payload.phoneNumber,
+            plot_number=payload.plotNumber,
+            require_password_change=True,
+        )
+    except UserAccountError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT if exc.code == "phone_already_exists" else status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+
+    return CompatRegisterAccountResult(
+        login=user.login or "",
+        password=password,
+        user=_compat_user(user),
     )
 
 
@@ -242,6 +274,16 @@ async def compat_update_profile(
     await session.commit()
     await session.refresh(user)
     return _compat_user(user)
+
+
+@router.put("/user/password", response_model=CompatUser)
+async def compat_change_password(
+    payload: CompatChangePasswordPayload,
+    session: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+) -> CompatUser:
+    updated = await update_user_password(session, user=user, new_password=payload.newPassword)
+    return _compat_user(updated)
 
 
 def _to_compat_pass(item) -> CompatPassItem:

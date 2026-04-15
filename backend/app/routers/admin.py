@@ -1,14 +1,25 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db_session
 from ..dependencies import get_current_admin_user
 from ..models import Request, User
-from ..schemas import AdminMonitorResponse, AdminRequestItem, AdminRequestListResponse, AdminResidentSummary
+from ..schemas import (
+    AdminCreateUserPayload,
+    AdminMonitorResponse,
+    AdminRequestItem,
+    AdminRequestListResponse,
+    AdminResidentSummary,
+    AdminUserItem,
+    AdminUserListResponse,
+    MessageResponse,
+)
 from ..services.admin_monitor import list_admin_monitor_events
 from ..services.requests import cleanup_expired_requests, list_requests_for_admin, resolve_request_status
+from ..services.user_accounts import UserAccountError, build_admin_user_payload, create_user_account
 from ..utils.vehicle_country import detect_vehicle_country
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -41,6 +52,10 @@ def _to_admin_request_item(item: Request, resident: User) -> AdminRequestItem:
     )
 
 
+def _to_admin_user_item(user: User) -> AdminUserItem:
+    return AdminUserItem(**build_admin_user_payload(user))
+
+
 @router.get("/requests", response_model=AdminRequestListResponse)
 async def admin_list_requests(
     search: str | None = Query(default=None, min_length=1, max_length=100),
@@ -66,6 +81,117 @@ async def admin_list_requests(
         total=total,
         items=[_to_admin_request_item(request, resident) for request, resident in rows],
     )
+
+
+@router.get("/users", response_model=AdminUserListResponse)
+async def admin_list_users(
+    search: str | None = Query(default=None, min_length=1, max_length=100),
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_db_session),
+    _admin: User = Depends(get_current_admin_user),
+) -> AdminUserListResponse:
+    filters = [User.is_admin.is_(False)]
+    normalized_search = (search or "").strip()
+    if normalized_search:
+        like_pattern = f"%{normalized_search.lower()}%"
+        filters.append(
+            or_(
+                func.lower(func.coalesce(User.login, "")).like(like_pattern),
+                func.lower(func.coalesce(User.name, "")).like(like_pattern),
+                func.lower(func.coalesce(User.phone, "")).like(like_pattern),
+                func.lower(func.coalesce(User.plot_number, "")).like(like_pattern),
+            )
+        )
+
+    total_query = select(func.count(User.id)).where(*filters)
+    total = int((await session.execute(total_query)).scalar_one() or 0)
+
+    rows_query = (
+        select(User)
+        .where(*filters)
+        .order_by(User.created_at.desc(), User.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    users = list((await session.execute(rows_query)).scalars().all())
+
+    return AdminUserListResponse(total=total, items=[_to_admin_user_item(user) for user in users])
+
+
+@router.post("/users", response_model=AdminUserItem)
+async def admin_create_user(
+    payload: AdminCreateUserPayload,
+    session: AsyncSession = Depends(get_db_session),
+    _admin: User = Depends(get_current_admin_user),
+) -> AdminUserItem:
+    try:
+        user, _password = await create_user_account(
+            session,
+            full_name=payload.full_name,
+            phone_number=payload.phone,
+            plot_number=payload.plot_number,
+            require_password_change=True,
+        )
+    except UserAccountError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT if exc.code == "phone_already_exists" else status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+
+    return _to_admin_user_item(user)
+
+
+@router.post("/users/{user_id}/block", response_model=AdminUserItem)
+async def admin_block_user(
+    user_id: int,
+    session: AsyncSession = Depends(get_db_session),
+    _admin: User = Depends(get_current_admin_user),
+) -> AdminUserItem:
+    query = await session.execute(select(User).where(User.id == user_id, User.is_admin.is_(False)))
+    user = query.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
+
+    user.is_active = False
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return _to_admin_user_item(user)
+
+
+@router.post("/users/{user_id}/unblock", response_model=AdminUserItem)
+async def admin_unblock_user(
+    user_id: int,
+    session: AsyncSession = Depends(get_db_session),
+    _admin: User = Depends(get_current_admin_user),
+) -> AdminUserItem:
+    query = await session.execute(select(User).where(User.id == user_id, User.is_admin.is_(False)))
+    user = query.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
+
+    user.is_active = True
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return _to_admin_user_item(user)
+
+
+@router.delete("/users/{user_id}", response_model=MessageResponse)
+async def admin_delete_user(
+    user_id: int,
+    session: AsyncSession = Depends(get_db_session),
+    _admin: User = Depends(get_current_admin_user),
+) -> MessageResponse:
+    query = await session.execute(select(User).where(User.id == user_id, User.is_admin.is_(False)))
+    user = query.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
+
+    await session.delete(user)
+    await session.commit()
+    return MessageResponse(message="Пользователь удалён")
 
 
 @router.get("/monitor", response_model=AdminMonitorResponse)

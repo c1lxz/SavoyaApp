@@ -7,6 +7,7 @@ export type User = {
   plotNumber: string;
   phoneNumber?: string;
   isAdmin: boolean;
+  passwordChangeRequired?: boolean;
 };
 
 export type AuthResult = {
@@ -14,6 +15,25 @@ export type AuthResult = {
   user?: User;
   error?: string;
   requiresProfileCompletion?: boolean;
+  passwordChangeRequired?: boolean;
+};
+
+export type RegisterAccountPayload = {
+  fullName: string;
+  phoneNumber: string;
+  plotNumber: string;
+};
+
+export type RegisterAccountResult = {
+  success: boolean;
+  login: string;
+  password: string;
+  user: User;
+};
+
+export type ChangePasswordPayload = {
+  newPassword: string;
+  repeatPassword: string;
 };
 
 export type CreatePassPayload = {
@@ -117,4 +137,22 @@ export type AdminMonitorResponse = {
   total: number;
   items: AdminMonitorEventItem[];
   gateError?: string | null;
+};
+
+export type AdminUserItem = {
+  id: string;
+  login: string;
+  password: string | null;
+  fullName: string;
+  phone: string;
+  plotNumber: string;
+  ownerIndex: number | null;
+  isActive: boolean;
+  passwordChangeRequired: boolean;
+  createdAt: string;
+};
+
+export type AdminUserList = {
+  total: number;
+  items: AdminUserItem[];
 };

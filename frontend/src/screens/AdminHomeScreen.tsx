@@ -45,6 +45,11 @@ export const AdminHomeScreen = ({ navigation }: Props) => {
               leftIcon={<MaterialCommunityIcons name="clipboard-text-outline" size={22} color={theme.colors.textPrimary} />}
             />
             <AppButton
+              title="Пользователи"
+              onPress={() => navigation.push('AdminUsers')}
+              leftIcon={<MaterialCommunityIcons name="account-multiple-outline" size={22} color={theme.colors.textPrimary} />}
+            />
+            <AppButton
               title="Открыть шлагбаум"
               onPress={() => navigation.push('OpenBarrier')}
               leftIcon={<MaterialCommunityIcons name="gate-open" size={22} color={theme.colors.textPrimary} />}

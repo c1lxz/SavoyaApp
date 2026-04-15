@@ -25,6 +25,7 @@ class UserResponse(BaseModel):
     name: str | None = None
     apartment: str | None = None
     is_admin: bool = False
+    password_change_required: bool = False
 
 
 class LoginRequest(BaseModel):
@@ -125,6 +126,7 @@ class CompatUser(BaseModel):
     plotNumber: str
     phoneNumber: str
     isAdmin: bool = False
+    passwordChangeRequired: bool = False
 
 
 class CompatAuthResult(BaseModel):
@@ -133,6 +135,51 @@ class CompatAuthResult(BaseModel):
     error: str | None = None
     access_token: str | None = None
     requiresProfileCompletion: bool = False
+    passwordChangeRequired: bool = False
+
+
+class CompatRegisterAccountPayload(BaseModel):
+    fullName: str = Field(min_length=2, max_length=120)
+    phoneNumber: str = Field(min_length=7, max_length=32)
+    plotNumber: str = Field(min_length=1, max_length=20)
+
+    @field_validator("fullName")
+    @classmethod
+    def validate_full_name(cls, value: str) -> str:
+        return normalize_full_name(value)
+
+    @field_validator("phoneNumber")
+    @classmethod
+    def validate_phone_number(cls, value: str) -> str:
+        return normalize_phone_key(value)
+
+    @field_validator("plotNumber")
+    @classmethod
+    def validate_plot_number(cls, value: str) -> str:
+        return normalize_plot_number(value)
+
+
+class CompatRegisterAccountResult(BaseModel):
+    success: bool = True
+    login: str
+    password: str
+    user: CompatUser
+
+
+class CompatChangePasswordPayload(BaseModel):
+    newPassword: str
+    repeatPassword: str
+
+    @field_validator("newPassword", "repeatPassword")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return normalize_password(value)
+
+    @model_validator(mode="after")
+    def validate_password_match(self) -> "CompatChangePasswordPayload":
+        if self.newPassword != self.repeatPassword:
+            raise ValueError("Passwords do not match")
+        return self
 
 
 class CompatUpdateProfilePayload(BaseModel):
@@ -323,6 +370,45 @@ class AdminRequestItem(BaseModel):
 class AdminRequestListResponse(BaseModel):
     total: int
     items: list[AdminRequestItem]
+
+
+class AdminUserItem(BaseModel):
+    id: int
+    login: str
+    password: str | None = None
+    full_name: str | None = None
+    phone: str
+    plot_number: str | None = None
+    owner_index: int | None = None
+    is_active: bool
+    password_change_required: bool = False
+    created_at: datetime
+
+
+class AdminUserListResponse(BaseModel):
+    total: int
+    items: list[AdminUserItem]
+
+
+class AdminCreateUserPayload(BaseModel):
+    full_name: str = Field(min_length=2, max_length=120)
+    phone: str = Field(min_length=7, max_length=32)
+    plot_number: str = Field(min_length=1, max_length=20)
+
+    @field_validator("full_name")
+    @classmethod
+    def validate_full_name(cls, value: str) -> str:
+        return normalize_full_name(value)
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str) -> str:
+        return normalize_phone_key(value)
+
+    @field_validator("plot_number")
+    @classmethod
+    def validate_plot_number(cls, value: str) -> str:
+        return normalize_plot_number(value)
 
 
 class AdminMonitorEventItem(BaseModel):

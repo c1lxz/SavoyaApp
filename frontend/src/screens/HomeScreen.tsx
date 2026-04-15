@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppBackground } from '@/components/AppBackground';
 import { AppButton } from '@/components/AppButton';
+import { PasswordChangePromptModal } from '@/components/PasswordChangePromptModal';
 import { RootStackParamList } from '@/navigation/types';
 import { useAuthStore } from '@/store/authStore';
 import { getLayoutMetrics } from '@/utils/layout';
@@ -18,6 +19,11 @@ export const HomeScreen = ({ navigation }: Props) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
   const logout = useAuthStore((state) => state.logout);
+  const error = useAuthStore((state) => state.error);
+  const shouldPromptPasswordChange = useAuthStore((state) => state.shouldPromptPasswordChange);
+  const passwordChangeState = useAuthStore((state) => state.passwordChangeState);
+  const changePassword = useAuthStore((state) => state.changePassword);
+  const dismissPasswordChangePrompt = useAuthStore((state) => state.dismissPasswordChangePrompt);
 
   const logoWidth = Math.min(metrics.heroLogoWidth, width - metrics.horizontalPadding * 2);
   const logoMaxHeight = metrics.isDesktop ? 248 : metrics.isTablet ? 220 : metrics.isCompactHeight ? 124 : 150;
@@ -58,9 +64,19 @@ export const HomeScreen = ({ navigation }: Props) => {
             <AppButton title="Открыть шлагбаум" onPress={() => navigation.push('OpenBarrier')} />
             <AppButton title="Калитки" onPress={() => navigation.push('Wickets')} />
             <AppButton title="Мои пропуски" onPress={() => navigation.push('MyPasses')} />
-            <AppButton title="Выход" onPress={logout} />
+            <AppButton title="Выход" onPress={() => void logout()} />
           </View>
         </View>
+
+        <PasswordChangePromptModal
+          visible={shouldPromptPasswordChange}
+          loading={passwordChangeState === 'loading'}
+          error={passwordChangeState === 'error' ? error : null}
+          onSubmit={async (newPassword, repeatPassword) => {
+            await changePassword({ newPassword, repeatPassword });
+          }}
+          onDismiss={dismissPasswordChangePrompt}
+        />
       </SafeAreaView>
     </AppBackground>
   );

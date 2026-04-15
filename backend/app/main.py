@@ -25,6 +25,7 @@ from .services.requests import (
     ensure_active_request_unique_index,
     ensure_requests_schema,
 )
+from .services.user_accounts import ensure_users_schema
 
 settings = get_settings()
 logging.basicConfig(level=logging.INFO)
@@ -134,6 +135,7 @@ async def startup_event() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
     async with SessionLocal() as session:
+        await ensure_users_schema(session)
         await ensure_requests_schema(session)
         broken_count = await cleanup_broken_requests(session)
         if broken_count:
