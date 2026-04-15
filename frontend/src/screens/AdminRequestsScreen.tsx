@@ -17,6 +17,7 @@ import { AdminRequestItem, AdminRequestStatus, RequestState } from '@/types';
 import { formatRequestForCopy } from '@/utils/adminRequests';
 import { goBackOrHome } from '@/utils/backNavigation';
 import { copyToClipboard } from '@/utils/clipboard';
+import { formatDateTime } from '@/utils/date';
 import { getLayoutMetrics } from '@/utils/layout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AdminRequests'>;
@@ -36,6 +37,8 @@ const KEY_TYPE_OPTIONS: Array<{ value: KeyTypeFilter; label: string }> = [
   { value: 'VehicleNumber', label: 'Номер ТС' },
   { value: 'Phone', label: 'Телефон' },
 ];
+
+const REQUESTS_REFRESH_MS = 30000;
 
 const FilterChip = ({
   label,
@@ -65,12 +68,15 @@ export const AdminRequestsScreen = ({ navigation }: Props) => {
   const [loadState, setLoadState] = useState<RequestState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 
   const deferredSearch = useDeferredValue(search.trim());
   const deferredResidentLogin = useDeferredValue(residentLogin.trim());
 
-  const loadRequests = useCallback(async () => {
-    setLoadState('loading');
+  const loadRequests = useCallback(async (showLoading = true) => {
+    if (showLoading) {
+      setLoadState('loading');
+    }
     setError(null);
 
     try {
@@ -84,6 +90,7 @@ export const AdminRequestsScreen = ({ navigation }: Props) => {
 
       setRequests(result.items);
       setTotal(result.total);
+      setLastUpdated(new Date().toISOString());
       setLoadState('success');
     } catch (loadError) {
       const message = loadError instanceof Error ? loadError.message : 'Не удалось загрузить заявки';
@@ -93,8 +100,19 @@ export const AdminRequestsScreen = ({ navigation }: Props) => {
   }, [deferredResidentLogin, deferredSearch, keyTypeFilter, statusFilter]);
 
   useEffect(() => {
-    void loadRequests();
-  }, [loadRequests]);
+    void loadRequests(true);
+    const intervalId = setInterval(() => {
+      void loadRequests(false);
+    }, REQUESTS_REFRESH_MS);
+    const unsubscribe = navigation.addListener('focus', () => {
+      void loadRequests(false);
+    });
+
+    return () => {
+      clearInterval(intervalId);
+      unsubscribe();
+    };
+  }, [loadRequests, navigation]);
 
   useEffect(() => {
     if (!copyFeedback) {
@@ -157,6 +175,7 @@ export const AdminRequestsScreen = ({ navigation }: Props) => {
           <Text style={styles.summaryText}>
             Видны последние {requests.length} из {total} заявок. Поиск работает по номеру, телефону, имени, логину и участку.
           </Text>
+          {lastUpdated ? <Text style={styles.summaryMeta}>Обновлено: {formatDateTime(lastUpdated)}</Text> : null}
           {copyFeedback ? <Text style={styles.copyFeedback}>{copyFeedback}</Text> : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
         </View>
@@ -207,13 +226,13 @@ export const AdminRequestsScreen = ({ navigation }: Props) => {
             </View>
           </View>
 
-          <Pressable style={styles.refreshButton} onPress={() => void loadRequests()}>
+          <Pressable style={styles.refreshButton} onPress={() => void loadRequests(true)}>
             <Text style={styles.refreshButtonText}>Обновить</Text>
           </Pressable>
         </View>
       </View>
     ),
-    [copyFeedback, error, keyTypeFilter, loadRequests, metrics.isDesktop, metrics.panelGap, residentLogin, requests.length, search, statusFilter, total],
+    [copyFeedback, error, keyTypeFilter, lastUpdated, loadRequests, metrics.isDesktop, metrics.panelGap, residentLogin, requests.length, search, statusFilter, total],
   );
 
   return (
@@ -274,6 +293,10 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     fontSize: 16,
     lineHeight: 24,
+  },
+  summaryMeta: {
+    color: theme.colors.textMuted,
+    fontSize: 14,
   },
   copyFeedback: {
     color: theme.colors.success,

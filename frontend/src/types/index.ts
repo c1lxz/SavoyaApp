@@ -83,3 +83,35 @@ export type AdminRequestList = {
   total: number;
   items: AdminRequestItem[];
 };
+
+export type AdminMonitorSource = 'app' | 'gate';
+
+export type AdminMonitorEventItem = {
+  id: string;
+  source: AdminMonitorSource;
+  createdAt: string;
+  status: string;
+  action: string;
+  message?: string | null;
+  actorUserId?: number | null;
+  actorLogin?: string | null;
+  actorName?: string | null;
+  actorPhone?: string | null;
+  accessPointId?: number | null;
+  accessPointName?: string | null;
+  requestId?: string | null;
+  appRequestId?: number | null;
+  gateKeyId?: number | null;
+  gateEventIndex?: number | null;
+  gateEventCode?: number | null;
+  gateUserPtr?: number | null;
+  gateName?: string | null;
+  gateUnit?: string | null;
+  details?: Record<string, unknown> | null;
+};
+
+export type AdminMonitorResponse = {
+  total: number;
+  items: AdminMonitorEventItem[];
+  gateError?: string | null;
+};

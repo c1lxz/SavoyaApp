@@ -2126,6 +2126,68 @@ def _latest_gate_open_event(access_point_id: int) -> dict[str, Any] | None:
     }
 
 
+def get_recent_events(limit: int = 100) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 500))
+    events_db = _current_gate_events_db_path()
+    if not events_db.exists():
+        return []
+
+    _, systemdb_path = _resolve_gate_paths()
+    temp_dir = Path(tempfile.mkdtemp(prefix="gate-events-ro-"))
+    temp_events = temp_dir / events_db.name
+    temp_systemdb = temp_dir / "Gate.mdw"
+    try:
+        shutil.copy2(events_db, temp_events)
+        shutil.copy2(systemdb_path, temp_systemdb)
+        conn = pyodbc.connect(_build_connection_string(temp_events, temp_systemdb))
+        cursor = conn.cursor()
+        try:
+            rows = cursor.execute(
+                f"""
+                SELECT TOP {safe_limit}
+                    [Index],
+                    [DateTime],
+                    EventType,
+                    EventCode,
+                    DevPtr,
+                    RdrPtr,
+                    OperatorID,
+                    Unit,
+                    Message,
+                    [Name],
+                    UserPtr
+                FROM Events
+                ORDER BY [Index] DESC
+                """
+            ).fetchall()
+        finally:
+            cursor.close()
+            conn.close()
+    finally:
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        event_time = row[1]
+        events.append(
+            {
+                "index": int(row[0]),
+                "time": event_time.isoformat() if isinstance(event_time, datetime) else str(event_time),
+                "event_type": int(row[2]),
+                "event_code": int(row[3]),
+                "device_id": int(row[4]),
+                "access_point_id": int(row[5]),
+                "operator_id": int(row[6]),
+                "unit": str(row[7] or ""),
+                "message": str(row[8] or ""),
+                "name": str(row[9] or ""),
+                "user_ptr": int(row[10]) if row[10] is not None else None,
+            }
+        )
+    return events
+
+
 def _sample_phone_user_defaults(cursor: pyodbc.Cursor, *, exclude_user_ptr: int | None = None) -> Any | None:
     phone_key_type_value = _sample_key_type(cursor, "Phone")
     rows = cursor.execute(

@@ -127,6 +127,13 @@ class GateClient:
             points.append({"id": point_id, "name": reverse_map[point_id]})
         return points
 
+    def get_recent_events(self, limit: int = 100) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(int(limit), 500))
+        if settings.gate_real_integration_enabled:
+            result = self._run_bridge("get_recent_events", {"limit": safe_limit})
+            return [dict(item) for item in result]
+        return []
+
     def open_access_point(self, access_point_id: int, key_external_id: str | None = None) -> GateOpenResult:
         if settings.gate_real_integration_enabled:
             response = self._run_bridge(

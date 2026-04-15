@@ -1,5 +1,5 @@
 import { apiRequest } from '@/services/api/httpClient';
-import { AdminRequestItem, AdminRequestList, AdminRequestStatus } from '@/types';
+import { AdminMonitorEventItem, AdminMonitorResponse, AdminRequestItem, AdminRequestList, AdminRequestStatus } from '@/types';
 
 type BackendAdminResident = {
   id: number;
@@ -30,6 +30,36 @@ type BackendAdminRequestItem = {
 type BackendAdminRequestList = {
   total: number;
   items: BackendAdminRequestItem[];
+};
+
+type BackendAdminMonitorEventItem = {
+  id: string;
+  source: 'app' | 'gate';
+  created_at: string;
+  status: string;
+  action: string;
+  message?: string | null;
+  actor_user_id?: number | null;
+  actor_login?: string | null;
+  actor_name?: string | null;
+  actor_phone?: string | null;
+  access_point_id?: number | null;
+  access_point_name?: string | null;
+  request_id?: string | null;
+  app_request_id?: number | null;
+  gate_key_id?: number | null;
+  gate_event_index?: number | null;
+  gate_event_code?: number | null;
+  gate_user_ptr?: number | null;
+  gate_name?: string | null;
+  gate_unit?: string | null;
+  details?: Record<string, unknown> | null;
+};
+
+type BackendAdminMonitorResponse = {
+  total: number;
+  items: BackendAdminMonitorEventItem[];
+  gate_error?: string | null;
 };
 
 export type AdminRequestQuery = {
@@ -65,6 +95,30 @@ const mapAdminRequest = (item: BackendAdminRequestItem): AdminRequestItem => ({
   plotNumber: item.plot_number ?? '',
 });
 
+const mapMonitorEvent = (item: BackendAdminMonitorEventItem): AdminMonitorEventItem => ({
+  id: item.id,
+  source: item.source,
+  createdAt: item.created_at,
+  status: item.status,
+  action: item.action,
+  message: item.message ?? null,
+  actorUserId: item.actor_user_id ?? null,
+  actorLogin: item.actor_login ?? null,
+  actorName: item.actor_name ?? null,
+  actorPhone: item.actor_phone ?? null,
+  accessPointId: item.access_point_id ?? null,
+  accessPointName: item.access_point_name ?? null,
+  requestId: item.request_id ?? null,
+  appRequestId: item.app_request_id ?? null,
+  gateKeyId: item.gate_key_id ?? null,
+  gateEventIndex: item.gate_event_index ?? null,
+  gateEventCode: item.gate_event_code ?? null,
+  gateUserPtr: item.gate_user_ptr ?? null,
+  gateName: item.gate_name ?? null,
+  gateUnit: item.gate_unit ?? null,
+  details: item.details ?? null,
+});
+
 export const apiAdminService = {
   async getRequests(query: AdminRequestQuery = {}): Promise<AdminRequestList> {
     const params = new URLSearchParams();
@@ -94,6 +148,18 @@ export const apiAdminService = {
     return {
       total: result.total,
       items: result.items.map(mapAdminRequest),
+    };
+  },
+
+  async getMonitor(limit = 120): Promise<AdminMonitorResponse> {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    const result = await apiRequest<BackendAdminMonitorResponse>(`/api/admin/monitor?${params.toString()}`);
+
+    return {
+      total: result.total,
+      items: result.items.map(mapMonitorEvent),
+      gateError: result.gate_error ?? null,
     };
   },
 };

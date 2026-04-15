@@ -46,6 +46,8 @@ def _call(action: str, payload: dict) -> object:
         return gate_runtime.remove_key(int(payload["key_id"]))
     if action == "get_access_points":
         return gate_runtime.get_access_points()
+    if action == "get_recent_events":
+        return gate_runtime.get_recent_events(limit=int(payload.get("limit") or 100))
     if action == "get_key_permissions":
         return gate_runtime.get_key_permissions(str(payload["external_key_id"]))
     if action == "get_wiegand_credentials":

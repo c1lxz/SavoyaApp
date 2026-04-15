@@ -152,6 +152,65 @@ def test_admin_requests_endpoint_supports_filters(client):
     assert body['items'][0]['status'] == 'permanent'
 
 
+def test_admin_monitor_endpoint_returns_app_open_events(client, monkeypatch):
+    admin_login = f'admin_monitor_{uuid4().hex[:6]}'
+    resident_login = f'resident_monitor_{uuid4().hex[:6]}'
+    password = 'demo123'
+
+    asyncio.run(_ensure_user(admin_login, password, full_name='Admin Monitor', plot_number='901', is_admin=True))
+    asyncio.run(_ensure_user(resident_login, password, full_name='Resident Monitor', plot_number='404'))
+
+    resident_token = _api_login(client, resident_login, password)
+    create_response = client.post(
+        '/api/requests/',
+        headers={'Authorization': f'Bearer {resident_token}'},
+        json={
+            'key_type': 'VehicleNumber',
+            'key_value': f'A{uuid4().hex[:5]}',
+            'access_point_ids': [1],
+            'is_permanent': True,
+        },
+    )
+    assert create_response.status_code == 200
+
+    open_response = client.post(
+        '/api/access/open',
+        headers={'Authorization': f'Bearer {resident_token}'},
+        json={'access_point_id': 1},
+    )
+    assert open_response.status_code == 200
+
+    def fake_gate_events(limit: int):
+        now = datetime.now(timezone.utc)
+        return [
+            {
+                'index': 10000 + item,
+                'time': (now + timedelta(seconds=item)).isoformat(),
+                'event_code': 1,
+                'access_point_id': 19,
+                'unit': f'Gate {item}',
+                'message': 'Gate event',
+                'name': '',
+                'user_ptr': None,
+            }
+            for item in range(limit)
+        ]
+
+    monkeypatch.setattr('backend.app.services.admin_monitor.gate_client.get_recent_events', fake_gate_events)
+
+    admin_token = _api_login(client, admin_login, password)
+    response = client.get('/api/admin/monitor', headers={'Authorization': f'Bearer {admin_token}'})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body['total'] > 120
+    app_event = next(item for item in body['items'] if item['source'] == 'app')
+    assert app_event['actor_login'] == resident_login
+    assert app_event['access_point_id'] == 1
+    assert app_event['app_request_id'] == create_response.json()['id']
+    assert app_event['gate_key_id'] is not None
+
+
 def test_api_login_rate_limit_returns_429_after_repeated_failures(client):
     for attempt in range(5):
         response = client.post('/api/auth/login', json={'login': 'demo', 'password': f'wrong-{attempt}'})

@@ -321,7 +321,14 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
         request_id=request_id,
         action=OPEN_ACTION,
         status=STATUS_PENDING,
-        details={"access_point_code": access_point.code},
+        details={
+            "access_point_code": access_point.code,
+            "access_point_name": access_point.name,
+            "request_db_id": request_item.id,
+            "gate_key_id": request_item.gate_key_id,
+            "key_external_id": access_key.external_id,
+            "transport": "gateterm_ui",
+        },
     )
     session.add(event)
     await session.commit()

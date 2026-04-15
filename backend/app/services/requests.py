@@ -11,6 +11,7 @@ from ..config import get_settings
 from ..models import Request, User
 from ..schemas import CreateRequestRequest
 from ..utils.datetime import ensure_utc_datetime, utcnow
+from ..utils.input_safety import normalize_phone_key
 from .gate import gate_client
 
 settings = get_settings()
@@ -88,6 +89,72 @@ async def ensure_requests_schema(session: AsyncSession) -> None:
     if "contact_phone" not in columns:
         await session.execute(text("ALTER TABLE requests ADD COLUMN contact_phone VARCHAR(32) NULL"))
         await session.commit()
+
+
+async def ensure_admin_permanent_request(session: AsyncSession) -> Request | None:
+    if not settings.bootstrap_admin_user:
+        return None
+    if not settings.admin_login.strip() or not settings.admin_phone.strip():
+        return None
+
+    admin_query = await session.execute(select(User).where(User.login == settings.admin_login, User.is_admin.is_(True)))
+    admin = admin_query.scalar_one_or_none()
+    if admin is None:
+        return None
+
+    key_value = normalize_phone_key(settings.admin_phone)
+    access_point_ids = _resolved_access_point_ids(
+        key_type="Phone",
+        requested_ids=list(settings.default_access_point_ids),
+    )
+
+    query = await session.execute(
+        select(Request).where(
+            Request.key_type == "Phone",
+            Request.key_value == key_value,
+            Request.status == "active",
+        )
+    )
+    existing = query.scalar_one_or_none()
+    if existing is not None and existing.resident_id != admin.id:
+        return None
+
+    gate_key_id = gate_client.add_permanent_key(
+        key_type="Phone",
+        key_value=key_value,
+        phone_number=key_value,
+        access_point_ids=access_point_ids,
+        resident_name=admin.name or admin.login or "Admin",
+        plot_number=admin.plot_number or admin.apartment or settings.admin_plot_number,
+    )
+
+    if existing is None:
+        existing = Request(
+            resident_id=admin.id,
+            key_type="Phone",
+            key_value=key_value,
+            gate_key_id=gate_key_id,
+            access_point_ids=access_point_ids,
+            is_permanent=True,
+            is_courier=False,
+            contact_phone=key_value,
+            expires_at=None,
+            status="active",
+            plot_number=admin.plot_number or admin.apartment or settings.admin_plot_number,
+        )
+        session.add(existing)
+    else:
+        existing.gate_key_id = gate_key_id
+        existing.access_point_ids = access_point_ids
+        existing.is_permanent = True
+        existing.is_courier = False
+        existing.contact_phone = key_value
+        existing.expires_at = None
+        existing.plot_number = admin.plot_number or admin.apartment or settings.admin_plot_number
+
+    await session.commit()
+    await session.refresh(existing)
+    return existing
 
 
 async def cleanup_broken_requests(session: AsyncSession) -> int:

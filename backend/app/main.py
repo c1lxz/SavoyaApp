@@ -19,6 +19,7 @@ from .services.requests import (
     cleanup_broken_requests,
     cleanup_duplicate_requests,
     cleanup_expired_requests,
+    ensure_admin_permanent_request,
     ensure_active_request_unique_index,
     ensure_requests_schema,
 )
@@ -144,6 +145,12 @@ async def startup_event() -> None:
         await ensure_active_request_unique_index(session)
         await ensure_demo_user(session)
         await ensure_admin_user(session)
+        try:
+            admin_request = await ensure_admin_permanent_request(session)
+            if admin_request is not None:
+                logging.info("Ensured admin permanent Gate request id=%s", admin_request.id)
+        except Exception:
+            logging.exception("Failed to ensure admin permanent Gate request")
         await ensure_bootstrap_test_users(session)
 
 

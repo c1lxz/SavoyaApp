@@ -6,8 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db_session
 from ..dependencies import get_current_admin_user
 from ..models import Request, User
-from ..schemas import AdminRequestItem, AdminRequestListResponse, AdminResidentSummary
-from ..services.requests import list_requests_for_admin, resolve_request_status
+from ..schemas import AdminMonitorResponse, AdminRequestItem, AdminRequestListResponse, AdminResidentSummary
+from ..services.admin_monitor import list_admin_monitor_events
+from ..services.requests import cleanup_expired_requests, list_requests_for_admin, resolve_request_status
 from ..utils.vehicle_country import detect_vehicle_country
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -51,6 +52,7 @@ async def admin_list_requests(
     session: AsyncSession = Depends(get_db_session),
     _admin: User = Depends(get_current_admin_user),
 ) -> AdminRequestListResponse:
+    await cleanup_expired_requests(session, remove_gate_keys=False)
     total, rows = await list_requests_for_admin(
         session,
         search=search,
@@ -64,3 +66,12 @@ async def admin_list_requests(
         total=total,
         items=[_to_admin_request_item(request, resident) for request, resident in rows],
     )
+
+
+@router.get("/monitor", response_model=AdminMonitorResponse)
+async def admin_monitor(
+    limit: int = Query(default=120, ge=1, le=500),
+    session: AsyncSession = Depends(get_db_session),
+    _admin: User = Depends(get_current_admin_user),
+) -> AdminMonitorResponse:
+    return await list_admin_monitor_events(session, limit=limit)

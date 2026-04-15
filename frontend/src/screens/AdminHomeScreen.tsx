@@ -35,6 +35,11 @@ export const AdminHomeScreen = ({ navigation }: Props) => {
 
           <View style={[styles.actions, { gap: metrics.panelGap }]}>
             <AppButton
+              title="Мониторинг"
+              onPress={() => navigation.push('AdminMonitor')}
+              leftIcon={<MaterialCommunityIcons name="monitor-eye" size={22} color={theme.colors.textPrimary} />}
+            />
+            <AppButton
               title="Пропуски"
               onPress={() => navigation.push('AdminRequests')}
               leftIcon={<MaterialCommunityIcons name="clipboard-text-outline" size={22} color={theme.colors.textPrimary} />}

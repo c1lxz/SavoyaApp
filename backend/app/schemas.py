@@ -323,3 +323,33 @@ class AdminRequestItem(BaseModel):
 class AdminRequestListResponse(BaseModel):
     total: int
     items: list[AdminRequestItem]
+
+
+class AdminMonitorEventItem(BaseModel):
+    id: str
+    source: Literal["app", "gate"]
+    created_at: datetime
+    status: str
+    action: str
+    message: str | None = None
+    actor_user_id: int | None = None
+    actor_login: str | None = None
+    actor_name: str | None = None
+    actor_phone: str | None = None
+    access_point_id: int | None = None
+    access_point_name: str | None = None
+    request_id: str | None = None
+    app_request_id: int | None = None
+    gate_key_id: int | None = None
+    gate_event_index: int | None = None
+    gate_event_code: int | None = None
+    gate_user_ptr: int | None = None
+    gate_name: str | None = None
+    gate_unit: str | None = None
+    details: dict | None = None
+
+
+class AdminMonitorResponse(BaseModel):
+    total: int
+    items: list[AdminMonitorEventItem]
+    gate_error: str | None = None
