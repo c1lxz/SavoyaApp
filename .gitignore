@@ -20,3 +20,5 @@ config.mdb
 *.db
 backup_*.mdb
 backup_*.db
+logs/
+temp/
