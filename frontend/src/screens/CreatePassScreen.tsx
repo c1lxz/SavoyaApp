@@ -113,7 +113,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     const normalizedExpiresAt = parseDateInput(normalizedExpiresAtInput);
 
     if (!normalizedFullName || !hasAtLeastTwoWords(normalizedFullName)) {
-      setFormError('Введите фамилию и имя');
+      setFormError('Введите ФИО');
       return;
     }
 
@@ -157,7 +157,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     if (user && (normalizedFullName !== user.fullName || normalizedPlotNumber !== user.plotNumber)) {
       const saved = await updateProfile(normalizedFullName, normalizedPlotNumber);
       if (!saved) {
-        setFormError(authError ?? 'Не удалось сохранить фамилию и имя');
+        setFormError(authError ?? 'Не удалось сохранить ФИО');
         return;
       }
     }
@@ -195,12 +195,12 @@ export const CreatePassScreen = ({ navigation }: Props) => {
 
             <View style={[styles.form, { gap: metrics.panelGap }]}>
               <AppInput
-                label="Фамилия и имя"
+                label="ФИО"
                 icon="account"
                 value={fullName}
                 onChangeText={setFullName}
                 autoCapitalize="words"
-                placeholder="Иванов Иван"
+                placeholder="Иванов Иван Иванович"
                 rightSlot={fullName ? renderClearButton(() => setFullName('')) : null}
               />
 
