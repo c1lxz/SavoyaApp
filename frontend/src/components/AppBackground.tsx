@@ -17,8 +17,24 @@ export const AppBackground = ({ children }: PropsWithChildren) => {
           styles.overlay,
           {
             paddingHorizontal: metrics.horizontalPadding,
-            paddingTop: metrics.isHandset ? (metrics.isCompactHeight ? 4 : 10) : metrics.isCompactHeight ? 8 : 16,
-            paddingBottom: metrics.isHandset ? (metrics.isCompactHeight ? 8 : 12) : metrics.isCompactHeight ? 12 : 20,
+            paddingTop: metrics.isHandset
+              ? metrics.isShortHeight
+                ? 2
+                : metrics.isCompactHeight
+                  ? 4
+                  : 10
+              : metrics.isCompactHeight
+                ? 8
+                : 16,
+            paddingBottom: metrics.isHandset
+              ? metrics.isShortHeight
+                ? 6
+                : metrics.isCompactHeight
+                  ? 8
+                  : 12
+              : metrics.isCompactHeight
+                ? 12
+                : 20,
           },
         ]}
       >

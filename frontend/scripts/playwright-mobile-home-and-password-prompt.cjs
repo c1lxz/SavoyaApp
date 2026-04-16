@@ -266,6 +266,21 @@ const runScenario = async ({ browserType, name, contextOptions, maxGap }) => {
 };
 
 async function main() {
+  const narrowAndroid = await runScenario({
+    browserType: chromium,
+    name: 'narrow-android-chromium',
+    contextOptions: {
+      viewport: { width: 320, height: 568 },
+      isMobile: true,
+      hasTouch: true,
+      userAgent: devices['Pixel 5'].userAgent,
+    },
+    maxGap: 18,
+  });
+
+  assertResult(narrowAndroid.promptVisibleFirstLogin, 'narrow android: password prompt did not appear on first login');
+  assertResult(!narrowAndroid.promptVisibleSecondLogin, 'narrow android: password prompt appeared again after dismiss');
+
   const compactAndroid = await runScenario({
     browserType: chromium,
     name: 'compact-android-chromium',
@@ -296,6 +311,7 @@ async function main() {
   console.log(
     JSON.stringify(
       {
+        narrowAndroid,
         compactAndroid,
         iphoneSe,
       },

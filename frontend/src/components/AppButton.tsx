@@ -47,7 +47,9 @@ const AppButtonComponent = ({
           styles.content,
           {
             paddingHorizontal: metrics.isHandset
-              ? theme.spacing.md
+              ? resolvedMinHeight <= 36
+                ? theme.spacing.sm
+                : theme.spacing.md
               : metrics.isCompactHeight
                 ? theme.spacing.md
                 : theme.spacing.lg,
@@ -59,7 +61,14 @@ const AppButtonComponent = ({
         ) : (
           <View style={styles.row}>
             {leftIcon ? <View style={styles.iconWrap}>{leftIcon}</View> : null}
-            <Text style={[styles.label, { fontSize: resolvedLabelFontSize }]}>{title}</Text>
+            <Text
+              adjustsFontSizeToFit
+              minimumFontScale={0.82}
+              numberOfLines={1}
+              style={[styles.label, { fontSize: resolvedLabelFontSize }]}
+            >
+              {title}
+            </Text>
           </View>
         )}
       </View>
@@ -92,6 +101,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 10,
+    width: '100%',
   },
   iconWrap: {
     width: 24,
@@ -102,6 +112,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: 0,
     textAlign: 'center',
+    flexShrink: 1,
   },
   disabled: {
     opacity: 0.75,
