@@ -134,6 +134,12 @@ class GateClient:
             return [dict(item) for item in result]
         return []
 
+    def get_key_permissions(self, key_external_id: str) -> list[dict[str, Any]]:
+        if settings.gate_real_integration_enabled:
+            result = self._run_bridge("get_key_permissions", {"external_key_id": key_external_id})
+            return [dict(item) for item in result]
+        return []
+
     def open_access_point(self, access_point_id: int, key_external_id: str | None = None) -> GateOpenResult:
         if settings.gate_real_integration_enabled:
             response = self._run_bridge(

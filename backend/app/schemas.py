@@ -166,6 +166,8 @@ class CompatRegisterAccountResult(BaseModel):
     login: str
     password: str
     user: CompatUser
+    linkedExistingPasses: int = 0
+    linkedAccessPointCount: int = 0
 
 
 class CompatChangePasswordPayload(BaseModel):

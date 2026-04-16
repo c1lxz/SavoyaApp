@@ -35,6 +35,7 @@ from ..services.requests import (
     list_my_requests,
     resolve_request_status,
 )
+from ..services.gate_linking import link_existing_gate_passes_by_phone
 from ..services.user_accounts import UserAccountError, create_user_account, update_user_password
 from ..utils.datetime import to_utc_isoformat, utcnow
 
@@ -266,11 +267,14 @@ async def compat_register_account(
         ) from exc
 
     limiter.record_event(rate_limit_key)
+    link_result = await link_existing_gate_passes_by_phone(session, user)
 
     return CompatRegisterAccountResult(
         login=user.login or "",
         password=password,
         user=_compat_user(user),
+        linkedExistingPasses=link_result.linked_count,
+        linkedAccessPointCount=link_result.access_point_count,
     )
 
 

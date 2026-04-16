@@ -1,6 +1,6 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -22,7 +22,20 @@ export const AdminHomeScreen = ({ navigation }: Props) => {
   return (
     <AppBackground>
       <SafeAreaView style={styles.safeArea}>
-        <View style={[styles.page, { maxWidth: metrics.formMaxWidth, gap: metrics.panelGap }]}>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={[
+            styles.scrollContent,
+            {
+              maxWidth: metrics.formMaxWidth,
+              gap: metrics.panelGap,
+            },
+          ]}
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+          alwaysBounceVertical={false}
+          overScrollMode="never"
+        >
           <ScreenHeader title="Админка" />
 
           <View style={[styles.summaryCard, { gap: metrics.isDesktop ? 12 : 10 }]}>
@@ -66,7 +79,7 @@ export const AdminHomeScreen = ({ navigation }: Props) => {
               leftIcon={<MaterialCommunityIcons name="logout" size={22} color={theme.colors.textPrimary} />}
             />
           </View>
-        </View>
+        </ScrollView>
       </SafeAreaView>
     </AppBackground>
   );
@@ -76,10 +89,15 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
-  page: {
+  scroll: {
     flex: 1,
     width: '100%',
+  },
+  scrollContent: {
+    flexGrow: 1,
     alignSelf: 'center',
+    width: '100%',
+    paddingBottom: theme.spacing.xl,
   },
   summaryCard: {
     borderRadius: theme.radius.md,

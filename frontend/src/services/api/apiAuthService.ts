@@ -16,6 +16,8 @@ type CompatRegisterResponse = {
   login: string;
   password: string;
   user: CompatUserResponse;
+  linkedExistingPasses?: number;
+  linkedAccessPointCount?: number;
 };
 
 type CompatUserResponse = {
@@ -127,6 +129,8 @@ export const apiAuthService = {
       login: result.login,
       password: result.password,
       user: mapCompatUser(result.user),
+      linkedExistingPasses: result.linkedExistingPasses ?? 0,
+      linkedAccessPointCount: result.linkedAccessPointCount ?? 0,
     };
   },
 

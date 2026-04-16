@@ -100,6 +100,8 @@ export const mockAuthService: AuthService = {
       login,
       password,
       user,
+      linkedExistingPasses: 0,
+      linkedAccessPointCount: 0,
     };
   },
 

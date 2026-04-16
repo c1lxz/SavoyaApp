@@ -7,7 +7,7 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from backend.app.database import SessionLocal
-from backend.app.models import User
+from backend.app.models import Request, User
 from backend.app.services.auth import hash_password
 from backend.app.services.gate import gate_client
 
@@ -57,6 +57,68 @@ def test_compat_register_account_generates_credentials_and_requires_password_cha
     assert login_body['success'] is True
     assert login_body['passwordChangeRequired'] is True
     assert login_body['user']['login'] == body['login']
+
+
+def test_compat_register_account_links_existing_gate_access_by_phone(client, monkeypatch):
+    plot_number = str(500 + (uuid4().int % 400))
+    phone_number = f"+7999{str(uuid4().int)[-7:]}"
+    captured_gate_call: list[dict] = []
+
+    monkeypatch.setattr(
+        gate_client,
+        "get_key_permissions",
+        lambda external_key_id: [
+            {"access_point_id": 19, "access_point_name": "Entry"},
+            {"access_point_id": 20, "access_point_name": "Exit"},
+            {"access_point_id": 19, "access_point_name": "Entry duplicate"},
+        ],
+    )
+
+    def _capture_add_permanent_key(**kwargs):
+        captured_gate_call.append(dict(kwargs))
+        return 88001
+
+    monkeypatch.setattr(gate_client, "add_permanent_key", _capture_add_permanent_key)
+
+    response = client.post(
+        '/auth/register',
+        json={
+            'fullName': 'Linked Resident',
+            'phoneNumber': phone_number,
+            'plotNumber': plot_number,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body['linkedExistingPasses'] == 1
+    assert body['linkedAccessPointCount'] == 2
+    assert captured_gate_call
+    assert captured_gate_call[0]['key_type'] == 'Phone'
+    assert captured_gate_call[0]['key_value'] == phone_number
+    assert captured_gate_call[0]['access_point_ids'] == [19, 20]
+
+    async def _load_linked_request() -> tuple[Request, User]:
+        async with SessionLocal() as session:
+            user_query = await session.execute(select(User).where(User.login == body['login']))
+            user = user_query.scalar_one()
+            request_query = await session.execute(
+                select(Request).where(
+                    Request.resident_id == user.id,
+                    Request.key_type == "Phone",
+                    Request.status == "active",
+                )
+            )
+            request = request_query.scalar_one()
+            return request, user
+
+    linked_request, linked_user = asyncio.run(_load_linked_request())
+    assert linked_user.gate_user_id == 88001
+    assert linked_request.gate_key_id == 88001
+    assert linked_request.key_value == phone_number
+    assert linked_request.contact_phone == phone_number
+    assert linked_request.access_point_ids == [19, 20]
+    assert linked_request.is_permanent is True
 
 
 def test_compat_register_account_increments_owner_index_for_same_plot(client):

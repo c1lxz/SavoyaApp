@@ -214,7 +214,7 @@ export const AdminUsersScreen = ({ navigation }: Props) => {
     const normalizedPlotNumber = plotNumber.trim();
 
     if (!normalizedFullName || normalizedFullName.split(/\s+/).filter(Boolean).length < 2) {
-      setFormError('Укажите фамилию и имя');
+      setFormError('Укажите ФИО');
       return;
     }
 
@@ -353,7 +353,7 @@ export const AdminUsersScreen = ({ navigation }: Props) => {
                     value={fullName}
                     onChangeText={setFullName}
                     autoCapitalize="words"
-                    placeholder="Иванов Иван"
+                    placeholder="Иванов Иван Иванович"
                   />
                 </View>
                 <View style={styles.createField}>

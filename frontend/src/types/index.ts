@@ -29,6 +29,8 @@ export type RegisterAccountResult = {
   login: string;
   password: string;
   user: User;
+  linkedExistingPasses?: number;
+  linkedAccessPointCount?: number;
 };
 
 export type ChangePasswordPayload = {

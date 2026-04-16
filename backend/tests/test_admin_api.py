@@ -7,7 +7,7 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from backend.app.database import SessionLocal
-from backend.app.models import User
+from backend.app.models import Request, User
 from backend.app.services.auth import hash_password
 from backend.app.services.gate import GateOpenResult
 
@@ -231,6 +231,58 @@ def test_admin_users_crud_flow(client):
     )
     assert after_delete.status_code == 200
     assert not any(item['id'] == user_id for item in after_delete.json()['items'])
+
+
+def test_admin_create_user_links_existing_gate_access_by_phone(client, monkeypatch):
+    admin_login = f'admin_link_{uuid4().hex[:6]}'
+    admin_password = 'demo123'
+    asyncio.run(_ensure_user(admin_login, admin_password, full_name='Admin Link', plot_number='950', is_admin=True))
+
+    phone_number = f"+7999{str(uuid4().int)[-7:]}"
+    plot_number = str(700 + (uuid4().int % 200))
+
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.get_key_permissions',
+        lambda external_key_id: [{"access_point_id": 21, "access_point_name": "North"}],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.add_permanent_key',
+        lambda **kwargs: 88002,
+    )
+
+    admin_token = _api_login(client, admin_login, admin_password)
+    create_response = client.post(
+        '/api/admin/users',
+        headers={'Authorization': f'Bearer {admin_token}'},
+        json={
+            'full_name': 'Admin Linked',
+            'phone': phone_number,
+            'plot_number': plot_number,
+        },
+    )
+
+    assert create_response.status_code == 200
+    created = create_response.json()
+
+    async def _load_linked_request() -> tuple[Request, User]:
+        async with SessionLocal() as session:
+            user = await session.get(User, int(created['id']))
+            assert user is not None
+            request_query = await session.execute(
+                select(Request).where(
+                    Request.resident_id == user.id,
+                    Request.key_type == "Phone",
+                    Request.status == "active",
+                )
+            )
+            request = request_query.scalar_one()
+            return request, user
+
+    linked_request, linked_user = asyncio.run(_load_linked_request())
+    assert linked_user.gate_user_id == 88002
+    assert linked_request.gate_key_id == 88002
+    assert linked_request.key_value == phone_number
+    assert linked_request.access_point_ids == [21]
 
 
 def test_admin_monitor_endpoint_returns_app_open_events(client, monkeypatch):

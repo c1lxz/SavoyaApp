@@ -37,7 +37,7 @@ export const RegisterAccountScreen = ({ navigation }: Props) => {
     const normalizedPlot = plotNumber.trim();
 
     if (!hasAtLeastTwoWords(normalizedFullName)) {
-      setFormError('Укажите фамилию и имя');
+      setFormError('Укажите ФИО');
       return;
     }
 
@@ -94,6 +94,12 @@ export const RegisterAccountScreen = ({ navigation }: Props) => {
                   <Text style={styles.credentialsValue}>{credentials.password}</Text>
                 </View>
 
+                {credentials.linkedExistingPasses ? (
+                  <Text style={styles.linkedNotice}>
+                    Найден существующий доступ по телефону. Пропуск уже доступен в приложении.
+                  </Text>
+                ) : null}
+
                 <View style={styles.actions}>
                   <AppButton title="Войти в учётную запись" onPress={() => navigation.replace('Auth')} />
                   <AppButton title="У меня уже есть логин и пароль" onPress={() => navigation.replace('Auth')} variant="card" />
@@ -107,12 +113,12 @@ export const RegisterAccountScreen = ({ navigation }: Props) => {
 
                 <View style={[styles.form, { gap: metrics.panelGap }]}>
                   <AppInput
-                    label="Фамилия и имя"
+                    label="ФИО"
                     icon="account"
                     value={fullName}
                     onChangeText={setFullName}
                     autoCapitalize="words"
-                    placeholder="Иванов Иван"
+                    placeholder="Иванов Иван Иванович"
                   />
 
                   <AppInput
@@ -195,6 +201,12 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
     fontSize: 20,
     fontWeight: '700',
+  },
+  linkedNotice: {
+    color: theme.colors.success,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '600',
   },
   actions: {
     gap: theme.spacing.sm,

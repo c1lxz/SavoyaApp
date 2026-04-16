@@ -183,7 +183,6 @@ export const CreatePassScreen = ({ navigation }: Props) => {
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
-          scrollEnabled={false}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           bounces={false}

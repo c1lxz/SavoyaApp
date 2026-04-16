@@ -18,6 +18,7 @@ from ..schemas import (
     MessageResponse,
 )
 from ..services.admin_monitor import list_admin_monitor_events
+from ..services.gate_linking import link_existing_gate_passes_by_phone
 from ..services.requests import cleanup_expired_requests, list_requests_for_admin, resolve_request_status
 from ..services.user_accounts import UserAccountError, build_admin_user_payload, create_user_account
 from ..utils.vehicle_country import detect_vehicle_country
@@ -139,6 +140,7 @@ async def admin_create_user(
             detail={"code": exc.code, "message": exc.message},
         ) from exc
 
+    await link_existing_gate_passes_by_phone(session, user)
     return _to_admin_user_item(user)
 
 

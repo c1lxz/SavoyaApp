@@ -15,11 +15,11 @@ import { getLayoutMetrics } from '@/utils/layout';
 type Props = NativeStackScreenProps<RootStackParamList, 'ProfileSetup'>;
 
 const TEXT = {
-  requiredName: 'Введите фамилию и имя',
+  requiredName: 'Введите ФИО',
   title: 'Ваш профиль',
-  description: 'Укажите фамилию и имя один раз. Отчество можно не заполнять.',
-  fullNameLabel: 'Фамилия и имя',
-  fullNamePlaceholder: 'Иванов Иван',
+  description: 'Укажите ФИО один раз. Отчество можно не заполнять.',
+  fullNameLabel: 'ФИО',
+  fullNamePlaceholder: 'Иванов Иван Иванович',
   plotLabel: 'Номер участка',
   save: 'Сохранить',
 } as const;
@@ -59,7 +59,6 @@ export const ProfileSetupWebScreen = ({ navigation }: Props) => {
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
-          scrollEnabled={false}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           bounces={false}
