@@ -95,13 +95,18 @@ async def admin_list_users(
     filters = [User.is_admin.is_(False)]
     normalized_search = (search or "").strip()
     if normalized_search:
-        like_pattern = f"%{normalized_search.lower()}%"
+        exact_like_pattern = f"%{normalized_search}%"
+        folded_like_pattern = f"%{normalized_search.lower()}%"
         filters.append(
             or_(
-                func.lower(func.coalesce(User.login, "")).like(like_pattern),
-                func.lower(func.coalesce(User.name, "")).like(like_pattern),
-                func.lower(func.coalesce(User.phone, "")).like(like_pattern),
-                func.lower(func.coalesce(User.plot_number, "")).like(like_pattern),
+                func.coalesce(User.login, "").like(exact_like_pattern),
+                func.coalesce(User.name, "").like(exact_like_pattern),
+                func.coalesce(User.phone, "").like(exact_like_pattern),
+                func.coalesce(User.plot_number, "").like(exact_like_pattern),
+                func.lower(func.coalesce(User.login, "")).like(folded_like_pattern),
+                func.lower(func.coalesce(User.name, "")).like(folded_like_pattern),
+                func.lower(func.coalesce(User.phone, "")).like(folded_like_pattern),
+                func.lower(func.coalesce(User.plot_number, "")).like(folded_like_pattern),
             )
         )
 

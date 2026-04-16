@@ -24,46 +24,9 @@ from ..utils.input_safety import (
 settings = get_settings()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-_LOGIN_TRANSLIT = str.maketrans(
-    {
-        "а": "a",
-        "б": "b",
-        "в": "v",
-        "г": "g",
-        "д": "d",
-        "е": "e",
-        "ё": "e",
-        "ж": "zh",
-        "з": "z",
-        "и": "i",
-        "й": "y",
-        "к": "k",
-        "л": "l",
-        "м": "m",
-        "н": "n",
-        "о": "o",
-        "п": "p",
-        "р": "r",
-        "с": "s",
-        "т": "t",
-        "у": "u",
-        "ф": "f",
-        "х": "h",
-        "ц": "ts",
-        "ч": "ch",
-        "ш": "sh",
-        "щ": "sch",
-        "ъ": "",
-        "ы": "y",
-        "ь": "",
-        "э": "e",
-        "ю": "yu",
-        "я": "ya",
-    }
-)
-_LOGIN_CLEAN_RE = re.compile(r"[^a-z0-9]+")
 _CYRILLIC_NAME_RE = re.compile(r"[^А-Яа-яЁё]+")
-_RUSSIAN_PASSWORD_FILLER = "абвгдеёжзийклмнопрстуфхцчшщыэюя"
+_PASSWORD_SPECIALS = "!@#$%&*+-_"
+_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789" + _PASSWORD_SPECIALS
 
 
 class UserAccountError(Exception):
@@ -99,7 +62,7 @@ def set_user_password(user: User, password: str, *, require_change: bool) -> Non
     user.password_change_required = require_change
 
 
-def _extract_password_surname(full_name: str) -> str:
+def _extract_login_surname(full_name: str) -> str:
     raw_surname = full_name.strip().split()[0]
     surname = _CYRILLIC_NAME_RE.sub("", raw_surname)
     if not surname:
@@ -107,20 +70,19 @@ def _extract_password_surname(full_name: str) -> str:
     return f"{surname[:1].upper()}{surname[1:].lower()}"[:40]
 
 
-def generate_password(full_name: str = "Житель", min_length: int = 10) -> str:
-    min_length = max(min_length, 10)
-    password = f"с{_extract_password_surname(full_name)}"
-    target_length = max(min_length, len(password) + 4)
-    if len(password) < target_length:
-        password += "".join(secrets.choice(_RUSSIAN_PASSWORD_FILLER) for _ in range(target_length - len(password)))
-    return password
+def generate_password(length: int = 12) -> str:
+    if length < 10:
+        length = 10
 
-
-def _extract_surname_slug(full_name: str) -> str:
-    surname = full_name.strip().split()[0].lower()
-    transliterated = surname.translate(_LOGIN_TRANSLIT)
-    transliterated = _LOGIN_CLEAN_RE.sub("", transliterated)
-    return transliterated[:40] or "user"
+    while True:
+        password = "".join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(length))
+        if (
+            any(ch.islower() for ch in password)
+            and any(ch.isupper() for ch in password)
+            and any(ch.isdigit() for ch in password)
+            and any(ch in _PASSWORD_SPECIALS for ch in password)
+        ):
+            return password
 
 
 async def ensure_users_schema(session: AsyncSession) -> None:
@@ -182,8 +144,8 @@ async def _next_owner_index(session: AsyncSession, plot_number: str) -> int:
 
 
 async def _generate_login(session: AsyncSession, *, full_name: str, plot_number: str, owner_index: int) -> str:
-    surname_slug = _extract_surname_slug(full_name)
-    base_login = normalize_login(f"c{owner_index}{surname_slug}{plot_number}")
+    surname = _extract_login_surname(full_name)
+    base_login = normalize_login(f"с{owner_index}{surname}{plot_number}")
 
     query = await session.execute(select(User.id).where(User.login == base_login))
     if query.scalar_one_or_none() is None:
@@ -230,7 +192,7 @@ async def create_user_account(
 
     owner_index = await _next_owner_index(session, normalized_plot)
     login = await _generate_login(session, full_name=normalized_name, plot_number=normalized_plot, owner_index=owner_index)
-    password = generate_password(normalized_name)
+    password = generate_password()
 
     user = User(
         phone=normalized_phone,

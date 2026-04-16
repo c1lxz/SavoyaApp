@@ -12,8 +12,14 @@ from backend.app.services.auth import hash_password
 from backend.app.services.gate import GateOpenResult
 
 
-def _is_cyrillic_letters_only(value: str) -> bool:
-    return all(("а" <= char.lower() <= "я") or char.lower() == "ё" for char in value)
+def _is_strong_temporary_password(value: str) -> bool:
+    return (
+        len(value) >= 10
+        and any(char.islower() for char in value)
+        and any(char.isupper() for char in value)
+        and any(char.isdigit() for char in value)
+        and any(not char.isalnum() for char in value)
+    )
 
 
 async def _ensure_user(
@@ -164,7 +170,7 @@ def test_admin_users_crud_flow(client):
 
     admin_token = _api_login(client, admin_login, admin_password)
     phone_number = f"+7999{str(uuid4().int)[-7:]}"
-    plot_number = str(800 + (uuid4().int % 150))
+    plot_number = str(200000 + (uuid4().int % 700000))
 
     create_response = client.post(
         '/api/admin/users',
@@ -178,12 +184,11 @@ def test_admin_users_crud_flow(client):
 
     assert create_response.status_code == 200
     created = create_response.json()
-    assert created['login'] == f'c1sidorov{plot_number}'
+    assert created['login'] == f'с1Сидоров{plot_number}'
     assert created['phone'] == phone_number
     assert created['plot_number'] == plot_number
     assert created['password']
-    assert created['password'].startswith('сСидоров')
-    assert _is_cyrillic_letters_only(created['password'])
+    assert _is_strong_temporary_password(created['password'])
     assert created['password_change_required'] is True
     assert created['is_active'] is True
 

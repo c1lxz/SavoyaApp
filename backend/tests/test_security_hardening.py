@@ -111,7 +111,7 @@ def test_admin_user_list_hides_password_after_resident_changes_it(client):
         "/api/admin/users",
         headers={"Authorization": f"Bearer {admin_token}"},
         json={
-            "full_name": "Petrov Petr",
+            "full_name": "Петров Петр",
             "phone": f"+7999{str(uuid4().int)[-7:]}",
             "plot_number": "915",
         },
@@ -148,7 +148,7 @@ def test_change_password_rejects_weak_password(client):
     resident_login = client.post(
         "/auth/register",
         json={
-            "fullName": "Ivanov Ivan",
+            "fullName": "Иванов Иван",
             "phoneNumber": f"+7 {phone_digits[:3]} {phone_digits[3:6]} {phone_digits[6:8]} {phone_digits[8:10]}",
             "plotNumber": "911",
         },
@@ -174,7 +174,7 @@ def test_registration_rejects_same_phone_in_another_format(client):
     first = client.post(
         "/auth/register",
         json={
-            "fullName": "Petrov Petr",
+            "fullName": "Петров Петр",
             "phoneNumber": f"+7 {phone_digits[:3]} {phone_digits[3:6]}-{phone_digits[6:8]}-{phone_digits[8:10]}",
             "plotNumber": "321",
         },
@@ -184,7 +184,7 @@ def test_registration_rejects_same_phone_in_another_format(client):
     duplicate = client.post(
         "/auth/register",
         json={
-            "fullName": "Petrova Anna",
+            "fullName": "Петрова Анна",
             "phoneNumber": f"8 ({phone_digits[:3]}) {phone_digits[3:6]}-{phone_digits[6:8]}-{phone_digits[8:10]}",
             "plotNumber": "322",
         },

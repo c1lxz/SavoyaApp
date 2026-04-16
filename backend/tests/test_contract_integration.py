@@ -12,8 +12,14 @@ from backend.app.services.auth import hash_password
 from backend.app.services.gate import gate_client
 
 
-def _is_cyrillic_letters_only(value: str) -> bool:
-    return all(("а" <= char.lower() <= "я") or char.lower() == "ё" for char in value)
+def _is_strong_temporary_password(value: str) -> bool:
+    return (
+        len(value) >= 10
+        and any(char.islower() for char in value)
+        and any(char.isupper() for char in value)
+        and any(char.isdigit() for char in value)
+        and any(not char.isalnum() for char in value)
+    )
 
 
 def test_compat_login_success(client):
@@ -35,7 +41,7 @@ def test_compat_login_failure(client):
 
 
 def test_compat_register_account_generates_credentials_and_requires_password_change(client):
-    plot_number = str(500 + (uuid4().int % 400))
+    plot_number = str(200000 + (uuid4().int % 700000))
     phone_number = f"+7999{str(uuid4().int)[-7:]}"
     response = client.post(
         '/auth/register',
@@ -49,13 +55,12 @@ def test_compat_register_account_generates_credentials_and_requires_password_cha
     assert response.status_code == 200
     body = response.json()
     assert body['success'] is True
-    assert body['login'] == f'c1ivanov{plot_number}'
+    assert body['login'] == f'с1Иванов{plot_number}'
     assert body['user']['plotNumber'] == plot_number
     assert body['user']['passwordChangeRequired'] is True
     assert len(body['password']) >= 10
     assert body['password'] != '1234'
-    assert body['password'].startswith('сИванов')
-    assert _is_cyrillic_letters_only(body['password'])
+    assert _is_strong_temporary_password(body['password'])
 
     login_response = client.post('/auth/login', json={'login': body['login'], 'password': body['password']})
     assert login_response.status_code == 200
@@ -128,14 +133,14 @@ def test_compat_register_account_links_existing_gate_access_by_phone(client, mon
 
 
 def test_compat_register_account_increments_owner_index_for_same_plot(client):
-    plot_number = str(700 + (uuid4().int % 200))
+    plot_number = str(200000 + (uuid4().int % 700000))
     first_phone_number = f"+7999{str(uuid4().int)[-7:]}"
     second_phone_number = f"+7999{str(uuid4().int)[-7:]}"
 
     first_response = client.post(
         '/auth/register',
         json={
-            'fullName': 'Ivanov Ivan',
+            'fullName': 'Иванов Иван',
             'phoneNumber': first_phone_number,
             'plotNumber': plot_number,
         },
@@ -143,7 +148,7 @@ def test_compat_register_account_increments_owner_index_for_same_plot(client):
     second_response = client.post(
         '/auth/register',
         json={
-            'fullName': 'Petrov Petr',
+            'fullName': 'Петров Петр',
             'phoneNumber': second_phone_number,
             'plotNumber': plot_number,
         },
@@ -151,8 +156,8 @@ def test_compat_register_account_increments_owner_index_for_same_plot(client):
 
     assert first_response.status_code == 200
     assert second_response.status_code == 200
-    assert first_response.json()['login'] == f'c1ivanov{plot_number}'
-    assert second_response.json()['login'] == f'c2petrov{plot_number}'
+    assert first_response.json()['login'] == f'с1Иванов{plot_number}'
+    assert second_response.json()['login'] == f'с2Петров{plot_number}'
 
 
 def test_compat_change_password_updates_login_credentials(client):

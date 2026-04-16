@@ -115,24 +115,12 @@ const getCreatePassSlotMetrics = async (page) =>
       .filter(Boolean),
   );
 
-const PASSWORD_FILLER = 'абвгдеёжзийклмнопрстуфхцчшщыэюя';
-
 const cyrillicSurname = (fullName) => {
   const surname = (fullName.trim().split(/\s+/)[0] || '').replace(/[^А-Яа-яЁё]/g, '');
   return surname ? `${surname.slice(0, 1).toUpperCase()}${surname.slice(1).toLowerCase()}` : 'Житель';
 };
 
-const createPassword = (fullName) => {
-  const base = `с${cyrillicSurname(fullName)}`;
-  const targetLength = Math.max(10, base.length + 4);
-  let password = base;
-
-  while (password.length < targetLength) {
-    password += PASSWORD_FILLER[Math.floor(Math.random() * PASSWORD_FILLER.length)];
-  }
-
-  return password;
-};
+const createPassword = () => `Mock!${Math.random().toString(36).slice(2, 9)}9A`;
 
 const buildResident = ({ id, login, fullName, plotNumber, phoneNumber, passwordChangeRequired, ownerIndex }) => ({
   id: String(id),
@@ -189,9 +177,9 @@ const installApiMock = async (page) => {
     records.filter((item) => !item.user.isAdmin && item.user.plotNumber === plotNumber);
 
   const createResidentRecord = ({ fullName, phoneNumber, plotNumber }) => {
-    const surname = (fullName.trim().split(/\s+/)[0] || 'user').toLowerCase().replace(/[^a-z0-9]/g, '') || 'user';
+    const surname = cyrillicSurname(fullName);
     const ownerIndex = getResidentRecordsByPlot(plotNumber).length + 1;
-    const baseLogin = `c${ownerIndex}${surname}${plotNumber}`;
+    const baseLogin = `с${ownerIndex}${surname}${plotNumber}`;
     let login = baseLogin;
     let suffix = 2;
 
@@ -200,7 +188,7 @@ const installApiMock = async (page) => {
       suffix += 1;
     }
 
-    const password = createPassword(fullName);
+    const password = createPassword();
     const user = buildResident({
       id: state.nextUserId++,
       login,
@@ -349,7 +337,7 @@ const installApiMock = async (page) => {
         contentType: 'application/json; charset=utf-8',
         body: JSON.stringify({
           success: true,
-          access_token: `${record.user.login}-token`,
+          access_token: `mock-token-${record.user.id}`,
           user: state.currentUser,
           requiresProfileCompletion: false,
           passwordChangeRequired: Boolean(state.currentUser.passwordChangeRequired),
@@ -796,7 +784,7 @@ const evaluateDesktopAdminScenario = async (browserType, name, viewport, options
     await pressableByText(page, TEXT.users).click();
     await exactText(page, TEXT.usersDbTitle).waitFor();
 
-    await inputByPlaceholder(page, TEXT.registerNamePlaceholder).fill('Petrov Petr');
+    await inputByPlaceholder(page, TEXT.registerNamePlaceholder).fill('Петров Петр');
     await inputByPlaceholder(page, TEXT.registerPhonePlaceholder).fill('+79995550123');
     await inputByPlaceholder(page, TEXT.registerPlotPlaceholder).fill('88');
     await pressableByText(page, 'Создать пользователя').click();
