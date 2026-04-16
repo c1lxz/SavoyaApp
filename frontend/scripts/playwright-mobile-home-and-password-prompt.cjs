@@ -190,12 +190,14 @@ const collectHomeLayout = async (page) =>
       ) ?? null;
     const logoRect = logo ? logo.getBoundingClientRect() : null;
     const firstButton = buttons[0] ?? null;
+    const interButtonGaps = buttons.slice(1).map((item, index) => Math.max(0, Math.round(item.top - buttons[index].bottom)));
 
     return {
       viewportHeight: window.innerHeight,
       docScrollHeight: document.documentElement.scrollHeight,
       bodyScrollHeight: document.body.scrollHeight,
       buttons,
+      interButtonGaps,
       logoBottom: logoRect ? Math.round(logoRect.bottom) : null,
       firstButtonTop: firstButton ? firstButton.top : null,
       logoToButtonsGap:
@@ -203,7 +205,7 @@ const collectHomeLayout = async (page) =>
     };
   }, [TEXT.createPass, TEXT.openBarrier, TEXT.wickets, TEXT.myPasses, TEXT.logout]);
 
-const runScenario = async ({ browserType, name, contextOptions, maxGap }) => {
+const runScenario = async ({ browserType, name, contextOptions, minLogoGap, maxLogoGap, minButtonHeight, minActionGap }) => {
   const browser = await browserType.launch({ headless: true });
   const context = await browser.newContext({
     ...contextOptions,
@@ -238,8 +240,18 @@ const runScenario = async ({ browserType, name, contextOptions, maxGap }) => {
       `${name}: home screen still requires vertical scrolling`,
     );
     assertResult(
-      typeof layout.logoToButtonsGap === 'number' && layout.logoToButtonsGap <= maxGap,
-      `${name}: logo gap is still too large`,
+      typeof layout.logoToButtonsGap === 'number' &&
+        layout.logoToButtonsGap >= minLogoGap &&
+        layout.logoToButtonsGap <= maxLogoGap,
+      `${name}: logo gap is outside expected range`,
+    );
+    assertResult(
+      layout.buttons.every((item) => item.height >= minButtonHeight),
+      `${name}: home buttons are still too small`,
+    );
+    assertResult(
+      layout.interButtonGaps.every((gap) => gap >= minActionGap),
+      `${name}: gaps between buttons are still too small`,
     );
 
     await pressableByText(page, TEXT.logout).click();
@@ -275,7 +287,10 @@ async function main() {
       hasTouch: true,
       userAgent: devices['Pixel 5'].userAgent,
     },
-    maxGap: 18,
+    minLogoGap: 8,
+    maxLogoGap: 20,
+    minButtonHeight: 50,
+    minActionGap: 8,
   });
 
   assertResult(narrowAndroid.promptVisibleFirstLogin, 'narrow android: password prompt did not appear on first login');
@@ -290,7 +305,10 @@ async function main() {
       hasTouch: true,
       userAgent: devices['Pixel 5'].userAgent,
     },
-    maxGap: 24,
+    minLogoGap: 10,
+    maxLogoGap: 24,
+    minButtonHeight: 54,
+    minActionGap: 10,
   });
 
   assertResult(compactAndroid.promptVisibleFirstLogin, 'compact android: password prompt did not appear on first login');
@@ -302,7 +320,10 @@ async function main() {
     contextOptions: {
       ...devices['iPhone SE'],
     },
-    maxGap: 28,
+    minLogoGap: 8,
+    maxLogoGap: 20,
+    minButtonHeight: 50,
+    minActionGap: 8,
   });
 
   assertResult(iphoneSe.promptVisibleFirstLogin, 'iphone se: password prompt did not appear on first login');

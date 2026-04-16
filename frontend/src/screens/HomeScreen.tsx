@@ -51,24 +51,6 @@ export const HomeScreen = ({ navigation }: Props) => {
     : metrics.isCompactHeight
       ? 12
       : 20;
-  const pageGap = metrics.isHandset
-    ? isUltraShortHeight
-      ? 2
-      : metrics.isShortHeight
-        ? 4
-        : metrics.isCompactHeight
-          ? 6
-          : 10
-    : metrics.panelGap + 2;
-  const actionGap = metrics.isHandset
-    ? isUltraShortHeight
-      ? 4
-      : metrics.isShortHeight
-        ? 6
-        : metrics.isCompactHeight
-          ? 8
-          : 10
-    : metrics.panelGap;
   const pagePaddingTop = metrics.isHandset
     ? isUltraShortHeight
       ? 0
@@ -95,6 +77,7 @@ export const HomeScreen = ({ navigation }: Props) => {
   const gapCount = HOME_ACTIONS.length;
   const availableHeight =
     height - insets.top - insets.bottom - shellPaddingTop - shellPaddingBottom - pagePaddingTop - pagePaddingBottom;
+  const minimumLogoHeight = metrics.isHandset ? (isUltraShortHeight ? 32 : metrics.isShortHeight ? 40 : 52) : 120;
   const defaultLogoHeight = metrics.isDesktop
     ? 248
     : metrics.isTablet
@@ -119,34 +102,68 @@ export const HomeScreen = ({ navigation }: Props) => {
           : 0.28),
     ),
   );
-  const minimumButtonHeight = metrics.isHandset ? (isUltraShortHeight ? 32 : metrics.isShortHeight ? 36 : 40) : metrics.buttonMinHeight;
+  const minimumPageGap = metrics.isHandset ? (isUltraShortHeight ? 4 : metrics.isShortHeight ? 6 : 8) : metrics.panelGap + 2;
+  const preferredPageGap = metrics.isHandset
+    ? isUltraShortHeight
+      ? 8
+      : metrics.isShortHeight
+        ? 10
+        : metrics.isCompactHeight
+          ? 12
+          : 16
+    : metrics.panelGap + 2;
+  const minimumActionGap = metrics.isHandset ? (isUltraShortHeight ? 6 : metrics.isShortHeight ? 8 : 10) : metrics.panelGap;
+  const preferredActionGap = metrics.isHandset
+    ? isUltraShortHeight
+      ? 8
+      : metrics.isShortHeight
+        ? 10
+        : metrics.isCompactHeight
+          ? 12
+          : 14
+    : metrics.panelGap;
+  const minimumButtonHeight = metrics.isHandset ? (isUltraShortHeight ? 38 : metrics.isShortHeight ? 42 : 46) : metrics.buttonMinHeight;
+  const actionGap = Math.max(
+    minimumActionGap,
+    Math.min(
+      preferredActionGap,
+      Math.floor((availableHeight - minimumLogoHeight - preferredPageGap - actionCount * minimumButtonHeight) / gapCount),
+    ),
+  );
+  const pageGap = Math.max(
+    minimumPageGap,
+    Math.min(
+      preferredPageGap,
+      availableHeight - minimumLogoHeight - actionCount * minimumButtonHeight - gapCount * actionGap,
+    ),
+  );
   const preferredButtonHeight = metrics.isHandset
     ? isUltraShortHeight
-      ? 40
+      ? 50
       : metrics.isShortHeight
-        ? 42
+        ? 54
         : metrics.isCompactHeight
-          ? 46
-          : 50
+          ? 58
+          : 62
     : metrics.buttonMinHeight;
   const buttonMinHeight = Math.max(
     minimumButtonHeight,
     Math.min(
       preferredButtonHeight,
-      Math.floor((availableHeight - preferredLogoHeight - pageGap - gapCount * actionGap) / actionCount),
+      Math.floor((availableHeight - minimumLogoHeight - pageGap - gapCount * actionGap) / actionCount),
     ),
   );
   const buttonLabelFontSize = metrics.isHandset
-    ? buttonMinHeight <= 36
-      ? 14
-      : buttonMinHeight <= 42
+    ? buttonMinHeight <= 42
         ? 15
-        : 16
+        : buttonMinHeight <= 50
+          ? 16
+          : 17
     : metrics.isCompactHeight
       ? 17
       : 18;
   const buttonsHeight = actionCount * buttonMinHeight + gapCount * actionGap;
-  const logoHeight = Math.max(24, Math.min(preferredLogoHeight, availableHeight - buttonsHeight - pageGap));
+  const logoHeight = Math.max(minimumLogoHeight, Math.min(preferredLogoHeight, availableHeight - buttonsHeight - pageGap));
   const logoWidth = Math.min(metrics.heroLogoWidth, width - metrics.horizontalPadding * 2, logoHeight * LOGO_IMAGE_RATIO);
 
   return (
