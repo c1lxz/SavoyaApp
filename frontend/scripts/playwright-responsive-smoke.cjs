@@ -619,6 +619,7 @@ const evaluateMobileResidentScenario = async (browserType, name, viewport, optio
 
     const firstVisitIsRegister = await inputByPlaceholder(page, TEXT.registerNamePlaceholder).isVisible();
     const loginFieldOnFirstVisit = await inputByPlaceholder(page, TEXT.loginPlaceholder).count();
+    const initialPhoneValue = await inputByPlaceholder(page, TEXT.registerPhonePlaceholder).inputValue();
 
     await inputByPlaceholder(page, TEXT.registerNamePlaceholder).fill('Иванов Иван');
     await inputByPlaceholder(page, TEXT.registerPhonePlaceholder).fill('+79990001234');
@@ -703,6 +704,7 @@ const evaluateMobileResidentScenario = async (browserType, name, viewport, optio
       viewport,
       firstVisitIsRegister,
       loginFieldOnFirstVisit,
+      initialPhoneValue,
       passwordCopiedFeedbackVisible,
       loginValue,
       passwordValue,
@@ -846,6 +848,7 @@ async function main() {
 
   assertResult(mobileResident.firstVisitIsRegister, 'mobile resident: first visit no longer opens account creation');
   assertResult(mobileResident.loginFieldOnFirstVisit === 0, 'mobile resident: login screen opened on first visit');
+  assertResult(mobileResident.initialPhoneValue === '+7', 'mobile resident: register phone field is not prefilled with +7');
   assertResult(mobileResident.passwordCopiedFeedbackVisible, 'mobile resident: password copy feedback did not appear');
   assertResult(mobileResident.loginValue === '', 'mobile resident: login field is prefilled');
   assertResult(mobileResident.passwordValue === '', 'mobile resident: password field is prefilled');

@@ -17,6 +17,7 @@ import { getLayoutMetrics } from '@/utils/layout';
 type Props = NativeStackScreenProps<RootStackParamList, 'RegisterAccount'>;
 
 const hasAtLeastTwoWords = (value: string) => value.trim().split(/\s+/).filter(Boolean).length >= 2;
+const PHONE_PREFIX = '+7';
 
 export const RegisterAccountScreen = ({ navigation }: Props) => {
   const { width, height } = useWindowDimensions();
@@ -27,7 +28,7 @@ export const RegisterAccountScreen = ({ navigation }: Props) => {
   const error = useAuthStore((state) => state.error);
 
   const [fullName, setFullName] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState(PHONE_PREFIX);
   const [plotNumber, setPlotNumber] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [credentials, setCredentials] = useState<RegisterAccountResult | null>(null);
