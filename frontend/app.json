@@ -1,8 +1,9 @@
 {
   "expo": {
-    "name": "Savoya",
+    "name": "Шлагбаум Савоя",
     "slug": "savoya",
-    "version": "1.0.0",
+    "version": "1.0.4",
+    "icon": "./assets/app-icon.png",
     "orientation": "default",
     "userInterfaceStyle": "dark",
     "assetBundlePatterns": [
@@ -12,7 +13,10 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.savoya.app",
+      "versionCode": 5,
       "adaptiveIcon": {
+        "foregroundImage": "./assets/app-icon.png",
         "backgroundColor": "#0B1D16"
       }
     }

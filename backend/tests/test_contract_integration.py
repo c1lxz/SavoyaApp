@@ -12,6 +12,10 @@ from backend.app.services.auth import hash_password
 from backend.app.services.gate import gate_client
 
 
+def _is_cyrillic_letters_only(value: str) -> bool:
+    return all(("а" <= char.lower() <= "я") or char.lower() == "ё" for char in value)
+
+
 def test_compat_login_success(client):
     response = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'})
     assert response.status_code == 200
@@ -36,7 +40,7 @@ def test_compat_register_account_generates_credentials_and_requires_password_cha
     response = client.post(
         '/auth/register',
         json={
-            'fullName': 'Ivanov Ivan',
+            'fullName': 'Иванов Иван',
             'phoneNumber': phone_number,
             'plotNumber': plot_number,
         },
@@ -50,6 +54,8 @@ def test_compat_register_account_generates_credentials_and_requires_password_cha
     assert body['user']['passwordChangeRequired'] is True
     assert len(body['password']) >= 10
     assert body['password'] != '1234'
+    assert body['password'].startswith('сИванов')
+    assert _is_cyrillic_letters_only(body['password'])
 
     login_response = client.post('/auth/login', json={'login': body['login'], 'password': body['password']})
     assert login_response.status_code == 200

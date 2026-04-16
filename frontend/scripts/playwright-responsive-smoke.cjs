@@ -9,12 +9,14 @@ const TEXT = {
   registerSuccessTitle: 'Аккаунт создан',
   loginPlaceholder: 'Логин',
   passwordPlaceholder: 'Пароль',
-  registerNamePlaceholder: 'Иванов Иван',
+  registerNamePlaceholder: 'Иванов Иван Иванович',
   registerPhonePlaceholder: '+79991234567',
   registerPlotPlaceholder: '25',
   registerExistingButton: 'У меня уже есть логин и пароль',
   goToAccount: 'Войти в учётную запись',
   createAccount: 'Создать аккаунт',
+  copyPassword: 'Скопировать пароль',
+  copyPasswordDone: 'Пароль скопирован в буфер обмена',
   createPass: 'Создать пропуск',
   createPassTitle: 'Создание пропуска',
   openBarrier: 'Открыть шлагбаум',
@@ -113,7 +115,24 @@ const getCreatePassSlotMetrics = async (page) =>
       .filter(Boolean),
   );
 
-const createPassword = () => `Mock!${Math.random().toString(36).slice(2, 9)}9A`;
+const PASSWORD_FILLER = 'абвгдеёжзийклмнопрстуфхцчшщыэюя';
+
+const cyrillicSurname = (fullName) => {
+  const surname = (fullName.trim().split(/\s+/)[0] || '').replace(/[^А-Яа-яЁё]/g, '');
+  return surname ? `${surname.slice(0, 1).toUpperCase()}${surname.slice(1).toLowerCase()}` : 'Житель';
+};
+
+const createPassword = (fullName) => {
+  const base = `с${cyrillicSurname(fullName)}`;
+  const targetLength = Math.max(10, base.length + 4);
+  let password = base;
+
+  while (password.length < targetLength) {
+    password += PASSWORD_FILLER[Math.floor(Math.random() * PASSWORD_FILLER.length)];
+  }
+
+  return password;
+};
 
 const buildResident = ({ id, login, fullName, plotNumber, phoneNumber, passwordChangeRequired, ownerIndex }) => ({
   id: String(id),
@@ -181,7 +200,7 @@ const installApiMock = async (page) => {
       suffix += 1;
     }
 
-    const password = createPassword();
+    const password = createPassword(fullName);
     const user = buildResident({
       id: state.nextUserId++,
       login,
@@ -564,6 +583,19 @@ const ensureAuthScreen = async (page) => {
   await inputByPlaceholder(page, TEXT.loginPlaceholder).waitFor();
 };
 
+const ensureRegisterScreen = async (page) => {
+  await Promise.race([
+    inputByPlaceholder(page, TEXT.registerNamePlaceholder).waitFor({ state: 'visible' }),
+    inputByPlaceholder(page, TEXT.loginPlaceholder).waitFor({ state: 'visible' }),
+  ]);
+
+  if ((await inputByPlaceholder(page, TEXT.registerNamePlaceholder).count()) === 0) {
+    await pressableByText(page, TEXT.createAccount).click();
+  }
+
+  await inputByPlaceholder(page, TEXT.registerNamePlaceholder).waitFor();
+};
+
 const evaluateMobileResidentScenario = async (browserType, name, viewport, options = {}) => {
   const browser = await browserType.launch({ headless: true });
   const context = await browser.newContext({
@@ -572,18 +604,23 @@ const evaluateMobileResidentScenario = async (browserType, name, viewport, optio
     hasTouch: Boolean(options.hasTouch),
     deviceScaleFactor: 1,
   });
+  try {
+    await context.grantPermissions(['clipboard-write'], { origin: new URL(BASE_URL).origin });
+  } catch {
+    // Some browser engines do not expose clipboard permission controls.
+  }
   const page = await context.newPage();
 
   try {
     const state = await installApiMock(page);
 
     await page.goto(BASE_URL, { waitUntil: 'load' });
-    await inputByPlaceholder(page, TEXT.registerNamePlaceholder).waitFor();
+    await ensureRegisterScreen(page);
 
     const firstVisitIsRegister = await inputByPlaceholder(page, TEXT.registerNamePlaceholder).isVisible();
     const loginFieldOnFirstVisit = await inputByPlaceholder(page, TEXT.loginPlaceholder).count();
 
-    await inputByPlaceholder(page, TEXT.registerNamePlaceholder).fill('Ivanov Ivan');
+    await inputByPlaceholder(page, TEXT.registerNamePlaceholder).fill('Иванов Иван');
     await inputByPlaceholder(page, TEXT.registerPhonePlaceholder).fill('+79990001234');
     await inputByPlaceholder(page, TEXT.registerPlotPlaceholder).fill('47');
     await pressableByText(page, TEXT.createAccount).click();
@@ -597,6 +634,9 @@ const evaluateMobileResidentScenario = async (browserType, name, viewport, optio
 
     await exactText(page, generatedLogin).waitFor();
     await exactText(page, generatedPassword).waitFor();
+    await pressableByText(page, TEXT.copyPassword).click();
+    await exactText(page, TEXT.copyPasswordDone).waitFor();
+    const passwordCopiedFeedbackVisible = (await exactText(page, TEXT.copyPasswordDone).count()) > 0;
     await pressableByText(page, TEXT.goToAccount).click();
 
     await inputByPlaceholder(page, TEXT.loginPlaceholder).waitFor();
@@ -663,6 +703,7 @@ const evaluateMobileResidentScenario = async (browserType, name, viewport, optio
       viewport,
       firstVisitIsRegister,
       loginFieldOnFirstVisit,
+      passwordCopiedFeedbackVisible,
       loginValue,
       passwordValue,
       authSlot,
@@ -805,6 +846,7 @@ async function main() {
 
   assertResult(mobileResident.firstVisitIsRegister, 'mobile resident: first visit no longer opens account creation');
   assertResult(mobileResident.loginFieldOnFirstVisit === 0, 'mobile resident: login screen opened on first visit');
+  assertResult(mobileResident.passwordCopiedFeedbackVisible, 'mobile resident: password copy feedback did not appear');
   assertResult(mobileResident.loginValue === '', 'mobile resident: login field is prefilled');
   assertResult(mobileResident.passwordValue === '', 'mobile resident: password field is prefilled');
   assertResult(Boolean(mobileResident.authSlot?.slotWithinBounds), 'mobile resident: auth eye icon is clipped');

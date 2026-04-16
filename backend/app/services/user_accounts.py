@@ -62,8 +62,8 @@ _LOGIN_TRANSLIT = str.maketrans(
     }
 )
 _LOGIN_CLEAN_RE = re.compile(r"[^a-z0-9]+")
-_PASSWORD_SPECIALS = "!@#$%&*+-_"
-_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789" + _PASSWORD_SPECIALS
+_CYRILLIC_NAME_RE = re.compile(r"[^А-Яа-яЁё]+")
+_RUSSIAN_PASSWORD_FILLER = "абвгдеёжзийклмнопрстуфхцчшщыэюя"
 
 
 class UserAccountError(Exception):
@@ -99,19 +99,21 @@ def set_user_password(user: User, password: str, *, require_change: bool) -> Non
     user.password_change_required = require_change
 
 
-def generate_password(length: int = 12) -> str:
-    if length < 10:
-        length = 10
+def _extract_password_surname(full_name: str) -> str:
+    raw_surname = full_name.strip().split()[0]
+    surname = _CYRILLIC_NAME_RE.sub("", raw_surname)
+    if not surname:
+        return "Житель"
+    return f"{surname[:1].upper()}{surname[1:].lower()}"[:40]
 
-    while True:
-        password = "".join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(length))
-        if (
-            any(ch.islower() for ch in password)
-            and any(ch.isupper() for ch in password)
-            and any(ch.isdigit() for ch in password)
-            and any(ch in _PASSWORD_SPECIALS for ch in password)
-        ):
-            return password
+
+def generate_password(full_name: str = "Житель", min_length: int = 10) -> str:
+    min_length = max(min_length, 10)
+    password = f"с{_extract_password_surname(full_name)}"
+    target_length = max(min_length, len(password) + 4)
+    if len(password) < target_length:
+        password += "".join(secrets.choice(_RUSSIAN_PASSWORD_FILLER) for _ in range(target_length - len(password)))
+    return password
 
 
 def _extract_surname_slug(full_name: str) -> str:
@@ -228,7 +230,7 @@ async def create_user_account(
 
     owner_index = await _next_owner_index(session, normalized_plot)
     login = await _generate_login(session, full_name=normalized_name, plot_number=normalized_plot, owner_index=owner_index)
-    password = generate_password()
+    password = generate_password(normalized_name)
 
     user = User(
         phone=normalized_phone,

@@ -1,4 +1,5 @@
-﻿import { API_BASE_URL } from '@/services/api/config';
+import { Platform } from 'react-native';
+import { API_BASE_URL } from '@/services/api/config';
 import { getAccessToken } from '@/services/api/tokenStore';
 
 type RequestOptions = {
@@ -7,12 +8,22 @@ type RequestOptions = {
 };
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+const IS_WEB = Platform.OS === 'web';
 
 const isLoopbackHost = (hostname: string): boolean => LOOPBACK_HOSTS.has(hostname.toLowerCase());
 
+const getWebOrigin = (): string | null => {
+  if (!IS_WEB || typeof window === 'undefined') {
+    return null;
+  }
+
+  return window.location?.origin ?? null;
+};
+
 const resolveRequestUrl = (path: string): URL => {
-  if (typeof window !== 'undefined') {
-    return new URL(`${API_BASE_URL}${path}`, window.location.origin);
+  const webOrigin = getWebOrigin();
+  if (webOrigin) {
+    return new URL(`${API_BASE_URL}${path}`, webOrigin);
   }
 
   return new URL(`${API_BASE_URL}${path}`);
@@ -63,7 +74,7 @@ export const apiRequest = async <T>(path: string, options: RequestOptions = {}):
   const token = getAccessToken();
   const requestUrl = resolveRequestUrl(path);
 
-  if (typeof window !== 'undefined' && token && requestUrl.protocol !== 'https:' && !isLoopbackHost(requestUrl.hostname)) {
+  if (token && requestUrl.protocol !== 'https:' && !isLoopbackHost(requestUrl.hostname)) {
     throw new Error('Небезопасное соединение с API заблокировано');
   }
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -11,6 +11,7 @@ import { RootStackParamList } from '@/navigation/types';
 import { useAuthStore } from '@/store/authStore';
 import { theme } from '@/theme';
 import { RegisterAccountResult } from '@/types';
+import { copyToClipboard } from '@/utils/clipboard';
 import { getLayoutMetrics } from '@/utils/layout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'RegisterAccount'>;
@@ -30,6 +31,16 @@ export const RegisterAccountScreen = ({ navigation }: Props) => {
   const [plotNumber, setPlotNumber] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [credentials, setCredentials] = useState<RegisterAccountResult | null>(null);
+  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!copyFeedback) {
+      return undefined;
+    }
+
+    const timer = setTimeout(() => setCopyFeedback(null), 1800);
+    return () => clearTimeout(timer);
+  }, [copyFeedback]);
 
   const onSubmit = async () => {
     const normalizedFullName = fullName.trim();
@@ -60,7 +71,17 @@ export const RegisterAccountScreen = ({ navigation }: Props) => {
 
     if (result) {
       setCredentials(result);
+      setCopyFeedback(null);
     }
+  };
+
+  const onCopyPassword = async () => {
+    if (!credentials?.password) {
+      return;
+    }
+
+    await copyToClipboard(credentials.password);
+    setCopyFeedback('Пароль скопирован в буфер обмена');
   };
 
   return (
@@ -92,6 +113,10 @@ export const RegisterAccountScreen = ({ navigation }: Props) => {
                 <View style={styles.credentialsBlock}>
                   <Text style={styles.credentialsLabel}>Пароль</Text>
                   <Text style={styles.credentialsValue}>{credentials.password}</Text>
+                  <View style={styles.passwordActions}>
+                    <AppButton title="Скопировать пароль" onPress={() => void onCopyPassword()} variant="card" />
+                    {copyFeedback ? <Text style={styles.copyFeedback}>{copyFeedback}</Text> : null}
+                  </View>
                 </View>
 
                 {credentials.linkedExistingPasses ? (
@@ -201,6 +226,14 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
     fontSize: 20,
     fontWeight: '700',
+  },
+  passwordActions: {
+    gap: theme.spacing.xs,
+  },
+  copyFeedback: {
+    color: theme.colors.success,
+    fontSize: 14,
+    fontWeight: '600',
   },
   linkedNotice: {
     color: theme.colors.success,

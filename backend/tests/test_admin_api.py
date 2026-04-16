@@ -12,6 +12,10 @@ from backend.app.services.auth import hash_password
 from backend.app.services.gate import GateOpenResult
 
 
+def _is_cyrillic_letters_only(value: str) -> bool:
+    return all(("а" <= char.lower() <= "я") or char.lower() == "ё" for char in value)
+
+
 async def _ensure_user(
     login: str,
     password: str,
@@ -166,7 +170,7 @@ def test_admin_users_crud_flow(client):
         '/api/admin/users',
         headers={'Authorization': f'Bearer {admin_token}'},
         json={
-            'full_name': 'Sidorov Sidor',
+            'full_name': 'Сидоров Сидор',
             'phone': phone_number,
             'plot_number': plot_number,
         },
@@ -178,6 +182,8 @@ def test_admin_users_crud_flow(client):
     assert created['phone'] == phone_number
     assert created['plot_number'] == plot_number
     assert created['password']
+    assert created['password'].startswith('сСидоров')
+    assert _is_cyrillic_letters_only(created['password'])
     assert created['password_change_required'] is True
     assert created['is_active'] is True
 
@@ -194,7 +200,7 @@ def test_admin_users_crud_flow(client):
     assert list_body['total'] >= 1
     listed = next(item for item in list_body['items'] if item['id'] == user_id)
     assert listed['password'] == user_password
-    assert listed['full_name'] == 'Sidorov Sidor'
+    assert listed['full_name'] == 'Сидоров Сидор'
 
     block_response = client.post(
         f'/api/admin/users/{user_id}/block',
