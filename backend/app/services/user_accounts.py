@@ -60,6 +60,8 @@ def set_user_password(user: User, password: str, *, require_change: bool) -> Non
     user.password_hash = pwd_context.hash(normalized)
     user.password_encrypted = encrypt_visible_password(normalized) if require_change else None
     user.password_change_required = require_change
+    if require_change:
+        user.password_change_prompt_shown = False
 
 
 def _extract_login_surname(full_name: str) -> str:
@@ -99,6 +101,10 @@ async def ensure_users_schema(session: AsyncSession) -> None:
         ("owner_index", "ALTER TABLE users ADD COLUMN owner_index INTEGER NULL"),
         ("password_encrypted", "ALTER TABLE users ADD COLUMN password_encrypted TEXT NULL"),
         ("password_change_required", "ALTER TABLE users ADD COLUMN password_change_required BOOLEAN NOT NULL DEFAULT 0"),
+        (
+            "password_change_prompt_shown",
+            "ALTER TABLE users ADD COLUMN password_change_prompt_shown BOOLEAN NOT NULL DEFAULT 0",
+        ),
     )
 
     for column_name, statement in migration_statements:
@@ -123,6 +129,10 @@ async def clear_stale_visible_passwords(session: AsyncSession) -> int:
     )
     await session.commit()
     return int(result.rowcount or 0)
+
+
+def should_show_password_change_prompt(user: User) -> bool:
+    return bool(user.password_change_required and not user.password_change_prompt_shown and not user.is_admin)
 
 
 def _validate_full_name_words(full_name: str) -> str:

@@ -24,7 +24,8 @@ type AuthStore = {
   restoreSession: () => Promise<void>;
 };
 
-const resolvePasswordChangePrompt = (user: User | null) => Boolean(user && !user.isAdmin && user.passwordChangeRequired);
+const resolvePasswordChangePrompt = (user: User | null) =>
+  Boolean(user && !user.isAdmin && (user.passwordChangePromptRequired ?? user.passwordChangeRequired));
 
 export const useAuthStore = create<AuthStore>((set) => ({
   user: null,
@@ -112,7 +113,10 @@ export const useAuthStore = create<AuthStore>((set) => ({
   },
 
   dismissPasswordChangePrompt() {
-    set({ shouldPromptPasswordChange: false });
+    set((state) => ({
+      shouldPromptPasswordChange: false,
+      user: state.user ? { ...state.user, passwordChangePromptRequired: false } : state.user,
+    }));
   },
 
   async logout() {

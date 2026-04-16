@@ -14,6 +14,7 @@ export interface AuthService {
 type MockUserRecord = {
   user: User;
   password: string;
+  passwordChangePromptShown?: boolean;
 };
 
 const MOCK_USERS: MockUserRecord[] = [
@@ -26,6 +27,7 @@ const MOCK_USERS: MockUserRecord[] = [
       phoneNumber: '+70000000000',
       isAdmin: false,
       passwordChangeRequired: false,
+      passwordChangePromptRequired: false,
     },
     password: 'demo123',
   },
@@ -56,7 +58,14 @@ export const mockAuthService: AuthService = {
       return { success: false, error: 'Неверный логин или пароль' };
     }
 
-    currentUser = { ...record.user };
+    const shouldPrompt = Boolean(record.user.passwordChangeRequired && !record.passwordChangePromptShown);
+    currentUser = {
+      ...record.user,
+      passwordChangePromptRequired: shouldPrompt,
+    };
+    if (shouldPrompt) {
+      record.passwordChangePromptShown = true;
+    }
     return {
       success: true,
       user: currentUser,
@@ -88,11 +97,13 @@ export const mockAuthService: AuthService = {
       phoneNumber: payload.phoneNumber.trim(),
       isAdmin: false,
       passwordChangeRequired: true,
+      passwordChangePromptRequired: false,
     };
 
     MOCK_USERS.push({
       user,
       password,
+      passwordChangePromptShown: false,
     });
 
     return {
@@ -135,6 +146,7 @@ export const mockAuthService: AuthService = {
       phoneNumber: currentUser?.phoneNumber ?? fallback?.phoneNumber ?? '',
       isAdmin: Boolean(currentUser?.isAdmin ?? fallback?.isAdmin),
       passwordChangeRequired: Boolean(currentUser?.passwordChangeRequired ?? fallback?.passwordChangeRequired),
+      passwordChangePromptRequired: false,
     };
 
     currentUser = next;
@@ -165,6 +177,7 @@ export const mockAuthService: AuthService = {
     record.user = {
       ...record.user,
       passwordChangeRequired: false,
+      passwordChangePromptRequired: false,
     };
     currentUser = { ...record.user };
     return currentUser;

@@ -9,6 +9,7 @@ type CompatLoginResponse = {
   access_token?: string;
   requiresProfileCompletion?: boolean;
   passwordChangeRequired?: boolean;
+  passwordChangePromptRequired?: boolean;
 };
 
 type CompatRegisterResponse = {
@@ -28,6 +29,7 @@ type CompatUserResponse = {
   phoneNumber: string;
   isAdmin: boolean;
   passwordChangeRequired?: boolean;
+  passwordChangePromptRequired?: boolean;
 };
 
 type BackendUser = {
@@ -37,6 +39,7 @@ type BackendUser = {
   apartment?: string | null;
   is_admin?: boolean;
   password_change_required?: boolean;
+  password_change_prompt_required?: boolean;
 };
 
 type ApiUser = BackendUser | CompatUserResponse;
@@ -57,6 +60,7 @@ const mapBackendUser = (user: BackendUser): User => ({
   phoneNumber: user.phone ?? '',
   isAdmin: Boolean(user.is_admin),
   passwordChangeRequired: Boolean(user.password_change_required),
+  passwordChangePromptRequired: Boolean(user.password_change_prompt_required),
 });
 
 const mapCompatUser = (user: CompatUserResponse): User => ({
@@ -67,6 +71,7 @@ const mapCompatUser = (user: CompatUserResponse): User => ({
   phoneNumber: user.phoneNumber ?? '',
   isAdmin: Boolean(user.isAdmin),
   passwordChangeRequired: Boolean(user.passwordChangeRequired),
+  passwordChangePromptRequired: Boolean(user.passwordChangePromptRequired),
 });
 
 const mapApiUser = (user: ApiUser): User => {
@@ -97,7 +102,13 @@ export const apiAuthService = {
     }
 
     if (result.success && result.access_token && result.user) {
-      const mappedUser = mapApiUser(result.user);
+      const mappedBaseUser = mapApiUser(result.user);
+      const mappedUser = {
+        ...mappedBaseUser,
+        passwordChangePromptRequired: Boolean(
+          result.passwordChangePromptRequired ?? mappedBaseUser.passwordChangePromptRequired,
+        ),
+      };
       await setAccessToken(result.access_token);
       currentUser = mappedUser;
       return {
@@ -109,9 +120,17 @@ export const apiAuthService = {
       };
     }
 
+    const mappedFallbackUser = result.user ? mapApiUser(result.user) : undefined;
     return {
       success: result.success,
-      user: result.user ? mapApiUser(result.user) : undefined,
+      user: mappedFallbackUser
+        ? {
+            ...mappedFallbackUser,
+            passwordChangePromptRequired: Boolean(
+              result.passwordChangePromptRequired ?? mappedFallbackUser.passwordChangePromptRequired,
+            ),
+          }
+        : undefined,
       error: result.error,
       requiresProfileCompletion: result.user?.isAdmin ? false : result.requiresProfileCompletion,
       passwordChangeRequired: result.passwordChangeRequired,

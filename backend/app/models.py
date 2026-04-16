@@ -27,6 +27,7 @@ class User(Base):
     owner_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     password_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     password_change_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    password_change_prompt_shown: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     requests: Mapped[list["Request"]] = relationship(back_populates="resident")
     logs: Mapped[list["Log"]] = relationship(back_populates="user")

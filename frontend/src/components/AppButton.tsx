@@ -11,6 +11,8 @@ type AppButtonProps = {
   loading?: boolean;
   variant?: 'primary' | 'card';
   leftIcon?: React.ReactNode;
+  minHeight?: number;
+  labelFontSize?: number;
 };
 
 const AppButtonComponent = ({
@@ -20,16 +22,21 @@ const AppButtonComponent = ({
   loading = false,
   variant = 'primary',
   leftIcon,
+  minHeight,
+  labelFontSize,
 }: AppButtonProps) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
+  const resolvedMinHeight = minHeight ?? metrics.buttonMinHeight;
+  const resolvedLabelFontSize =
+    labelFontSize ?? (metrics.isHandset ? (metrics.isShortHeight ? 15 : 16) : metrics.isCompactHeight ? 17 : 18);
 
   return (
     <Pressable
       style={[
         styles.button,
         variant === 'card' ? styles.cardButton : styles.primaryButton,
-        { minHeight: metrics.buttonMinHeight },
+        { minHeight: resolvedMinHeight },
         (disabled || loading) && styles.disabled,
       ]}
       onPress={onPress}
@@ -52,9 +59,7 @@ const AppButtonComponent = ({
         ) : (
           <View style={styles.row}>
             {leftIcon ? <View style={styles.iconWrap}>{leftIcon}</View> : null}
-            <Text style={[styles.label, { fontSize: metrics.isHandset ? 16 : metrics.isCompactHeight ? 17 : 18 }]}>
-              {title}
-            </Text>
+            <Text style={[styles.label, { fontSize: resolvedLabelFontSize }]}>{title}</Text>
           </View>
         )}
       </View>
@@ -95,7 +100,7 @@ const styles = StyleSheet.create({
   label: {
     color: theme.colors.textPrimary,
     fontWeight: '600',
-    letterSpacing: 0.2,
+    letterSpacing: 0,
     textAlign: 'center',
   },
   disabled: {

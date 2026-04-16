@@ -384,6 +384,7 @@ try {
         -Arguments $frontendBuildArgs `
         -WorkingDirectory $frontendRoot `
         -Description "Building frontend production bundle"
+    & (Join-Path $resolvedRepoRoot "scripts\copy_latest_apk_to_dist.ps1") -RepoRoot $resolvedRepoRoot
 }
 finally {
     if ($null -eq $previousUseRealApi) {

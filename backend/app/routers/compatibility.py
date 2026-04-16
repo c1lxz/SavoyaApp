@@ -25,7 +25,7 @@ from ..schemas import (
     MessageResponse,
 )
 from ..services import access as access_service
-from ..services.auth import login_with_password
+from ..services.auth import consume_password_change_prompt, login_with_password
 from ..services.gate import gate_client
 from ..services.requests import (
     RequestConflictError,
@@ -58,7 +58,7 @@ _PHONE_READER_HINTS = (
 )
 
 
-def _compat_user(user: User) -> CompatUser:
+def _compat_user(user: User, *, password_change_prompt_required: bool = False) -> CompatUser:
     return CompatUser(
         id=str(user.id),
         login=user.login or "",
@@ -67,6 +67,7 @@ def _compat_user(user: User) -> CompatUser:
         phoneNumber=user.phone or "",
         isAdmin=user.is_admin,
         passwordChangeRequired=user.password_change_required,
+        passwordChangePromptRequired=password_change_prompt_required,
     )
 
 
@@ -229,10 +230,11 @@ async def compat_login(
         return CompatAuthResult(success=False, error="User is inactive")
     if user is None or token is None:
         return CompatAuthResult(success=False, error=_INVALID_LOGIN_MESSAGE)
+    should_prompt = await consume_password_change_prompt(session, user)
 
     return CompatAuthResult(
         success=True,
-        user=_compat_user(user),
+        user=_compat_user(user, password_change_prompt_required=should_prompt),
         access_token=token,
         requiresProfileCompletion=not bool((user.name or "").strip()),
         passwordChangeRequired=user.password_change_required,

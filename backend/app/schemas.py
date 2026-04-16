@@ -28,6 +28,7 @@ class UserResponse(BaseModel):
     apartment: str | None = None
     is_admin: bool = False
     password_change_required: bool = False
+    password_change_prompt_required: bool = False
 
 
 class LoginRequest(BaseModel):
@@ -129,6 +130,7 @@ class CompatUser(BaseModel):
     phoneNumber: str
     isAdmin: bool = False
     passwordChangeRequired: bool = False
+    passwordChangePromptRequired: bool = False
 
 
 class CompatAuthResult(BaseModel):

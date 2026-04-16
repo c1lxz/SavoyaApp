@@ -7,12 +7,12 @@ from ..database import get_db_session
 from ..dependencies import get_current_user
 from ..models import User
 from ..schemas import LoginRequest, MessageResponse, TokenResponse, UserResponse
-from ..services.auth import login_with_password
+from ..services.auth import consume_password_change_prompt, login_with_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-def _to_user_response(user: User) -> UserResponse:
+def _to_user_response(user: User, *, password_change_prompt_required: bool = False) -> UserResponse:
     return UserResponse(
         id=user.id,
         phone=user.phone,
@@ -20,6 +20,7 @@ def _to_user_response(user: User) -> UserResponse:
         apartment=user.apartment,
         is_admin=user.is_admin,
         password_change_required=user.password_change_required,
+        password_change_prompt_required=password_change_prompt_required,
     )
 
 
@@ -43,7 +44,8 @@ async def login(payload: LoginRequest, request: Request, session: AsyncSession =
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Пользователь деактивирован")
     if user is None or token is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Неверный логин или пароль")
-    return TokenResponse(access_token=token, user=_to_user_response(user))
+    should_prompt = await consume_password_change_prompt(session, user)
+    return TokenResponse(access_token=token, user=_to_user_response(user, password_change_prompt_required=should_prompt))
 
 
 @router.post("/logout", response_model=MessageResponse)

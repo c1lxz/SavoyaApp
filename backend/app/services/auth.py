@@ -8,7 +8,7 @@ from ..config import get_settings
 from ..models import User
 from ..utils.jwt import create_access_token
 from ..utils.input_safety import normalize_account_phone
-from .user_accounts import set_user_password
+from .user_accounts import set_user_password, should_show_password_change_prompt
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 settings = get_settings()
@@ -107,3 +107,14 @@ async def login_with_password(session: AsyncSession, login: str, password: str) 
 
     token = create_access_token(subject=str(user.id))
     return user, token, None
+
+
+async def consume_password_change_prompt(session: AsyncSession, user: User) -> bool:
+    should_prompt = should_show_password_change_prompt(user)
+    if not should_prompt:
+        return False
+
+    user.password_change_prompt_shown = True
+    session.add(user)
+    await session.commit()
+    return True

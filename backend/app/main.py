@@ -240,7 +240,11 @@ def _serve_frontend_asset(relative_path: str) -> FileResponse:
     requested_path = _resolve_frontend_path(relative_path)
 
     if requested_path.is_file():
-        response = FileResponse(requested_path)
+        if requested_path.suffix.lower() == ".apk":
+            response = FileResponse(requested_path, media_type="application/vnd.android.package-archive")
+            response.headers["Content-Disposition"] = f'attachment; filename="{requested_path.name}"'
+        else:
+            response = FileResponse(requested_path)
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"

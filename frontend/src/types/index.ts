@@ -8,6 +8,7 @@ export type User = {
   phoneNumber?: string;
   isAdmin: boolean;
   passwordChangeRequired?: boolean;
+  passwordChangePromptRequired?: boolean;
 };
 
 export type AuthResult = {

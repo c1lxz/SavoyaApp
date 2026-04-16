@@ -210,6 +210,50 @@ def test_compat_change_password_updates_login_credentials(client):
     assert new_login_body['passwordChangeRequired'] is False
 
 
+def test_compat_password_change_prompt_is_shown_only_on_first_login(client):
+    plot_number = str(900 + (uuid4().int % 90))
+    phone_number = f"+7999{str(uuid4().int)[-7:]}"
+    register_response = client.post(
+        '/auth/register',
+        json={
+            'fullName': 'Petrov Petr',
+            'phoneNumber': phone_number,
+            'plotNumber': plot_number,
+        },
+    )
+    assert register_response.status_code == 200
+    register_body = register_response.json()
+
+    first_login = client.post(
+        '/auth/login',
+        json={'login': register_body['login'], 'password': register_body['password']},
+    )
+    assert first_login.status_code == 200
+    first_login_body = first_login.json()
+    assert first_login_body['success'] is True
+    assert first_login_body['user']['passwordChangeRequired'] is True
+    assert first_login_body['user']['passwordChangePromptRequired'] is True
+
+    me_response = client.get(
+        '/user/me',
+        headers={'Authorization': f"Bearer {first_login_body['access_token']}"},
+    )
+    assert me_response.status_code == 200
+    me_body = me_response.json()
+    assert me_body['passwordChangeRequired'] is True
+    assert me_body['passwordChangePromptRequired'] is False
+
+    second_login = client.post(
+        '/auth/login',
+        json={'login': register_body['login'], 'password': register_body['password']},
+    )
+    assert second_login.status_code == 200
+    second_login_body = second_login.json()
+    assert second_login_body['success'] is True
+    assert second_login_body['user']['passwordChangeRequired'] is True
+    assert second_login_body['user']['passwordChangePromptRequired'] is False
+
+
 def test_passes_create_and_list(client):
     login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
     token = login['access_token']
