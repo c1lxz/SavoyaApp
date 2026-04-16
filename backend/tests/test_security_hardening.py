@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
+from backend.app import main as backend_main
 from backend.app.config import Settings
 from backend.app.database import SessionLocal
 from backend.app.models import User
@@ -95,6 +96,38 @@ def test_auth_responses_are_not_cacheable_and_send_hsts(client):
     assert response.headers["pragma"] == "no-cache"
     assert response.headers["expires"] == "0"
     assert response.headers["strict-transport-security"] == "max-age=31536000; includeSubDomains"
+
+
+def test_frontend_assets_are_cacheable_but_spa_shell_is_not(client, monkeypatch, tmp_path):
+    asset_path = tmp_path / "assets" / "assets" / "logo.123456.png"
+    asset_path.parent.mkdir(parents=True)
+    asset_path.write_bytes(b"fake image")
+    (tmp_path / "index.html").write_text("<!doctype html><html></html>", encoding="utf-8")
+
+    monkeypatch.setattr(backend_main, "_FRONTEND_DIST_DIR", tmp_path)
+
+    asset_response = client.get("/assets/assets/logo.123456.png")
+    assert asset_response.status_code == 200
+    assert asset_response.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert "pragma" not in asset_response.headers
+
+    index_response = client.get("/index.html")
+    assert index_response.status_code == 200
+    assert index_response.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
+
+
+def test_frontend_fallback_does_not_mask_sensitive_or_file_like_paths(client, monkeypatch, tmp_path):
+    (tmp_path / "index.html").write_text("<!doctype html><html></html>", encoding="utf-8")
+    monkeypatch.setattr(backend_main, "_FRONTEND_DIST_DIR", tmp_path)
+
+    spa_response = client.get("/admin/users")
+    assert spa_response.status_code == 200
+
+    api_probe = client.get("/api/.env")
+    assert api_probe.status_code == 404
+
+    missing_file = client.get("/favicon.ico")
+    assert missing_file.status_code == 404
 
 
 def test_admin_user_list_hides_password_after_resident_changes_it(client):

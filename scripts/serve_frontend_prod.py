@@ -29,6 +29,24 @@ PROXIED_PREFIXES = (
     "/access",
     "/requests",
 )
+CACHEABLE_PREFIXES = (
+    "/_expo/static/",
+    "/assets/",
+)
+CACHEABLE_SUFFIXES = (
+    ".css",
+    ".gif",
+    ".ico",
+    ".jpg",
+    ".jpeg",
+    ".js",
+    ".png",
+    ".svg",
+    ".ttf",
+    ".webp",
+    ".woff",
+    ".woff2",
+)
 
 
 class FrontendRequestHandler(http.server.SimpleHTTPRequestHandler):
@@ -38,9 +56,14 @@ class FrontendRequestHandler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=directory, **kwargs)
 
     def end_headers(self) -> None:
-        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
+        request_path = urllib.parse.urlsplit(self.path).path
+        lower_path = request_path.lower()
+        if any(request_path.startswith(prefix) for prefix in CACHEABLE_PREFIXES) and lower_path.endswith(CACHEABLE_SUFFIXES):
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        else:
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
         super().end_headers()
 
     def _should_proxy(self) -> bool:
@@ -125,6 +148,11 @@ class FrontendRequestHandler(http.server.SimpleHTTPRequestHandler):
             return
         resolved_path = Path(self.translate_path(self.path))
         if not resolved_path.exists():
+            request_path = urllib.parse.urlsplit(self.path).path
+            filename = request_path.rsplit("/", 1)[-1]
+            if filename.startswith(".") or "." in filename:
+                self.send_error(404, "File not found.")
+                return
             self.path = "/index.html"
         super().do_GET()
 
@@ -133,6 +161,11 @@ class FrontendRequestHandler(http.server.SimpleHTTPRequestHandler):
             return
         resolved_path = Path(self.translate_path(self.path))
         if not resolved_path.exists():
+            request_path = urllib.parse.urlsplit(self.path).path
+            filename = request_path.rsplit("/", 1)[-1]
+            if filename.startswith(".") or "." in filename:
+                self.send_error(404, "File not found.")
+                return
             self.path = "/index.html"
         super().do_HEAD()
 
@@ -163,7 +196,7 @@ class ThreadingTcpServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Serve frontend/dist with SPA fallback and disabled cache.")
+    parser = argparse.ArgumentParser(description="Serve frontend/dist with SPA fallback and production cache headers.")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8081)
     parser.add_argument("--root", required=True)

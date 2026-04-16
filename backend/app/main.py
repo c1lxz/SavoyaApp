@@ -39,6 +39,24 @@ _SENSITIVE_CACHE_PREFIXES = (
     "/requests",
     "/api",
 )
+_CACHEABLE_FRONTEND_PREFIXES = (
+    "/_expo/static/",
+    "/assets/",
+)
+_CACHEABLE_FRONTEND_SUFFIXES = (
+    ".css",
+    ".gif",
+    ".ico",
+    ".jpg",
+    ".jpeg",
+    ".js",
+    ".png",
+    ".svg",
+    ".ttf",
+    ".webp",
+    ".woff",
+    ".woff2",
+)
 
 
 def _split_host_and_port(raw_host: str | None) -> str:
@@ -109,6 +127,33 @@ def _is_allowed_host(raw_host: str | None) -> bool:
 def _is_sensitive_cache_path(path: str) -> bool:
     normalized = (path or "").strip()
     return any(normalized == prefix or normalized.startswith(f"{prefix}/") for prefix in _SENSITIVE_CACHE_PREFIXES)
+
+
+def _normalize_frontend_request_path(relative_path: str) -> str:
+    normalized = (relative_path or "").strip().replace("\\", "/").strip("/")
+    return f"/{normalized}" if normalized else "/"
+
+
+def _is_cacheable_frontend_asset(relative_path: str) -> bool:
+    request_path = _normalize_frontend_request_path(relative_path)
+    lower_path = request_path.lower()
+    return (
+        any(request_path.startswith(prefix) for prefix in _CACHEABLE_FRONTEND_PREFIXES)
+        and lower_path.endswith(_CACHEABLE_FRONTEND_SUFFIXES)
+    )
+
+
+def _should_fallback_to_frontend_index(relative_path: str) -> bool:
+    request_path = _normalize_frontend_request_path(relative_path)
+    if _is_sensitive_cache_path(request_path):
+        return False
+    if request_path == "/":
+        return True
+
+    filename = request_path.rsplit("/", 1)[-1]
+    if filename.startswith(".") or "." in filename:
+        return False
+    return True
 
 app = FastAPI(
     title=settings.app_name,
@@ -243,11 +288,17 @@ def _serve_frontend_asset(relative_path: str) -> FileResponse:
         if requested_path.suffix.lower() == ".apk":
             response = FileResponse(requested_path, media_type="application/vnd.android.package-archive")
             response.headers["Content-Disposition"] = f'attachment; filename="{requested_path.name}"'
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        elif _is_cacheable_frontend_asset(relative_path):
+            response = FileResponse(requested_path)
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         else:
             response = FileResponse(requested_path)
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
         return response
 
     nested_index = requested_path / "index.html"
@@ -258,7 +309,7 @@ def _serve_frontend_asset(relative_path: str) -> FileResponse:
         response.headers["Expires"] = "0"
         return response
 
-    if index_path.is_file():
+    if index_path.is_file() and _should_fallback_to_frontend_index(relative_path):
         response = FileResponse(index_path)
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"

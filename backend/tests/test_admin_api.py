@@ -7,7 +7,7 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from backend.app.database import SessionLocal
-from backend.app.models import Request, User
+from backend.app.models import AccessEventLog, AccessKey, AccessPermission, AccessPoint, Log, Request, User
 from backend.app.services.auth import hash_password
 from backend.app.services.gate import GateOpenResult
 
@@ -54,6 +54,83 @@ async def _ensure_user(
             user.is_admin = is_admin
             user.is_active = True
         await session.commit()
+
+
+async def _attach_user_deletion_dependencies(user_id: int) -> dict[str, int]:
+    async with SessionLocal() as session:
+        user = await session.get(User, user_id)
+        assert user is not None
+        user.gate_user_id = 88005
+
+        access_point = AccessPoint(
+            name="Delete Test Gate",
+            code=f"delete-test-{uuid4().hex}",
+            type="gate",
+            is_active=True,
+        )
+        session.add(access_point)
+        await session.flush()
+
+        request = Request(
+            resident_id=user_id,
+            key_type="VehicleNumber",
+            key_value=f"D{uuid4().hex[:5]}",
+            gate_key_id=88004,
+            access_point_ids=[access_point.id],
+            is_permanent=True,
+            status="active",
+        )
+        access_key = AccessKey(
+            user_id=user_id,
+            external_id="88003",
+            protocol_type="VehicleNumber",
+            card_number=f"{uuid4().int % 100000}",
+            is_active=True,
+        )
+        session.add_all([request, access_key])
+        await session.flush()
+
+        permission = AccessPermission(
+            user_id=user_id,
+            access_point_id=access_point.id,
+            key_id=access_key.id,
+            is_allowed=True,
+        )
+        event = AccessEventLog(
+            user_id=user_id,
+            access_point_id=access_point.id,
+            key_id=access_key.id,
+            request_id=f"delete-test-{uuid4().hex}",
+            status="success",
+        )
+        log = Log(user_id=user_id, action="delete-test", success=True)
+        session.add_all([permission, event, log])
+        await session.commit()
+
+        return {
+            "access_event_id": event.id,
+            "access_key_id": access_key.id,
+            "access_permission_id": permission.id,
+            "log_id": log.id,
+            "request_id": request.id,
+        }
+
+
+async def _load_user_deletion_state(user_id: int, dependency_ids: dict[str, int]) -> dict[str, bool | int | str | None]:
+    async with SessionLocal() as session:
+        log = await session.get(Log, dependency_ids["log_id"])
+        return {
+            "user_exists": await session.get(User, user_id) is not None,
+            "request_exists": await session.get(Request, dependency_ids["request_id"]) is not None,
+            "access_key_exists": await session.get(AccessKey, dependency_ids["access_key_id"]) is not None,
+            "access_permission_exists": await session.get(
+                AccessPermission,
+                dependency_ids["access_permission_id"],
+            )
+            is not None,
+            "access_event_exists": await session.get(AccessEventLog, dependency_ids["access_event_id"]) is not None,
+            "log_user_id": log.user_id if log is not None else "missing",
+        }
 
 
 def _api_login(client, login: str, password: str) -> str:
@@ -242,6 +319,49 @@ def test_admin_users_crud_flow(client):
     )
     assert after_delete.status_code == 200
     assert not any(item['id'] == user_id for item in after_delete.json()['items'])
+
+
+def test_admin_delete_user_removes_related_access_records(client, monkeypatch):
+    admin_login = f'admin_delete_{uuid4().hex[:6]}'
+    admin_password = 'demo123'
+    asyncio.run(_ensure_user(admin_login, admin_password, full_name='Admin Delete', plot_number='951', is_admin=True))
+
+    admin_token = _api_login(client, admin_login, admin_password)
+    create_response = client.post(
+        '/api/admin/users',
+        headers={'Authorization': f'Bearer {admin_token}'},
+        json={
+            'full_name': 'Delete Resident',
+            'phone': f"+7999{str(uuid4().int)[-7:]}",
+            'plot_number': str(300000 + (uuid4().int % 600000)),
+        },
+    )
+    assert create_response.status_code == 200
+    user_id = int(create_response.json()['id'])
+    dependency_ids = asyncio.run(_attach_user_deletion_dependencies(user_id))
+
+    removed_gate_keys: list[int] = []
+    monkeypatch.setattr(
+        'backend.app.services.user_accounts.gate_client.remove_key',
+        lambda gate_key_id: removed_gate_keys.append(gate_key_id) or True,
+    )
+
+    delete_response = client.delete(
+        f'/api/admin/users/{user_id}',
+        headers={'Authorization': f'Bearer {admin_token}'},
+    )
+    assert delete_response.status_code == 200
+    assert sorted(removed_gate_keys) == [88003, 88004, 88005]
+
+    state = asyncio.run(_load_user_deletion_state(user_id, dependency_ids))
+    assert state == {
+        "user_exists": False,
+        "request_exists": False,
+        "access_key_exists": False,
+        "access_permission_exists": False,
+        "access_event_exists": False,
+        "log_user_id": None,
+    }
 
 
 def test_admin_create_user_links_existing_gate_access_by_phone(client, monkeypatch):

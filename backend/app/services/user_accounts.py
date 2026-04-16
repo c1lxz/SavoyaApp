@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import re
 import secrets
 from datetime import datetime
 
 from cryptography.fernet import Fernet, InvalidToken
 from passlib.context import CryptContext
-from sqlalchemy import func, inspect, select, text
+from sqlalchemy import delete, func, inspect, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
-from ..models import User
+from ..models import AccessEventLog, AccessKey, AccessPermission, Log, Request, User
+from .gate import gate_client
 from ..utils.input_safety import (
     normalize_account_phone,
     normalize_full_name,
@@ -23,6 +25,7 @@ from ..utils.input_safety import (
 
 settings = get_settings()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+logger = logging.getLogger(__name__)
 
 _CYRILLIC_NAME_RE = re.compile(r"[^А-Яа-яЁё]+")
 _PASSWORD_SPECIALS = "!@#$%&*+-_"
@@ -244,3 +247,50 @@ def build_admin_user_payload(user: User) -> dict[str, str | int | bool | None | 
         "password_change_required": user.password_change_required,
         "created_at": user.created_at,
     }
+
+
+async def delete_user_account(session: AsyncSession, *, user: User) -> None:
+    request_rows = await session.execute(select(Request.gate_key_id).where(Request.resident_id == user.id))
+    key_rows = await session.execute(select(AccessKey.id, AccessKey.external_id).where(AccessKey.user_id == user.id))
+
+    gate_key_ids: set[int] = set()
+    access_key_ids: list[int] = []
+    for access_key_id, external_id in key_rows.all():
+        access_key_ids.append(int(access_key_id))
+        if external_id is not None:
+            try:
+                numeric_id = int(str(external_id).strip())
+            except (TypeError, ValueError):
+                continue
+            if numeric_id > 0:
+                gate_key_ids.add(numeric_id)
+
+    for raw_value in [*request_rows.scalars().all(), user.gate_user_id]:
+        if raw_value is None:
+            continue
+        try:
+            numeric_id = int(str(raw_value).strip())
+        except (TypeError, ValueError):
+            continue
+        if numeric_id > 0:
+            gate_key_ids.add(numeric_id)
+
+    for gate_key_id in sorted(gate_key_ids):
+        try:
+            gate_client.remove_key(gate_key_id)
+        except Exception:
+            logger.exception("Failed to revoke gate key during user deletion", extra={"user_id": user.id, "gate_key_id": gate_key_id})
+
+    access_event_filter = AccessEventLog.user_id == user.id
+    access_permission_filter = AccessPermission.user_id == user.id
+    if access_key_ids:
+        access_event_filter = or_(access_event_filter, AccessEventLog.key_id.in_(access_key_ids))
+        access_permission_filter = or_(access_permission_filter, AccessPermission.key_id.in_(access_key_ids))
+
+    await session.execute(delete(AccessEventLog).where(access_event_filter))
+    await session.execute(delete(AccessPermission).where(access_permission_filter))
+    await session.execute(delete(AccessKey).where(AccessKey.user_id == user.id))
+    await session.execute(delete(Request).where(Request.resident_id == user.id))
+    await session.execute(update(Log).where(Log.user_id == user.id).values(user_id=None))
+    await session.delete(user)
+    await session.commit()

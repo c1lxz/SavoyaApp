@@ -20,7 +20,7 @@ from ..schemas import (
 from ..services.admin_monitor import list_admin_monitor_events
 from ..services.gate_linking import link_existing_gate_passes_by_phone
 from ..services.requests import cleanup_expired_requests, list_requests_for_admin, resolve_request_status
-from ..services.user_accounts import UserAccountError, build_admin_user_payload, create_user_account
+from ..services.user_accounts import UserAccountError, build_admin_user_payload, create_user_account, delete_user_account
 from ..utils.vehicle_country import detect_vehicle_country
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -196,8 +196,7 @@ async def admin_delete_user(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
 
-    await session.delete(user)
-    await session.commit()
+    await delete_user_account(session, user=user)
     return MessageResponse(message="Пользователь удалён")
 
 
