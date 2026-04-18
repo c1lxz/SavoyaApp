@@ -148,6 +148,7 @@ const installApiMock = async (page) => {
       }),
       password: 'demo123',
       isActive: true,
+      passwordChangePromptShown: false,
     },
     {
       user: {
@@ -161,6 +162,7 @@ const installApiMock = async (page) => {
       },
       password: 'admin123',
       isActive: true,
+      passwordChangePromptShown: false,
     },
   ];
 
@@ -202,6 +204,7 @@ const installApiMock = async (page) => {
       user,
       password,
       isActive: true,
+      passwordChangePromptShown: false,
     };
 
     records.push(record);
@@ -331,14 +334,22 @@ const installApiMock = async (page) => {
         return;
       }
 
-      state.currentUser = { ...record.user };
+      const shouldPrompt = Boolean(record.user.passwordChangeRequired && !record.passwordChangePromptShown);
+      record.passwordChangePromptShown = true;
+      state.currentUser = {
+        ...record.user,
+        passwordChangePromptRequired: false,
+      };
       await route.fulfill({
         status: 200,
         contentType: 'application/json; charset=utf-8',
         body: JSON.stringify({
           success: true,
           access_token: `mock-token-${record.user.id}`,
-          user: state.currentUser,
+          user: {
+            ...state.currentUser,
+            passwordChangePromptRequired: shouldPrompt,
+          },
           requiresProfileCompletion: false,
           passwordChangeRequired: Boolean(state.currentUser.passwordChangeRequired),
         }),

@@ -1,8 +1,13 @@
 .git
 .gitignore
 .env
-certificate.key
-certificate.crt
+.env.*
+certificate*.key
+certificate*.crt
+*.pem
+*.pfx
+*.apk
+*.aab
 **/__pycache__
 **/*.pyc
 **/*.pyo
@@ -14,4 +19,5 @@ certificate.crt
 frontend/_expo
 frontend/index.html
 frontend/metadata.json
+frontend/android
 backend/backend_test.db

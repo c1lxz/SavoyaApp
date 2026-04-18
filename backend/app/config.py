@@ -33,7 +33,7 @@ class Settings(BaseSettings):
 
     secret_key: str = "change-me"
     algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60 * 12
+    access_token_expire_minutes: int = 60 * 24 * 365
     jwt_issuer: str = "savoya-backend"
     jwt_audience: str = "savoya-clients"
 
@@ -149,8 +149,8 @@ class Settings(BaseSettings):
             issues.append("BOOTSTRAP_DEMO_USER must be False in production")
         if self.bootstrap_test_users:
             issues.append("BOOTSTRAP_TEST_USERS_JSON must be empty in production")
-        if self.access_token_expire_minutes > 60 * 24:
-            issues.append("ACCESS_TOKEN_EXPIRE_MINUTES must not exceed 1440 in production")
+        if self.access_token_expire_minutes > 60 * 24 * 365:
+            issues.append("ACCESS_TOKEN_EXPIRE_MINUTES must not exceed 525600 in production")
         if "*" in self.allowed_hosts:
             issues.append("ALLOWED_HOSTS_JSON must not contain '*' in production")
         if "*" in self.cors_allow_origins:

@@ -76,6 +76,23 @@ async def _insert_active_courier_request(user_id: int, access_point_id: int, gat
         return request_id
 
 
+async def _age_latest_open_event(user_id: int, access_point_id: int, seconds: int) -> None:
+    async with SessionLocal() as session:
+        query = await session.execute(
+            select(AccessEventLog)
+            .where(
+                AccessEventLog.user_id == user_id,
+                AccessEventLog.access_point_id == access_point_id,
+                AccessEventLog.action == "open",
+            )
+            .order_by(AccessEventLog.created_at.desc())
+            .limit(1)
+        )
+        row = query.scalar_one()
+        row.created_at = datetime.now(timezone.utc) - timedelta(seconds=seconds)
+        await session.commit()
+
+
 def _create_user_and_login(client) -> tuple[dict[str, str], int]:
     login = f"user_{uuid4().hex[:8]}"
     password = "demo123"
@@ -152,6 +169,54 @@ def test_access_open_duplicate_request(client):
     second = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
     assert second.status_code == 409
     assert second.json()["detail"]["code"] == "duplicate_request"
+
+
+def test_access_open_cooldown_is_per_user_and_access_point(client):
+    headers, user_id = _create_user_and_login(client)
+    _create_permanent_request(client, headers, [1, 2, 3])
+
+    first_entry = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
+    assert first_entry.status_code == 200
+    asyncio.run(_age_latest_open_event(user_id, 1, seconds=10))
+
+    repeated_entry = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
+    assert repeated_entry.status_code == 429
+    repeated_entry_detail = repeated_entry.json()["detail"]
+    assert repeated_entry_detail["code"] == "open_cooldown"
+    assert "Подождите" in repeated_entry_detail["message"]
+    assert repeated_entry_detail["retry_after_seconds"] <= 50
+
+    other_barrier = client.post("/api/access/open", headers=headers, json={"access_point_id": 2})
+    assert other_barrier.status_code == 200
+
+    first_wicket = client.post("/api/access/open", headers=headers, json={"access_point_id": 3})
+    assert first_wicket.status_code == 200
+    asyncio.run(_age_latest_open_event(user_id, 3, seconds=10))
+
+    repeated_wicket = client.post("/api/access/open", headers=headers, json={"access_point_id": 3})
+    assert repeated_wicket.status_code == 429
+    repeated_wicket_detail = repeated_wicket.json()["detail"]
+    assert repeated_wicket_detail["code"] == "open_cooldown"
+    assert repeated_wicket_detail["retry_after_seconds"] <= 20
+
+
+def test_compat_gate_open_returns_cooldown_message(client):
+    headers, user_id = _create_user_and_login(client)
+    entry_point_id = get_settings().gate_action_map["entry"]
+    _create_permanent_request(client, headers, [entry_point_id])
+
+    first = client.post("/gates/open-action", headers=headers, json={"action": "entry"})
+    assert first.status_code == 200
+    assert first.json()["success"] is True
+    asyncio.run(_age_latest_open_event(user_id, entry_point_id, seconds=10))
+
+    repeated = client.post("/gates/open-action", headers=headers, json={"action": "entry"})
+    assert repeated.status_code == 200
+    body = repeated.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "open_cooldown"
+    assert body["retryAfterSeconds"] <= 50
+    assert "Подождите" in body["message"]
 
 
 def test_access_open_integration_error(client):

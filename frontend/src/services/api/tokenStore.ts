@@ -22,6 +22,18 @@ const getWebStorage = (): Storage | null => {
   }
 
   try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+};
+
+const getLegacyWebStorage = (): Storage | null => {
+  if (!IS_WEB || typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
     return window.sessionStorage;
   } catch {
     return null;
@@ -39,6 +51,7 @@ export const setAccessToken = async (token: string | null): Promise<void> => {
         webStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, normalized);
       } else {
         webStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+        getLegacyWebStorage()?.removeItem(ACCESS_TOKEN_STORAGE_KEY);
       }
       return;
     } catch {
@@ -69,6 +82,13 @@ export const restoreAccessToken = async (): Promise<string | null> => {
       if (webStorage) {
         try {
           accessToken = normalizeToken(webStorage.getItem(ACCESS_TOKEN_STORAGE_KEY));
+          if (!accessToken) {
+            const legacyToken = normalizeToken(getLegacyWebStorage()?.getItem(ACCESS_TOKEN_STORAGE_KEY));
+            if (legacyToken) {
+              accessToken = legacyToken;
+              webStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, legacyToken);
+            }
+          }
         } catch {
           accessToken = null;
         }

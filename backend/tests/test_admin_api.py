@@ -7,6 +7,7 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from backend.app.database import SessionLocal
+from backend.app.config import get_settings
 from backend.app.models import AccessEventLog, AccessKey, AccessPermission, AccessPoint, Log, Request, User
 from backend.app.services.auth import hash_password
 from backend.app.services.gate import GateOpenResult
@@ -553,6 +554,83 @@ def test_admin_monitor_enriches_gate_events_with_app_actor(client, monkeypatch):
     assert gate_event['gate_original_name'] == 'Админ'
     assert gate_event['message'] == 'Открыто из приложения'
     assert not any(item['source'] == 'app' and item['gate_event_index'] == gate_event_index for item in body['items'])
+
+
+def test_admin_monitor_enriches_gate_events_by_key_when_observed_index_is_missing(client, monkeypatch):
+    admin_login = f'admin_monitor_key_{uuid4().hex[:6]}'
+    resident_login = f'resident_monitor_key_{uuid4().hex[:6]}'
+    password = 'demo123'
+    gate_key_id = 771001
+    gate_event_index = 555002
+    wicket_point_id = get_settings().gate_action_map["wicket_north"]
+    key_value = f'B{uuid4().hex[:5]}'
+
+    asyncio.run(_ensure_user(admin_login, password, full_name='Admin Monitor', plot_number='901', is_admin=True))
+    asyncio.run(_ensure_user(resident_login, password, full_name='Resident Wicket', plot_number='406'))
+
+    monkeypatch.setattr(
+        'backend.app.services.requests.gate_client.add_permanent_key',
+        lambda **kwargs: gate_key_id,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.access.gate_client.open_access_point',
+        lambda access_point_id, key_external_id=None: GateOpenResult(
+            success=True,
+            message='Opened by Gate Terminal',
+            details={'transport': 'gateterm_ui'},
+        ),
+    )
+    monkeypatch.setattr(
+        'backend.app.services.admin_monitor.gate_client.get_recent_events',
+        lambda limit: [
+            {
+                'index': gate_event_index,
+                'time': datetime.now(timezone.utc).isoformat(),
+                'event_code': 2,
+                'access_point_id': wicket_point_id,
+                'unit': 'North Wicket',
+                'message': 'Opened by key',
+                'name': '',
+                'user_ptr': gate_key_id,
+            }
+        ],
+    )
+
+    resident_token = _api_login(client, resident_login, password)
+    create_response = client.post(
+        '/api/requests/',
+        headers={'Authorization': f'Bearer {resident_token}'},
+        json={
+            'key_type': 'VehicleNumber',
+            'key_value': key_value,
+            'access_point_ids': [wicket_point_id],
+            'is_permanent': True,
+        },
+    )
+    assert create_response.status_code == 200
+
+    open_response = client.post(
+        '/api/access/open',
+        headers={'Authorization': f'Bearer {resident_token}'},
+        json={'access_point_id': wicket_point_id},
+    )
+    assert open_response.status_code == 200
+
+    admin_token = _api_login(client, admin_login, password)
+    response = client.get('/api/admin/monitor?limit=10', headers={'Authorization': f'Bearer {admin_token}'})
+
+    assert response.status_code == 200
+    body = response.json()
+    gate_event = next(item for item in body['items'] if item['id'] == f'gate-{gate_event_index}')
+    assert gate_event['source'] == 'gate'
+    assert gate_event['actor_login'] == resident_login
+    assert gate_event['actor_name'] == 'Resident Wicket'
+    assert gate_event['key_type'] == 'VehicleNumber'
+    assert gate_event['key_value'] == key_value.upper()
+    assert gate_event['app_request_id'] == create_response.json()['id']
+    assert gate_event['gate_user_ptr'] == gate_key_id
+    assert gate_event['message'] == 'Открыто из приложения'
+    assert not any(item['source'] == 'app' and item['app_request_id'] == create_response.json()['id'] for item in body['items'])
 
 
 def test_api_login_rate_limit_returns_429_after_repeated_failures(client):

@@ -1,6 +1,8 @@
 node_modules/
 .venv/
 .env
+.env.*
+!.env.example
 .expo/
 .expo-shared/
 npm-debug.*
@@ -23,5 +25,10 @@ backup_*.mdb
 backup_*.db
 logs/
 temp/
-certificate.key
-certificate.crt
+certificate*.crt
+certificate*.key
+*.pem
+*.pfx
+*.apk
+*.aab
+frontend/android/

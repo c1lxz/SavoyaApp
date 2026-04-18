@@ -72,6 +72,8 @@ export type GateActionResult = {
   action: GateAction;
   message: string;
   timestamp: number;
+  errorCode?: string | null;
+  retryAfterSeconds?: number | null;
 };
 
 export type AdminResidentSummary = {

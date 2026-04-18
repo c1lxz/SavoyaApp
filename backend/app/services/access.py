@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from math import ceil
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -20,16 +21,26 @@ STATUS_FAILED = "failed"
 _RATE_WINDOW_SECONDS = 60
 _RATE_MAX_EVENTS = 12
 _DUPLICATE_WINDOW_SECONDS = 5
+_BARRIER_COOLDOWN_SECONDS = 60
+_WICKET_COOLDOWN_SECONDS = 30
 _GATE_PASS_GRANTED_CODE = 2
 _GATE_EVENT_TIMEZONE = ZoneInfo("Europe/Moscow")
 
 
 class AccessServiceError(Exception):
-    def __init__(self, *, code: str, message: str, http_status: int) -> None:
+    def __init__(
+        self,
+        *,
+        code: str,
+        message: str,
+        http_status: int,
+        retry_after_seconds: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.http_status = http_status
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass
@@ -488,8 +499,73 @@ async def _check_duplicate(session: AsyncSession, *, user_id: int, access_point_
         raise AccessServiceError(code="duplicate_request", message="Duplicate open request", http_status=409)
 
 
+def _cooldown_seconds_for_access_point(access_point: AccessPoint) -> int:
+    if access_point.type == "wicket":
+        return _WICKET_COOLDOWN_SECONDS
+    if access_point.type in {"barrier_entry", "barrier_exit"}:
+        return _BARRIER_COOLDOWN_SECONDS
+
+    normalized_name = (access_point.name or "").lower()
+    if "wicket" in normalized_name or "калит" in normalized_name:
+        return _WICKET_COOLDOWN_SECONDS
+    return _BARRIER_COOLDOWN_SECONDS
+
+
+def _cooldown_message(access_point: AccessPoint, remaining_seconds: int) -> str:
+    point_label = (
+        "калитки"
+        if _cooldown_seconds_for_access_point(access_point) == _WICKET_COOLDOWN_SECONDS
+        else "шлагбаума"
+    )
+    return f"Подождите {remaining_seconds} сек. перед повторным открытием этого {point_label}."
+
+
+async def _check_open_cooldown(session: AsyncSession, *, user: User | None, access_point: AccessPoint) -> None:
+    if user is None or user.is_admin:
+        return
+
+    cooldown_seconds = _cooldown_seconds_for_access_point(access_point)
+    since = _utcnow() - timedelta(seconds=cooldown_seconds)
+    query = await session.execute(
+        select(AccessEventLog)
+        .where(
+            AccessEventLog.user_id == user.id,
+            AccessEventLog.access_point_id == access_point.id,
+            AccessEventLog.action == OPEN_ACTION,
+            AccessEventLog.status.in_([STATUS_PENDING, STATUS_SUCCESS]),
+            AccessEventLog.created_at >= since,
+        )
+        .order_by(AccessEventLog.created_at.desc())
+        .limit(1)
+    )
+    row = query.scalar_one_or_none()
+    if row is None:
+        return
+
+    created_at = ensure_utc_datetime(row.created_at)
+    if created_at is None:
+        return
+
+    elapsed_seconds = max(0.0, (_utcnow() - created_at).total_seconds())
+    remaining_seconds = max(1, int(ceil(cooldown_seconds - elapsed_seconds)))
+    if remaining_seconds <= 0:
+        return
+
+    raise AccessServiceError(
+        code="open_cooldown",
+        message=_cooldown_message(access_point, remaining_seconds),
+        http_status=429,
+        retry_after_seconds=remaining_seconds,
+    )
+
+
 async def open_access_point(session: AsyncSession, *, user_id: int, access_point_id: int) -> OpenAccessResult:
-    await _check_rate_limit(session, user_id=user_id)
+    user = await session.get(User, user_id)
+    if user is None:
+        raise AccessServiceError(code="user_not_found", message="User not found", http_status=404)
+
+    if not user.is_admin:
+        await _check_rate_limit(session, user_id=user_id)
     await _check_duplicate(session, user_id=user_id, access_point_id=access_point_id)
 
     access_point, access_key, request_item = await _resolve_access_context(
@@ -497,7 +573,7 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
         user_id=user_id,
         access_point_id=access_point_id,
     )
-    user = await session.get(User, user_id)
+    await _check_open_cooldown(session, user=user, access_point=access_point)
 
     request_id = str(uuid4())
     event = AccessEventLog(

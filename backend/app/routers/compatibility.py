@@ -418,4 +418,6 @@ async def compat_open_gate_action(
             action=payload.action,
             message=exc.message,
             timestamp=gate_client.now_unix_ms(),
+            errorCode=exc.code,
+            retryAfterSeconds=exc.retry_after_seconds,
         )

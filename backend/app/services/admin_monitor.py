@@ -8,7 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import AccessEventLog, AccessPoint, User
 from ..schemas import AdminMonitorEventItem, AdminMonitorResponse
+from ..utils.datetime import ensure_utc_datetime
 from .gate import gate_client
+
+_GATE_APP_MATCH_WINDOW_SECONDS = 120
 
 
 def _parse_gate_time(value: Any) -> datetime:
@@ -59,6 +62,58 @@ def _gate_status(event_code: int | None) -> str:
     return "success" if event_code in {2, 8, 56, 208} else "event"
 
 
+def _timestamp_or_none(value: datetime | None) -> float | None:
+    if value is None:
+        return None
+    value = ensure_utc_datetime(value) or value
+    try:
+        return value.timestamp()
+    except OSError:
+        return None
+
+
+def _match_app_context_for_gate_event(
+    *,
+    event_time: datetime,
+    access_point_id: int | None,
+    user_ptr: int | None,
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if user_ptr is None:
+        return None
+
+    event_timestamp = _timestamp_or_none(event_time)
+    if event_timestamp is None:
+        return None
+
+    matched: list[tuple[float, dict[str, Any]]] = []
+    for candidate in candidates:
+        candidate_gate_key_id = _int_or_none(candidate.get("gate_key_id"))
+        if candidate_gate_key_id != user_ptr:
+            continue
+
+        candidate_access_point_id = _int_or_none(candidate.get("access_point_id"))
+        if (
+            access_point_id is not None
+            and candidate_access_point_id is not None
+            and candidate_access_point_id != access_point_id
+        ):
+            continue
+
+        candidate_timestamp = _timestamp_or_none(candidate.get("created_at"))
+        if candidate_timestamp is None:
+            continue
+
+        distance = abs(event_timestamp - candidate_timestamp)
+        if distance <= _GATE_APP_MATCH_WINDOW_SECONDS:
+            matched.append((distance, candidate))
+
+    if not matched:
+        return None
+    matched.sort(key=lambda item: item[0])
+    return matched[0][1]
+
+
 async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) -> AdminMonitorResponse:
     safe_limit = max(1, min(int(limit), 500))
     query = await session.execute(
@@ -71,6 +126,7 @@ async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) 
 
     app_items: list[AdminMonitorEventItem] = []
     app_context_by_gate_index: dict[int, dict[str, Any]] = {}
+    app_context_candidates: list[dict[str, Any]] = []
     for event, user, point in query.all():
         details = event.details or {}
         observed = _observed_gate_event(details)
@@ -110,25 +166,27 @@ async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) 
             details=details,
         )
         app_items.append(item)
+        app_context = {
+            "item_id": item.id,
+            "event_id": event.id,
+            "created_at": event.created_at,
+            "status": event.status,
+            "message": event.error_message if event.status == "failed" else None,
+            "request_id": event.request_id,
+            "actor_user_id": user.id,
+            "actor_login": actor_login,
+            "actor_name": actor_name,
+            "actor_phone": actor_phone,
+            "access_point_id": event.access_point_id,
+            "access_point_name": item.access_point_name,
+            "app_request_id": app_request_id,
+            "gate_key_id": gate_key_id,
+            "key_type": key_type,
+            "key_value": key_value,
+        }
+        app_context_candidates.append(app_context)
         if observed_index is not None:
-            app_context_by_gate_index[observed_index] = {
-                "item_id": item.id,
-                "event_id": event.id,
-                "created_at": event.created_at,
-                "status": event.status,
-                "message": event.error_message if event.status == "failed" else None,
-                "request_id": event.request_id,
-                "actor_user_id": user.id,
-                "actor_login": actor_login,
-                "actor_name": actor_name,
-                "actor_phone": actor_phone,
-                "access_point_id": event.access_point_id,
-                "access_point_name": item.access_point_name,
-                "app_request_id": app_request_id,
-                "gate_key_id": gate_key_id,
-                "key_type": key_type,
-                "key_value": key_value,
-            }
+            app_context_by_gate_index[observed_index] = app_context
 
     gate_error: str | None = None
     try:
@@ -146,6 +204,13 @@ async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) 
         user_ptr = _int_or_none(event.get("user_ptr"))
         event_code = _int_or_none(event.get("event_code"))
         app_context = app_context_by_gate_index.get(index) if index is not None else None
+        if app_context is None:
+            app_context = _match_app_context_for_gate_event(
+                event_time=event_time,
+                access_point_id=access_point_id,
+                user_ptr=user_ptr,
+                candidates=app_context_candidates,
+            )
         raw_gate_name = _str_or_none(event.get("name"))
         raw_gate_details = dict(event)
         if app_context is not None:

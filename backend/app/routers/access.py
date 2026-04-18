@@ -59,7 +59,10 @@ async def open_access_point(
             access_point_id=payload.access_point_id,
         )
     except access_service.AccessServiceError as exc:
-        raise HTTPException(status_code=exc.http_status, detail={"code": exc.code, "message": exc.message}) from exc
+        detail: dict[str, str | int] = {"code": exc.code, "message": exc.message}
+        if exc.retry_after_seconds is not None:
+            detail["retry_after_seconds"] = exc.retry_after_seconds
+        raise HTTPException(status_code=exc.http_status, detail=detail) from exc
 
     return OpenAccessResponse(
         status=result.status,

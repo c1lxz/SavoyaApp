@@ -34,6 +34,10 @@ const USER_MESSAGES: Record<
 };
 
 export const getGateActionFeedback = (result: GateActionResult, isAdmin: boolean): string => {
+  if (!result.success && result.errorCode === 'open_cooldown' && result.message.trim()) {
+    return result.message;
+  }
+
   if (isAdmin && result.message.trim()) {
     return result.message;
   }

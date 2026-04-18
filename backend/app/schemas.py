@@ -312,6 +312,8 @@ class CompatGateActionResult(BaseModel):
     action: str
     message: str
     timestamp: int
+    errorCode: str | None = None
+    retryAfterSeconds: int | None = None
 
 
 class ApiError(BaseModel):

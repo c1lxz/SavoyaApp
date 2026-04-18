@@ -71,6 +71,24 @@ def test_production_settings_require_strong_bootstrap_admin_password():
         settings.validate_runtime_security()
 
 
+def test_production_settings_allow_remembered_device_token_ttl():
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        secret_key="test-secret-key-for-production-validation-12345",
+        debug=False,
+        docs_enabled=False,
+        bootstrap_demo_user=False,
+        bootstrap_test_users_json="[]",
+        cors_allow_origins_json='["https://example.com"]',
+        allowed_hosts_json='["example.com"]',
+        database_url="sqlite+aiosqlite:///./backend_prod.db",
+        access_token_expire_minutes=60 * 24 * 365,
+    )
+
+    settings.validate_runtime_security()
+
+
 def test_login_rate_limiter_can_reset_failures():
     limiter = LoginRateLimiter(attempts=2, window_seconds=60)
 
