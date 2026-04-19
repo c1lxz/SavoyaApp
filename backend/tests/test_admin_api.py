@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from backend.app.database import SessionLocal
 from backend.app.config import get_settings
+from backend.app.messages import BLOCKED_ACCOUNT_MESSAGE
 from backend.app.models import AccessEventLog, AccessKey, AccessPermission, AccessPoint, Log, Request, User
 from backend.app.services.auth import hash_password
 from backend.app.services.gate import GateOpenResult
@@ -295,7 +296,7 @@ def test_admin_users_crud_flow(client):
     blocked_login = client.post('/auth/login', json={'login': user_login, 'password': user_password})
     assert blocked_login.status_code == 200
     assert blocked_login.json()['success'] is False
-    assert blocked_login.json()['error'] == 'User is inactive'
+    assert blocked_login.json()['error'] == BLOCKED_ACCOUNT_MESSAGE
 
     unblock_response = client.post(
         f'/api/admin/users/{user_id}/unblock',

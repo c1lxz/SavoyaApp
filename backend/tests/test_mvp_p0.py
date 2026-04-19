@@ -7,6 +7,7 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from backend.app.database import SessionLocal
+from backend.app.messages import BLOCKED_ACCOUNT_MESSAGE
 from backend.app.models import Request, User
 from backend.app.services.auth import hash_password
 from backend.app.services.requests import cleanup_broken_requests, cleanup_expired_requests
@@ -92,7 +93,7 @@ def test_login_inactive_user_returns_403(client):
 
     response = client.post("/api/auth/login", json={"login": login, "password": password})
     assert response.status_code == 403
-    assert response.json()["detail"] == "Пользователь деактивирован"
+    assert response.json()["detail"] == BLOCKED_ACCOUNT_MESSAGE
 
 
 def test_cancel_permanent_request_deactivates_gate_key(client):

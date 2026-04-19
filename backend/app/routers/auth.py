@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db_session
 from ..dependencies import get_current_user
+from ..messages import BLOCKED_ACCOUNT_MESSAGE
 from ..models import User
 from ..schemas import LoginRequest, MessageResponse, TokenResponse, UserResponse
 from ..services.auth import consume_password_change_prompt, login_with_password
@@ -41,7 +42,7 @@ async def login(payload: LoginRequest, request: Request, session: AsyncSession =
     else:
         limiter.reset(rate_limit_key)
     if error_code == "inactive_user":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Пользователь деактивирован")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=BLOCKED_ACCOUNT_MESSAGE)
     if user is None or token is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Неверный логин или пароль")
     should_prompt = await consume_password_change_prompt(session, user)

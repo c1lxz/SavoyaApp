@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..database import get_db_session
 from ..dependencies import get_current_user
+from ..messages import BLOCKED_ACCOUNT_MESSAGE
 from ..models import User
 from ..schemas import (
     CompatAuthResult,
@@ -227,7 +228,7 @@ async def compat_login(
     else:
         limiter.reset(rate_limit_key)
     if error_code == "inactive_user":
-        return CompatAuthResult(success=False, error="User is inactive")
+        return CompatAuthResult(success=False, error=BLOCKED_ACCOUNT_MESSAGE)
     if user is None or token is None:
         return CompatAuthResult(success=False, error=_INVALID_LOGIN_MESSAGE)
     should_prompt = await consume_password_change_prompt(session, user)

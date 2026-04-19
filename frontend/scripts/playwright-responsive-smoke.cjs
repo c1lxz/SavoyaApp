@@ -32,6 +32,7 @@ const TEXT = {
   repeatPasswordPlaceholder: 'Повторите новый пароль',
   changePassword: 'Поменять пароль',
   logout: 'Выход',
+  blockedAccountMessage: 'Ваш аккаунт был заблокирован. Пожалуйста обратитесь к администрации по этому вопросу',
   searchUsersPlaceholder: 'Логин, ФИО, телефон или участок',
   deleteUser: 'Удалить',
   blockUser: 'Заблокировать',
@@ -855,6 +856,21 @@ const evaluateDesktopAdminScenario = async (browserType, name, viewport, options
     await pressableByText(page, TEXT.blockUser).click();
     await exactText(page, `Пользователь ${createdLogin} заблокирован`).waitFor();
 
+    await page.getByLabel('Назад').click();
+    await pressableByText(page, TEXT.logout).click();
+    await inputByPlaceholder(page, TEXT.loginPlaceholder).waitFor();
+
+    await login(page, createdLogin, createdPassword);
+    await exactText(page, TEXT.blockedAccountMessage).waitFor();
+    const blockedAccountMessageVisible = (await exactText(page, TEXT.blockedAccountMessage).count()) > 0;
+
+    await login(page, 'admin', 'admin123');
+    await pressableByText(page, TEXT.users).waitFor();
+    await pressableByText(page, TEXT.users).click();
+    await exactText(page, TEXT.usersDbTitle).waitFor();
+    await inputByPlaceholder(page, TEXT.searchUsersPlaceholder).fill(createdLogin);
+    await exactText(page, createdLogin).waitFor();
+
     const deleteVisibleWhileBlocked = (await pressableByText(page, TEXT.deleteUser).count()) > 0;
     assertResult(deleteVisibleWhileBlocked, `${name}: blocked user cannot be deleted without unblock`);
 
@@ -870,6 +886,7 @@ const evaluateDesktopAdminScenario = async (browserType, name, viewport, options
       createdLogin,
       createdPassword,
       adminUsersTable,
+      blockedAccountMessageVisible,
       deletedBlockedUser: deleteVisibleWhileBlocked,
       emptyStateVisible: (await exactText(page, 'Пользователи не найдены').count()) > 0,
     };
@@ -938,6 +955,10 @@ async function main() {
   );
 
   assertResult(desktopAdmin.emptyStateVisible, 'desktop admin: deleted user is still visible in the filtered table');
+  assertResult(
+    desktopAdmin.blockedAccountMessageVisible,
+    'desktop admin: blocked user login does not show the account blocked message',
+  );
   assertResult(desktopAdmin.adminUsersTable?.tableWithinViewport, 'desktop admin: users table does not fit the viewport');
   assertResult(desktopAdmin.adminUsersTable?.pageNoHorizontalOverflow, 'desktop admin: users page has horizontal overflow');
   assertResult(

@@ -24,6 +24,17 @@ type AuthStore = {
   restoreSession: () => Promise<void>;
 };
 
+const BLOCKED_ACCOUNT_MESSAGE =
+  'Ваш аккаунт был заблокирован. Пожалуйста обратитесь к администрации по этому вопросу';
+
+const normalizeAuthError = (message: string | null | undefined): string => {
+  const fallback = message || 'Ошибка сети';
+  if (fallback === 'User is inactive' || fallback === 'Пользователь деактивирован' || fallback === 'inactive_user') {
+    return BLOCKED_ACCOUNT_MESSAGE;
+  }
+  return fallback;
+};
+
 const resolvePasswordChangePrompt = (user: User | null) =>
   Boolean(user && !user.isAdmin && (user.passwordChangePromptRequired ?? user.passwordChangeRequired));
 
@@ -55,10 +66,10 @@ export const useAuthStore = create<AuthStore>((set) => ({
         return true;
       }
 
-      set({ loginState: 'error', error: result.error ?? 'Ошибка сети' });
+      set({ loginState: 'error', error: normalizeAuthError(result.error) });
       return false;
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Ошибка сети';
+      const message = normalizeAuthError(error instanceof Error ? error.message : null);
       set({ loginState: 'error', error: message });
       return false;
     }
