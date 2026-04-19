@@ -345,14 +345,47 @@ def _is_gate_pass_granted_event(event: dict) -> bool:
     return event_code == _GATE_PASS_GRANTED_CODE and user_ptr is not None and user_ptr > 0
 
 
-def _is_gate_pass_event_for_type(event: dict, access_point: AccessPoint | None, access_point_type: str) -> bool:
+def _configured_access_point_type(access_point_id: int | None) -> str | None:
+    if access_point_id is None:
+        return None
+    action_map = settings.gate_action_map
+    if action_map.get("entry") == access_point_id:
+        return "barrier_entry"
+    if action_map.get("exit") == access_point_id:
+        return "barrier_exit"
+    for action in ("wicket_north", "wicket_lake", "wicket_admin", "wicket_forest"):
+        if action_map.get(action) == access_point_id:
+            return "wicket"
+    return None
+
+
+def _gate_event_point_name(event: dict, access_point: AccessPoint | None) -> str:
+    parts = [
+        getattr(access_point, "name", None),
+        event.get("unit"),
+        event.get("access_point_name"),
+        event.get("reader_name"),
+        event.get("point_name"),
+    ]
+    return " ".join(str(part) for part in parts if part)
+
+
+def _is_gate_pass_event_for_type(
+    event: dict,
+    access_point: AccessPoint | None,
+    access_point_type: str,
+) -> bool:
     if not _is_gate_pass_granted_event(event):
         return False
     if access_point is not None:
-        return access_point.type == access_point_type
+        if access_point.type == access_point_type:
+            return True
 
-    point_name = str(event.get("unit") or "")
-    return _normalize_access_point_type(point_name) == access_point_type
+    configured_type = _configured_access_point_type(_gate_event_int(event, "access_point_id"))
+    if configured_type == access_point_type:
+        return True
+
+    return _normalize_access_point_type(_gate_event_point_name(event, access_point)) == access_point_type
 
 
 def _gate_event_time_utc(event: dict) -> datetime | None:

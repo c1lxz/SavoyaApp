@@ -587,3 +587,153 @@ def test_gate_entry_event_schedules_phone_opened_courier_pass(client):
             assert log.details["courier_cleanup"] == "scheduled_after_entry"
 
     asyncio.run(_assert_courier_event_schedule())
+
+
+def test_gate_entry_event_schedules_vehicle_camera_opened_courier_pass(client):
+    headers, user_id = _create_user_and_login(client)
+    entry_point_id = get_settings().gate_action_map["entry"]
+    phone_number = f"7933{str(uuid4().int)[:7]}"
+    create_response = client.post(
+        "/passes",
+        headers=headers,
+        json={
+            "carNumber": f"CAM{uuid4().hex[:5]}",
+            "plotNumber": "79",
+            "phoneNumber": phone_number,
+            "expiresAt": (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(),
+            "isPermanent": False,
+            "isCourier": True,
+        },
+    )
+    assert create_response.status_code == 200
+
+    async def _active_courier_rows() -> list[Request]:
+        async with SessionLocal() as session:
+            query = await session.execute(
+                select(Request)
+                .where(Request.resident_id == user_id, Request.status == "active", Request.is_courier.is_(True))
+                .order_by(Request.id)
+            )
+            return list(query.scalars().all())
+
+    active_rows = asyncio.run(_active_courier_rows())
+    assert {row.key_type for row in active_rows} == {"VehicleNumber", "Phone"}
+    vehicle_row = next(row for row in active_rows if row.key_type == "VehicleNumber")
+
+    async def _process_camera_event() -> int:
+        async with SessionLocal() as session:
+            return await process_courier_gate_entry_events(
+                session,
+                [
+                    {
+                        "index": 900101,
+                        "event_type": 1,
+                        "event_code": 2,
+                        "access_point_id": entry_point_id,
+                        "unit": "Камера Въезда",
+                        "message": "Проход по ключу разрешен",
+                        "name": vehicle_row.key_value,
+                        "user_ptr": vehicle_row.gate_key_id,
+                    }
+                ],
+            )
+
+    scheduled_count = asyncio.run(_process_camera_event())
+    assert scheduled_count == 2
+
+    async def _assert_camera_event_schedule() -> None:
+        async with SessionLocal() as session:
+            query = await session.execute(
+                select(Request)
+                .where(Request.resident_id == user_id, Request.is_courier.is_(True))
+                .order_by(Request.id)
+            )
+            rows = list(query.scalars().all())
+            assert len(rows) == 2
+            assert all(row.status == "active" for row in rows)
+            assert all(row.expires_at is not None for row in rows)
+
+            log_query = await session.execute(
+                select(AccessEventLog).where(AccessEventLog.request_id == "gate-entry-900101")
+            )
+            log = log_query.scalar_one()
+            assert log.action == "courier_gate_entry"
+            assert sorted(log.details["courier_scheduled_request_ids"]) == sorted([row.id for row in rows])
+
+    asyncio.run(_assert_camera_event_schedule())
+
+
+def test_gate_entry_event_schedules_gsm_phone_opened_courier_pass(client):
+    headers, user_id = _create_user_and_login(client)
+    gsm_entry_point_id = get_settings().gate_action_map["wicket_admin"]
+    phone_number = f"7944{str(uuid4().int)[:7]}"
+    create_response = client.post(
+        "/passes",
+        headers=headers,
+        json={
+            "carNumber": f"GSM{uuid4().hex[:5]}",
+            "plotNumber": "80",
+            "phoneNumber": phone_number,
+            "expiresAt": (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(),
+            "isPermanent": False,
+            "isCourier": True,
+        },
+    )
+    assert create_response.status_code == 200
+
+    async def _phone_row() -> Request:
+        async with SessionLocal() as session:
+            query = await session.execute(
+                select(Request).where(
+                    Request.resident_id == user_id,
+                    Request.status == "active",
+                    Request.is_courier.is_(True),
+                    Request.key_type == "Phone",
+                )
+            )
+            return query.scalar_one()
+
+    phone_row = asyncio.run(_phone_row())
+    assert gsm_entry_point_id in phone_row.access_point_ids
+
+    async def _process_gsm_event() -> int:
+        async with SessionLocal() as session:
+            return await process_courier_gate_entry_events(
+                session,
+                [
+                    {
+                        "index": 900201,
+                        "event_type": 1,
+                        "event_code": 2,
+                        "access_point_id": gsm_entry_point_id,
+                        "unit": "Считыватель въезд GSM",
+                        "message": "Проход по ключу разрешен",
+                        "name": phone_number,
+                        "user_ptr": phone_row.gate_key_id,
+                    }
+                ],
+            )
+
+    scheduled_count = asyncio.run(_process_gsm_event())
+    assert scheduled_count == 2
+
+    async def _assert_gsm_event_schedule() -> None:
+        async with SessionLocal() as session:
+            query = await session.execute(
+                select(Request)
+                .where(Request.resident_id == user_id, Request.is_courier.is_(True))
+                .order_by(Request.id)
+            )
+            rows = list(query.scalars().all())
+            assert len(rows) == 2
+            assert all(row.status == "active" for row in rows)
+            assert all(row.expires_at is not None for row in rows)
+
+            log_query = await session.execute(
+                select(AccessEventLog).where(AccessEventLog.request_id == "gate-entry-900201")
+            )
+            log = log_query.scalar_one()
+            assert log.action == "courier_gate_entry"
+            assert log.details["courier_cleanup"] == "scheduled_after_entry"
+
+    asyncio.run(_assert_gsm_event_schedule())
