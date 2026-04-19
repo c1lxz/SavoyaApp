@@ -52,7 +52,7 @@ export const AuthScreen = ({ navigation }: Props) => {
             <ScreenHeader title="Вход" />
 
             <Text style={[styles.description, { fontSize: metrics.bodyFontSize + 2 }]}>
-              Введите ваш логин и пароль. Если учётной записи ещё нет, её можно создать ниже.
+              Введите логин и пароль, полученный от администрации.
             </Text>
 
             <View style={[styles.form, { gap: metrics.panelGap }]}>
@@ -83,12 +83,6 @@ export const AuthScreen = ({ navigation }: Props) => {
               {error ? <Text style={styles.error}>{error}</Text> : null}
 
               <AppButton title="Войти" onPress={() => void onSubmit()} loading={loginState === 'loading'} />
-              <AppButton
-                title="Создать аккаунт"
-                onPress={() => navigation.replace('RegisterAccount')}
-                variant="card"
-                disabled={loginState === 'loading'}
-              />
             </View>
           </View>
         </ScrollView>

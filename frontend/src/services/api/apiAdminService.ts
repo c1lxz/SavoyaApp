@@ -5,9 +5,9 @@ import {
   AdminRequestItem,
   AdminRequestList,
   AdminRequestStatus,
+  AdminCreateUserPayload,
   AdminUserItem,
   AdminUserList,
-  RegisterAccountPayload,
 } from '@/types';
 
 type BackendAdminResident = {
@@ -225,7 +225,7 @@ export const apiAdminService = {
     };
   },
 
-  async createUser(payload: RegisterAccountPayload): Promise<AdminUserItem> {
+  async createUser(payload: AdminCreateUserPayload): Promise<AdminUserItem> {
     const result = await apiRequest<BackendAdminUserItem>('/api/admin/users', {
       method: 'POST',
       body: {

@@ -1,4 +1,4 @@
-import { AuthResult, ChangePasswordPayload, RegisterAccountPayload, RegisterAccountResult, User } from '@/types';
+import { AuthResult, ChangePasswordPayload, User } from '@/types';
 import { apiRequest } from '@/services/api/httpClient';
 import { getAccessToken, restoreAccessToken, setAccessToken } from '@/services/api/tokenStore';
 
@@ -10,15 +10,6 @@ type CompatLoginResponse = {
   requiresProfileCompletion?: boolean;
   passwordChangeRequired?: boolean;
   passwordChangePromptRequired?: boolean;
-};
-
-type CompatRegisterResponse = {
-  success: boolean;
-  login: string;
-  password: string;
-  user: CompatUserResponse;
-  linkedExistingPasses?: number;
-  linkedAccessPointCount?: number;
 };
 
 type CompatUserResponse = {
@@ -134,22 +125,6 @@ export const apiAuthService = {
       error: result.error,
       requiresProfileCompletion: result.user?.isAdmin ? false : result.requiresProfileCompletion,
       passwordChangeRequired: result.passwordChangeRequired,
-    };
-  },
-
-  async registerAccount(payload: RegisterAccountPayload): Promise<RegisterAccountResult> {
-    const result = await apiRequest<CompatRegisterResponse>('/auth/register', {
-      method: 'POST',
-      body: payload,
-    });
-
-    return {
-      success: Boolean(result.success),
-      login: result.login,
-      password: result.password,
-      user: mapCompatUser(result.user),
-      linkedExistingPasses: result.linkedExistingPasses ?? 0,
-      linkedAccessPointCount: result.linkedAccessPointCount ?? 0,
     };
   },
 

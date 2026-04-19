@@ -9,9 +9,10 @@ from sqlalchemy import select
 from backend.app.config import get_settings
 from backend.app.database import SessionLocal
 from backend.app.models import AccessEventLog, AccessKey, AccessPermission, Request, User
-from backend.app.services.access import process_courier_gate_exit_events
+from backend.app.services.access import process_courier_gate_entry_events
 from backend.app.services.auth import hash_password
 from backend.app.services.gate import GateOpenResult, gate_client
+from backend.app.services.requests import cleanup_expired_requests
 
 
 async def _ensure_user(login: str, password: str) -> None:
@@ -184,7 +185,7 @@ def test_access_open_cooldown_is_per_user_and_access_point(client):
     repeated_entry_detail = repeated_entry.json()["detail"]
     assert repeated_entry_detail["code"] == "open_cooldown"
     assert "Подождите" in repeated_entry_detail["message"]
-    assert repeated_entry_detail["retry_after_seconds"] <= 50
+    assert repeated_entry_detail["retry_after_seconds"] <= 20
 
     other_barrier = client.post("/api/access/open", headers=headers, json={"access_point_id": 2})
     assert other_barrier.status_code == 200
@@ -215,7 +216,7 @@ def test_compat_gate_open_returns_cooldown_message(client):
     body = repeated.json()
     assert body["success"] is False
     assert body["errorCode"] == "open_cooldown"
-    assert body["retryAfterSeconds"] <= 50
+    assert body["retryAfterSeconds"] <= 20
     assert "Подождите" in body["message"]
 
 
@@ -237,6 +238,36 @@ def test_access_open_integration_error(client):
         assert body["message"] == "Bridge offline"
     finally:
         gate_client.open_access_point = original
+
+
+def test_access_open_bridge_exception_records_failed_event_and_allows_retry(client):
+    headers, _ = _create_user_and_login(client)
+    _create_permanent_request(client, headers, [2])
+
+    original = gate_client.open_access_point
+
+    def _raise_bridge_error(access_point_id, key_external_id=None):
+        raise RuntimeError("GateTerm UI open failed")
+
+    gate_client.open_access_point = _raise_bridge_error
+    try:
+        failed = client.post("/api/access/open", headers=headers, json={"access_point_id": 2})
+        assert failed.status_code == 200
+        failed_body = failed.json()
+        assert failed_body["status"] == "failed"
+        assert "Gate bridge error" in failed_body["message"]
+        failed_request_id = failed_body["request_id"]
+    finally:
+        gate_client.open_access_point = original
+
+    retry = client.post("/api/access/open", headers=headers, json={"access_point_id": 2})
+    assert retry.status_code == 200
+    assert retry.json()["status"] == "success"
+
+    events = client.get("/api/access/events/my", headers=headers)
+    failed_event = next(item for item in events.json() if item["request_id"] == failed_request_id)
+    assert failed_event["status"] == "failed"
+    assert failed_event["error_code"] == "gate_bridge_error"
 
 
 def test_access_events_are_logged(client):
@@ -276,9 +307,98 @@ def test_access_events_include_gate_diagnostics(client):
         gate_client.open_access_point = original
 
 
-def test_access_open_exit_completes_courier_request_and_removes_gate_key(client):
+def test_access_open_entry_schedules_courier_request_expiration(client):
     headers, user_id = _create_user_and_login(client)
-    request_id = asyncio.run(_insert_active_courier_request(user_id, 2, 200501))
+    request_id = asyncio.run(_insert_active_courier_request(user_id, 1, 200501))
+
+    removed_key_ids: list[int] = []
+    original_remove_key = gate_client.remove_key
+    gate_client.remove_key = lambda key_id: removed_key_ids.append(int(key_id)) or True
+    try:
+        opened_at = datetime.now(timezone.utc)
+        opened = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
+        assert opened.status_code == 200
+        assert opened.json()["status"] == "success"
+    finally:
+        gate_client.remove_key = original_remove_key
+
+    assert removed_key_ids == []
+
+    async def _assert_request_scheduled() -> None:
+        async with SessionLocal() as session:
+            row = await session.get(Request, request_id)
+            assert row is not None
+            assert row.status == "active"
+            assert row.cancelled_at is None
+            assert row.expires_at is not None
+            expires_at = row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at.tzinfo is None else row.expires_at
+            remaining = expires_at - opened_at
+            assert timedelta(hours=1, minutes=59) <= remaining <= timedelta(hours=2, minutes=1)
+            key_query = await session.execute(
+                select(AccessKey).where(AccessKey.user_id == user_id, AccessKey.external_id == "200501")
+            )
+            key = key_query.scalar_one()
+            assert key.is_active is True
+            assert key.valid_to == row.expires_at
+            permissions_query = await session.execute(select(AccessPermission).where(AccessPermission.key_id == key.id))
+            permissions = list(permissions_query.scalars().all())
+            assert permissions
+            assert all(permission.is_allowed is True for permission in permissions)
+            assert all(permission.valid_to == row.expires_at for permission in permissions)
+
+    asyncio.run(_assert_request_scheduled())
+
+
+def test_cleanup_expired_courier_request_removes_gate_key_after_entry_ttl(client):
+    headers, user_id = _create_user_and_login(client)
+    request_id = asyncio.run(_insert_active_courier_request(user_id, 1, 200551))
+
+    opened = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
+    assert opened.status_code == 200
+
+    async def _expire_and_cleanup() -> None:
+        async with SessionLocal() as session:
+            row = await session.get(Request, request_id)
+            assert row is not None
+            row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            await session.commit()
+
+    asyncio.run(_expire_and_cleanup())
+
+    removed_key_ids: list[int] = []
+    original_remove_key = gate_client.remove_key
+    gate_client.remove_key = lambda key_id: removed_key_ids.append(int(key_id)) or True
+    try:
+        async def _cleanup() -> int:
+            async with SessionLocal() as session:
+                return await cleanup_expired_requests(session)
+
+        changed = asyncio.run(_cleanup())
+    finally:
+        gate_client.remove_key = original_remove_key
+
+    assert changed == 1
+    assert removed_key_ids == [200551]
+
+    async def _assert_request_expired() -> None:
+        async with SessionLocal() as session:
+            row = await session.get(Request, request_id)
+            assert row is not None
+            assert row.status == "expired"
+            key_query = await session.execute(
+                select(AccessKey).where(AccessKey.user_id == user_id, AccessKey.external_id == "200551")
+            )
+            key = key_query.scalar_one()
+            assert key.is_active is False
+            permissions_query = await session.execute(select(AccessPermission).where(AccessPermission.key_id == key.id))
+            assert all(permission.is_allowed is False for permission in permissions_query.scalars().all())
+
+    asyncio.run(_assert_request_expired())
+
+
+def test_access_open_exit_does_not_complete_courier_request(client):
+    headers, user_id = _create_user_and_login(client)
+    request_id = asyncio.run(_insert_active_courier_request(user_id, 2, 200601))
 
     removed_key_ids: list[int] = []
     original_remove_key = gate_client.remove_key
@@ -290,28 +410,21 @@ def test_access_open_exit_completes_courier_request_and_removes_gate_key(client)
     finally:
         gate_client.remove_key = original_remove_key
 
-    assert removed_key_ids == [200501]
+    assert removed_key_ids == []
 
-    async def _assert_request_completed() -> None:
+    async def _assert_request_still_active() -> None:
         async with SessionLocal() as session:
             row = await session.get(Request, request_id)
             assert row is not None
-            assert row.status == "completed"
-            assert row.cancelled_at is not None
-            key_query = await session.execute(
-                select(AccessKey).where(AccessKey.user_id == user_id, AccessKey.external_id == "200501")
-            )
-            key = key_query.scalar_one()
-            assert key.is_active is False
-            permissions_query = await session.execute(select(AccessPermission).where(AccessPermission.key_id == key.id))
-            assert all(permission.is_allowed is False for permission in permissions_query.scalars().all())
+            assert row.status == "active"
+            assert row.cancelled_at is None
 
-    asyncio.run(_assert_request_completed())
+    asyncio.run(_assert_request_still_active())
 
 
-def test_access_open_exit_completes_vehicle_and_phone_courier_companions(client):
+def test_access_open_entry_schedules_vehicle_and_phone_courier_companions(client):
     headers, user_id = _create_user_and_login(client)
-    exit_point_id = get_settings().gate_action_map["exit"]
+    entry_point_id = get_settings().gate_action_map["entry"]
     phone_number = f"7911{str(uuid4().int)[:7]}"
     create_response = client.post(
         "/passes",
@@ -327,7 +440,7 @@ def test_access_open_exit_completes_vehicle_and_phone_courier_companions(client)
     )
     assert create_response.status_code == 200
 
-    async def _active_courier_gate_ids() -> list[int]:
+    async def _active_courier_request_ids() -> list[int]:
         async with SessionLocal() as session:
             query = await session.execute(
                 select(Request)
@@ -336,23 +449,16 @@ def test_access_open_exit_completes_vehicle_and_phone_courier_companions(client)
             )
             rows = list(query.scalars().all())
             assert {row.key_type for row in rows} == {"VehicleNumber", "Phone"}
-            return [int(row.gate_key_id) for row in rows if row.gate_key_id is not None]
+            return [int(row.id) for row in rows]
 
-    gate_ids = asyncio.run(_active_courier_gate_ids())
-    removed_key_ids: list[int] = []
-    original_remove_key = gate_client.remove_key
-    gate_client.remove_key = lambda key_id: removed_key_ids.append(int(key_id)) or True
-    try:
-        opened = client.post("/api/access/open", headers=headers, json={"access_point_id": exit_point_id})
-        assert opened.status_code == 200
-        body = opened.json()
-        assert body["status"] == "success"
-    finally:
-        gate_client.remove_key = original_remove_key
+    request_ids = asyncio.run(_active_courier_request_ids())
+    opened_at = datetime.now(timezone.utc)
+    opened = client.post("/api/access/open", headers=headers, json={"access_point_id": entry_point_id})
+    assert opened.status_code == 200
+    body = opened.json()
+    assert body["status"] == "success"
 
-    assert sorted(removed_key_ids) == sorted(gate_ids)
-
-    async def _assert_all_courier_requests_completed() -> None:
+    async def _assert_all_courier_requests_scheduled() -> None:
         async with SessionLocal() as session:
             query = await session.execute(
                 select(Request)
@@ -361,15 +467,23 @@ def test_access_open_exit_completes_vehicle_and_phone_courier_companions(client)
             )
             rows = list(query.scalars().all())
             assert len(rows) == 2
-            assert all(row.status == "completed" for row in rows)
-            assert all(row.cancelled_at is not None for row in rows)
+            assert sorted(row.id for row in rows) == sorted(request_ids)
+            assert all(row.status == "active" for row in rows)
+            assert all(row.cancelled_at is None for row in rows)
+            expires_values = {row.expires_at for row in rows}
+            assert len(expires_values) == 1
+            expires_at = next(iter(expires_values))
+            assert expires_at is not None
+            normalized = expires_at.replace(tzinfo=timezone.utc) if expires_at.tzinfo is None else expires_at
+            remaining = normalized - opened_at
+            assert timedelta(hours=1, minutes=59) <= remaining <= timedelta(hours=2, minutes=1)
 
-    asyncio.run(_assert_all_courier_requests_completed())
+    asyncio.run(_assert_all_courier_requests_scheduled())
 
 
-def test_gate_exit_event_completes_phone_opened_courier_pass(client):
+def test_gate_entry_event_schedules_phone_opened_courier_pass(client):
     headers, user_id = _create_user_and_login(client)
-    exit_point_id = get_settings().gate_action_map["exit"]
+    entry_point_id = get_settings().gate_action_map["entry"]
     phone_number = f"7922{str(uuid4().int)[:7]}"
     create_response = client.post(
         "/passes",
@@ -397,9 +511,8 @@ def test_gate_exit_event_completes_phone_opened_courier_pass(client):
     active_rows = asyncio.run(_active_courier_rows())
     assert {row.key_type for row in active_rows} == {"VehicleNumber", "Phone"}
     phone_row = next(row for row in active_rows if row.key_type == "Phone")
-    gate_ids = [int(row.gate_key_id) for row in active_rows if row.gate_key_id is not None]
 
-    async def _remove_exit_reader_from_vehicle_part() -> None:
+    async def _remove_entry_reader_from_vehicle_part() -> None:
         async with SessionLocal() as session:
             query = await session.execute(
                 select(Request).where(
@@ -410,26 +523,22 @@ def test_gate_exit_event_completes_phone_opened_courier_pass(client):
                 )
             )
             vehicle_row = query.scalar_one()
-            vehicle_row.access_point_ids = [point_id for point_id in vehicle_row.access_point_ids if point_id != exit_point_id]
+            vehicle_row.access_point_ids = [point_id for point_id in vehicle_row.access_point_ids if point_id != entry_point_id]
             await session.commit()
 
-    asyncio.run(_remove_exit_reader_from_vehicle_part())
-
-    removed_key_ids: list[int] = []
-    original_remove_key = gate_client.remove_key
-    gate_client.remove_key = lambda key_id: removed_key_ids.append(int(key_id)) or True
+    asyncio.run(_remove_entry_reader_from_vehicle_part())
 
     async def _process_gate_event() -> int:
         async with SessionLocal() as session:
-            return await process_courier_gate_exit_events(
+            return await process_courier_gate_entry_events(
                 session,
                 [
                     {
                         "index": 900001,
                         "event_type": 1,
                         "event_code": 2,
-                        "access_point_id": exit_point_id,
-                        "unit": "Считыватель выезд GSM",
+                        "access_point_id": entry_point_id,
+                        "unit": "Считыватель въезд GSM",
                         "message": "Проход по ключу разрешен",
                         "name": phone_number,
                         "user_ptr": phone_row.gate_key_id,
@@ -438,8 +547,8 @@ def test_gate_exit_event_completes_phone_opened_courier_pass(client):
                         "index": 900002,
                         "event_type": 1,
                         "event_code": 8,
-                        "access_point_id": exit_point_id,
-                        "unit": "Считыватель выезд GSM",
+                        "access_point_id": entry_point_id,
+                        "unit": "Считыватель въезд GSM",
                         "message": "Проход совершен",
                         "name": phone_number,
                         "user_ptr": phone_row.gate_key_id,
@@ -447,15 +556,11 @@ def test_gate_exit_event_completes_phone_opened_courier_pass(client):
                 ],
             )
 
-    try:
-        completed_count = asyncio.run(_process_gate_event())
-    finally:
-        gate_client.remove_key = original_remove_key
+    event_at = datetime.now(timezone.utc)
+    scheduled_count = asyncio.run(_process_gate_event())
+    assert scheduled_count == 2
 
-    assert completed_count == 2
-    assert sorted(removed_key_ids) == sorted(gate_ids)
-
-    async def _assert_courier_event_cleanup() -> None:
+    async def _assert_courier_event_schedule() -> None:
         async with SessionLocal() as session:
             query = await session.execute(
                 select(Request)
@@ -464,13 +569,21 @@ def test_gate_exit_event_completes_phone_opened_courier_pass(client):
             )
             rows = list(query.scalars().all())
             assert len(rows) == 2
-            assert all(row.status == "completed" for row in rows)
+            assert all(row.status == "active" for row in rows)
+            expires_values = {row.expires_at for row in rows}
+            assert len(expires_values) == 1
+            expires_at = next(iter(expires_values))
+            assert expires_at is not None
+            normalized = expires_at.replace(tzinfo=timezone.utc) if expires_at.tzinfo is None else expires_at
+            remaining = normalized - event_at
+            assert timedelta(hours=1, minutes=59) <= remaining <= timedelta(hours=2, minutes=1)
 
             log_query = await session.execute(
-                select(AccessEventLog).where(AccessEventLog.request_id == "gate-exit-900001")
+                select(AccessEventLog).where(AccessEventLog.request_id == "gate-entry-900001")
             )
             log = log_query.scalar_one()
-            assert log.action == "courier_gate_exit"
-            assert sorted(log.details["courier_completed_request_ids"]) == sorted([row.id for row in rows])
+            assert log.action == "courier_gate_entry"
+            assert sorted(log.details["courier_scheduled_request_ids"]) == sorted([row.id for row in rows])
+            assert log.details["courier_cleanup"] == "scheduled_after_entry"
 
-    asyncio.run(_assert_courier_event_cleanup())
+    asyncio.run(_assert_courier_event_schedule())

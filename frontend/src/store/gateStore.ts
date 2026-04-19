@@ -16,7 +16,15 @@ type GateStore = {
   resetGateState: () => void;
 };
 
-const openByType = async (type: GateAction, set: (partial: Partial<GateStore>) => void) => {
+const openByType = async (
+  type: GateAction,
+  set: (partial: Partial<GateStore>) => void,
+  get: () => GateStore,
+) => {
+  if (get().gateState === 'loading') {
+    return;
+  }
+
   set({ gateState: 'loading', result: null, error: null });
   try {
     const result = await mockGateService.openAction(type);
@@ -33,16 +41,16 @@ const openByType = async (type: GateAction, set: (partial: Partial<GateStore>) =
   }
 };
 
-export const useGateStore = create<GateStore>((set) => ({
+export const useGateStore = create<GateStore>((set, get) => ({
   gateState: 'idle',
   result: null,
   error: null,
-  openEntry: () => openByType('entry', set),
-  openExit: () => openByType('exit', set),
-  openWicketNorth: () => openByType('wicket_north', set),
-  openWicketLake: () => openByType('wicket_lake', set),
-  openWicketAdmin: () => openByType('wicket_admin', set),
-  openWicketForest: () => openByType('wicket_forest', set),
+  openEntry: () => openByType('entry', set, get),
+  openExit: () => openByType('exit', set, get),
+  openWicketNorth: () => openByType('wicket_north', set, get),
+  openWicketLake: () => openByType('wicket_lake', set, get),
+  openWicketAdmin: () => openByType('wicket_admin', set, get),
+  openWicketForest: () => openByType('wicket_forest', set, get),
   resetGateState() {
     set({ gateState: 'idle', result: null, error: null });
   },

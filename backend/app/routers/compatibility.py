@@ -18,8 +18,6 @@ from ..schemas import (
     CompatLoginPayload,
     CompatOpenActionRequest,
     CompatPassItem,
-    CompatRegisterAccountPayload,
-    CompatRegisterAccountResult,
     CompatUpdateProfilePayload,
     CompatUser,
     CreateRequestRequest,
@@ -36,8 +34,7 @@ from ..services.requests import (
     list_my_requests,
     resolve_request_status,
 )
-from ..services.gate_linking import link_existing_gate_passes_by_phone
-from ..services.user_accounts import UserAccountError, create_user_account, update_user_password
+from ..services.user_accounts import update_user_password
 from ..utils.datetime import to_utc_isoformat, utcnow
 
 router = APIRouter(tags=["compatibility"])
@@ -239,45 +236,6 @@ async def compat_login(
         access_token=token,
         requiresProfileCompletion=not bool((user.name or "").strip()),
         passwordChangeRequired=user.password_change_required,
-    )
-
-
-@router.post("/auth/register", response_model=CompatRegisterAccountResult)
-async def compat_register_account(
-    payload: CompatRegisterAccountPayload,
-    request: Request,
-    session: AsyncSession = Depends(get_db_session),
-) -> CompatRegisterAccountResult:
-    client_ip = request.client.host if request.client else "unknown"
-    limiter = request.app.state.registration_rate_limiter
-    rate_limit_key = f"register:{client_ip}"
-    if not limiter.is_allowed(rate_limit_key):
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many registration attempts")
-
-    try:
-        user, password = await create_user_account(
-            session,
-            full_name=payload.fullName,
-            phone_number=payload.phoneNumber,
-            plot_number=payload.plotNumber,
-            require_password_change=True,
-        )
-    except UserAccountError as exc:
-        limiter.record_event(rate_limit_key)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT if exc.code == "phone_already_exists" else status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": exc.code, "message": exc.message},
-        ) from exc
-
-    limiter.record_event(rate_limit_key)
-    link_result = await link_existing_gate_passes_by_phone(session, user)
-
-    return CompatRegisterAccountResult(
-        login=user.login or "",
-        password=password,
-        user=_compat_user(user),
-        linkedExistingPasses=link_result.linked_count,
-        linkedAccessPointCount=link_result.access_point_count,
     )
 
 

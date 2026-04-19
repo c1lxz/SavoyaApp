@@ -2,7 +2,7 @@ import { create } from 'zustand';
 
 import { mockAuthService } from '@/services/authService';
 import { usePassesStore } from '@/store/passesStore';
-import { ChangePasswordPayload, RegisterAccountPayload, RegisterAccountResult, RequestState, User } from '@/types';
+import { ChangePasswordPayload, RequestState, User } from '@/types';
 
 type AuthStore = {
   user: User | null;
@@ -12,11 +12,9 @@ type AuthStore = {
   logoutState: RequestState;
   restoreState: RequestState;
   profileState: RequestState;
-  registerState: RequestState;
   passwordChangeState: RequestState;
   error: string | null;
   login: (login: string, password: string) => Promise<boolean>;
-  registerAccount: (payload: RegisterAccountPayload) => Promise<RegisterAccountResult | null>;
   updateProfile: (fullName: string, plotNumber?: string) => Promise<boolean>;
   changePassword: (payload: ChangePasswordPayload) => Promise<boolean>;
   dismissPasswordChangePrompt: () => void;
@@ -46,7 +44,6 @@ export const useAuthStore = create<AuthStore>((set) => ({
   logoutState: 'idle',
   restoreState: 'idle',
   profileState: 'idle',
-  registerState: 'idle',
   passwordChangeState: 'idle',
   error: null,
 
@@ -72,19 +69,6 @@ export const useAuthStore = create<AuthStore>((set) => ({
       const message = normalizeAuthError(error instanceof Error ? error.message : null);
       set({ loginState: 'error', error: message });
       return false;
-    }
-  },
-
-  async registerAccount(payload) {
-    set({ registerState: 'loading', error: null });
-    try {
-      const result = await mockAuthService.registerAccount(payload);
-      set({ registerState: 'success' });
-      return result;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Ошибка сети';
-      set({ registerState: 'error', error: message });
-      return null;
     }
   },
 

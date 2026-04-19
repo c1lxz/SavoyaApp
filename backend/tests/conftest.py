@@ -38,11 +38,9 @@ def client():
 def reset_login_rate_limiter():
     app.state.login_rate_limiter._events.clear()
     app.state.login_ip_rate_limiter._events.clear()
-    app.state.registration_rate_limiter._events.clear()
     yield
     app.state.login_rate_limiter._events.clear()
     app.state.login_ip_rate_limiter._events.clear()
-    app.state.registration_rate_limiter._events.clear()
 
 
 async def _reset_database_state() -> None:

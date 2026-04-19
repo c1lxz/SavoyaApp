@@ -142,36 +142,6 @@ class CompatAuthResult(BaseModel):
     passwordChangeRequired: bool = False
 
 
-class CompatRegisterAccountPayload(BaseModel):
-    fullName: str = Field(min_length=2, max_length=120)
-    phoneNumber: str = Field(min_length=7, max_length=32)
-    plotNumber: str = Field(min_length=1, max_length=20)
-
-    @field_validator("fullName")
-    @classmethod
-    def validate_full_name(cls, value: str) -> str:
-        return normalize_full_name(value)
-
-    @field_validator("phoneNumber")
-    @classmethod
-    def validate_phone_number(cls, value: str) -> str:
-        return normalize_account_phone(value)
-
-    @field_validator("plotNumber")
-    @classmethod
-    def validate_plot_number(cls, value: str) -> str:
-        return normalize_plot_number(value)
-
-
-class CompatRegisterAccountResult(BaseModel):
-    success: bool = True
-    login: str
-    password: str
-    user: CompatUser
-    linkedExistingPasses: int = 0
-    linkedAccessPointCount: int = 0
-
-
 class CompatChangePasswordPayload(BaseModel):
     newPassword: str
     repeatPassword: str

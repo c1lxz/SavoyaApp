@@ -74,8 +74,6 @@ class Settings(BaseSettings):
     login_rate_limit_window_seconds: int = 300
     login_ip_rate_limit_attempts: int = 20
     login_ip_rate_limit_window_seconds: int = 300
-    registration_rate_limit_attempts: int = 5
-    registration_rate_limit_window_seconds: int = 900
 
     @property
     def gate_action_map(self) -> dict[str, int]:

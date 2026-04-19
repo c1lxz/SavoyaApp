@@ -1,10 +1,9 @@
-import { AuthResult, ChangePasswordPayload, RegisterAccountPayload, RegisterAccountResult, User } from '@/types';
+import { AuthResult, ChangePasswordPayload, User } from '@/types';
 import { apiAuthService } from '@/services/api/apiAuthService';
 import { USE_REAL_API } from '@/services/api/config';
 
 export interface AuthService {
   login(login: string, password: string): Promise<AuthResult>;
-  registerAccount(payload: RegisterAccountPayload): Promise<RegisterAccountResult>;
   logout(): Promise<void>;
   getCurrentUser(): Promise<User | null>;
   updateProfile(fullName: string, plotNumber?: string): Promise<User>;
@@ -43,8 +42,6 @@ const sleep = (minMs: number, maxMs: number) =>
 
 const findMockUser = (login: string) => MOCK_USERS.find((item) => item.user.login === login);
 
-const generateMockPassword = () => `Mock!${Math.random().toString(36).slice(2, 10)}9`;
-
 export const mockAuthService: AuthService = {
   async login(login: string, password: string) {
     if (USE_REAL_API) {
@@ -70,49 +67,6 @@ export const mockAuthService: AuthService = {
       success: true,
       user: currentUser,
       passwordChangeRequired: Boolean(record.user.passwordChangeRequired),
-    };
-  },
-
-  async registerAccount(payload: RegisterAccountPayload) {
-    if (USE_REAL_API) {
-      return apiAuthService.registerAccount(payload);
-    }
-
-    await sleep(300, 700);
-
-    if (MOCK_USERS.some((item) => item.user.phoneNumber === payload.phoneNumber)) {
-      throw new Error('Пользователь с таким номером уже существует');
-    }
-
-    const ownerIndex =
-      MOCK_USERS.filter((item) => item.user.plotNumber === payload.plotNumber && !item.user.isAdmin).length + 1;
-    const surname = payload.fullName.trim().split(/\s+/)[0]?.toLowerCase() ?? 'user';
-    const login = `c${ownerIndex}${surname}${payload.plotNumber}`.replace(/[^a-z0-9а-я]/gi, '');
-    const password = generateMockPassword();
-    const user: User = {
-      id: String(Date.now()),
-      login,
-      fullName: payload.fullName.trim(),
-      plotNumber: payload.plotNumber.trim(),
-      phoneNumber: payload.phoneNumber.trim(),
-      isAdmin: false,
-      passwordChangeRequired: true,
-      passwordChangePromptRequired: false,
-    };
-
-    MOCK_USERS.push({
-      user,
-      password,
-      passwordChangePromptShown: false,
-    });
-
-    return {
-      success: true,
-      login,
-      password,
-      user,
-      linkedExistingPasses: 0,
-      linkedAccessPointCount: 0,
     };
   },
 

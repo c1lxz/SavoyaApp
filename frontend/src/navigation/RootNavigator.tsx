@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { Platform, StyleSheet } from 'react-native';
 import { DefaultTheme, NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -16,9 +16,7 @@ import { HomeScreen } from '@/screens/HomeScreen';
 import { MyPassesScreen } from '@/screens/MyPassesScreen';
 import { OpenBarrierScreen } from '@/screens/OpenBarrierScreen';
 import { ProfileSetupWebScreen } from '@/screens/ProfileSetupWebScreen';
-import { RegisterAccountScreen } from '@/screens/RegisterAccountScreen';
 import { WicketsScreen } from '@/screens/WicketsScreen';
-import { resolveInitialLoggedOutRoute, type LoggedOutRoute } from '@/services/authEntry';
 import { useAuthStore } from '@/store/authStore';
 import { theme } from '@/theme';
 import { RootStackParamList } from './types';
@@ -43,7 +41,6 @@ const linking: LinkingOptions<RootStackParamList> = {
   config: {
     screens: {
       Auth: 'auth',
-      RegisterAccount: 'register-account',
       ProfileSetup: 'profile-setup',
       Admin: 'admin',
       AdminMonitor: 'admin/monitor',
@@ -63,7 +60,6 @@ export const RootNavigator = () => {
   const requiresProfileCompletion = useAuthStore((state) => state.requiresProfileCompletion);
   const restoreSession = useAuthStore((state) => state.restoreSession);
   const restoreState = useAuthStore((state) => state.restoreState);
-  const [loggedOutRoute, setLoggedOutRoute] = useState<LoggedOutRoute | null>(null);
 
   useEffect(() => {
     if (restoreState === 'idle') {
@@ -71,38 +67,7 @@ export const RootNavigator = () => {
     }
   }, [restoreSession, restoreState]);
 
-  useEffect(() => {
-    if (user) {
-      setLoggedOutRoute('Auth');
-    }
-  }, [user]);
-
-  useEffect(() => {
-    let isCancelled = false;
-
-    if (restoreState === 'idle' || restoreState === 'loading' || user) {
-      return () => {
-        isCancelled = true;
-      };
-    }
-
-    setLoggedOutRoute(null);
-
-    const resolveRoute = async () => {
-      const route = await resolveInitialLoggedOutRoute();
-      if (!isCancelled) {
-        setLoggedOutRoute(route);
-      }
-    };
-
-    void resolveRoute();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [restoreState, user]);
-
-  if (restoreState === 'idle' || restoreState === 'loading' || (!user && !loggedOutRoute)) {
+  if (restoreState === 'idle' || restoreState === 'loading') {
     return (
       <AppBackground>
         <SafeAreaView style={styles.loadingScreen}>
@@ -118,7 +83,7 @@ export const RootNavigator = () => {
       : requiresProfileCompletion
         ? 'ProfileSetup'
         : 'Home'
-    : (loggedOutRoute ?? 'Auth');
+    : 'Auth';
 
   return (
     <NavigationContainer linking={linking} theme={navigationTheme}>
@@ -126,11 +91,11 @@ export const RootNavigator = () => {
         key={
           user
             ? user.isAdmin
-              ? 'admin'
-              : requiresProfileCompletion
-                ? 'profile-setup'
-                : 'resident'
-            : `guest-${loggedOutRoute}`
+            ? 'admin'
+            : requiresProfileCompletion
+              ? 'profile-setup'
+              : 'resident'
+            : 'guest'
         }
         initialRouteName={initialRouteName}
         screenOptions={{
@@ -162,10 +127,7 @@ export const RootNavigator = () => {
             </>
           )
         ) : (
-          <>
-            <Stack.Screen name="RegisterAccount" component={RegisterAccountScreen} />
-            <Stack.Screen name="Auth" component={AuthScreen} />
-          </>
+          <Stack.Screen name="Auth" component={AuthScreen} />
         )}
       </Stack.Navigator>
     </NavigationContainer>

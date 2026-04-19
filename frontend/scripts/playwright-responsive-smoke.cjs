@@ -188,6 +188,20 @@ const installApiMock = async (page) => {
       passwordChangePromptShown: false,
     },
     {
+      user: buildResident({
+        id: 2,
+        login: 'resident',
+        fullName: 'Петров Петр',
+        plotNumber: '47',
+        phoneNumber: '+79990001234',
+        passwordChangeRequired: true,
+        ownerIndex: 1,
+      }),
+      password: 'resident123',
+      isActive: true,
+      passwordChangePromptShown: false,
+    },
+    {
       user: {
         id: '99',
         login: 'admin',
@@ -322,23 +336,10 @@ const installApiMock = async (page) => {
     }
 
     if (pathname.endsWith('/auth/register') && request.method() === 'POST') {
-      const payload = request.postDataJSON ? request.postDataJSON() : JSON.parse(request.postData() || '{}');
-      const record = createResidentRecord({
-        fullName: payload.fullName.trim(),
-        phoneNumber: payload.phoneNumber.trim(),
-        plotNumber: payload.plotNumber.trim(),
-      });
-      state.lastRegistered = record;
-
       await route.fulfill({
-        status: 200,
+        status: 404,
         contentType: 'application/json; charset=utf-8',
-        body: JSON.stringify({
-          success: true,
-          login: record.user.login,
-          password: record.password,
-          user: record.user,
-        }),
+        body: JSON.stringify({ detail: 'Not found' }),
       });
       return;
     }
@@ -613,23 +614,7 @@ const setSeenFlag = async (page) => {
 };
 
 const ensureAuthScreen = async (page) => {
-  if ((await inputByPlaceholder(page, TEXT.registerNamePlaceholder).count()) > 0) {
-    await pressableByText(page, TEXT.registerExistingButton).click();
-  }
   await inputByPlaceholder(page, TEXT.loginPlaceholder).waitFor();
-};
-
-const ensureRegisterScreen = async (page) => {
-  await Promise.race([
-    inputByPlaceholder(page, TEXT.registerNamePlaceholder).waitFor({ state: 'visible' }),
-    inputByPlaceholder(page, TEXT.loginPlaceholder).waitFor({ state: 'visible' }),
-  ]);
-
-  if ((await inputByPlaceholder(page, TEXT.registerNamePlaceholder).count()) === 0) {
-    await pressableByText(page, TEXT.createAccount).click();
-  }
-
-  await inputByPlaceholder(page, TEXT.registerNamePlaceholder).waitFor();
 };
 
 const evaluateMobileResidentScenario = async (browserType, name, viewport, options = {}) => {
@@ -651,37 +636,17 @@ const evaluateMobileResidentScenario = async (browserType, name, viewport, optio
     const state = await installApiMock(page);
 
     await page.goto(BASE_URL, { waitUntil: 'load' });
-    await ensureRegisterScreen(page);
+    await ensureAuthScreen(page);
 
-    const firstVisitIsRegister = await inputByPlaceholder(page, TEXT.registerNamePlaceholder).isVisible();
+    const firstVisitIsRegister = (await inputByPlaceholder(page, TEXT.registerNamePlaceholder).count()) > 0;
     const loginFieldOnFirstVisit = await inputByPlaceholder(page, TEXT.loginPlaceholder).count();
-    const initialPhoneValue = await inputByPlaceholder(page, TEXT.registerPhonePlaceholder).inputValue();
-
-    await inputByPlaceholder(page, TEXT.registerNamePlaceholder).fill('Иванов Иван');
-    await inputByPlaceholder(page, TEXT.registerPhonePlaceholder).fill('+79990001234');
-    await inputByPlaceholder(page, TEXT.registerPlotPlaceholder).fill('47');
-    await pressableByText(page, TEXT.createAccount).click();
-
-    await exactText(page, TEXT.registerSuccessTitle).waitFor();
-    const generatedLogin = state.lastRegistered?.user.login;
-    const generatedPassword = state.lastRegistered?.password;
-
-    assertResult(Boolean(generatedLogin), `${name}: register flow did not produce a login`);
-    assertResult(Boolean(generatedPassword), `${name}: register flow did not produce a password`);
-
-    await exactText(page, generatedLogin).waitFor();
-    await exactText(page, generatedPassword).waitFor();
-    await pressableByText(page, TEXT.copyPassword).click();
-    await exactText(page, TEXT.copyPasswordDone).waitFor();
-    const passwordCopiedFeedbackVisible = (await exactText(page, TEXT.copyPasswordDone).count()) > 0;
-    await pressableByText(page, TEXT.goToAccount).click();
 
     await inputByPlaceholder(page, TEXT.loginPlaceholder).waitFor();
     const loginValue = await inputByPlaceholder(page, TEXT.loginPlaceholder).inputValue();
     const passwordValue = await inputByPlaceholder(page, TEXT.passwordPlaceholder).inputValue();
     const authSlot = await getInputSlotMetrics(page, TEXT.passwordPlaceholder);
 
-    await login(page, generatedLogin, generatedPassword);
+    await login(page, 'resident', 'resident123');
     await pressableByText(page, TEXT.createPass).waitFor();
     await exactText(page, TEXT.changePasswordTitle).waitFor();
 
@@ -740,8 +705,8 @@ const evaluateMobileResidentScenario = async (browserType, name, viewport, optio
       viewport,
       firstVisitIsRegister,
       loginFieldOnFirstVisit,
-      initialPhoneValue,
-      passwordCopiedFeedbackVisible,
+      initialPhoneValue: null,
+      passwordCopiedFeedbackVisible: false,
       loginValue,
       passwordValue,
       authSlot,
@@ -904,10 +869,8 @@ async function main() {
     { isMobile: true, hasTouch: true },
   );
 
-  assertResult(mobileResident.firstVisitIsRegister, 'mobile resident: first visit no longer opens account creation');
-  assertResult(mobileResident.loginFieldOnFirstVisit === 0, 'mobile resident: login screen opened on first visit');
-  assertResult(mobileResident.initialPhoneValue === '+7', 'mobile resident: register phone field is not prefilled with +7');
-  assertResult(mobileResident.passwordCopiedFeedbackVisible, 'mobile resident: password copy feedback did not appear');
+  assertResult(!mobileResident.firstVisitIsRegister, 'mobile resident: first visit still opens account creation');
+  assertResult(mobileResident.loginFieldOnFirstVisit === 1, 'mobile resident: login screen did not open on first visit');
   assertResult(mobileResident.loginValue === '', 'mobile resident: login field is prefilled');
   assertResult(mobileResident.passwordValue === '', 'mobile resident: password field is prefilled');
   assertResult(Boolean(mobileResident.authSlot?.slotWithinBounds), 'mobile resident: auth eye icon is clipped');

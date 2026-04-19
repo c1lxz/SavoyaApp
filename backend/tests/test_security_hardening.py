@@ -196,18 +196,27 @@ def test_admin_user_list_hides_password_after_resident_changes_it(client):
 
 def test_change_password_rejects_weak_password(client):
     phone_digits = f"9{str(uuid4().int)[-9:]}"
-    resident_login = client.post(
-        "/auth/register",
+    admin_login = f"security_admin_{uuid4().hex[:6]}"
+    admin_password = "StrongAdmin!91"
+    asyncio.run(_ensure_admin_user(admin_login, admin_password))
+    admin_token = client.post(
+        "/api/auth/login",
+        json={"login": admin_login, "password": admin_password},
+    ).json()["access_token"]
+
+    resident = client.post(
+        "/api/admin/users",
+        headers={"Authorization": f"Bearer {admin_token}"},
         json={
-            "fullName": "Иванов Иван",
-            "phoneNumber": f"+7 {phone_digits[:3]} {phone_digits[3:6]} {phone_digits[6:8]} {phone_digits[8:10]}",
-            "plotNumber": "911",
+            "full_name": "Иванов Иван",
+            "phone": f"+7 {phone_digits[:3]} {phone_digits[3:6]} {phone_digits[6:8]} {phone_digits[8:10]}",
+            "plot_number": "911",
         },
     ).json()
 
     resident_auth = client.post(
         "/auth/login",
-        json={"login": resident_login["login"], "password": resident_login["password"]},
+        json={"login": resident["login"], "password": resident["password"]},
     )
     assert resident_auth.status_code == 200
     resident_token = resident_auth.json()["access_token"]
@@ -220,24 +229,47 @@ def test_change_password_rejects_weak_password(client):
     assert weak_change.status_code == 422
 
 
-def test_registration_rejects_same_phone_in_another_format(client):
-    phone_digits = f"9{str(uuid4().int)[-9:]}"
-    first = client.post(
+def test_self_registration_endpoint_is_removed(client):
+    response = client.post(
         "/auth/register",
         json={
-            "fullName": "Петров Петр",
-            "phoneNumber": f"+7 {phone_digits[:3]} {phone_digits[3:6]}-{phone_digits[6:8]}-{phone_digits[8:10]}",
-            "plotNumber": "321",
+            "fullName": "Иванов Иван",
+            "phoneNumber": f"+7999{str(uuid4().int)[-7:]}",
+            "plotNumber": "911",
+        },
+    )
+
+    assert response.status_code in {404, 405}
+
+
+def test_admin_create_user_rejects_same_phone_in_another_format(client):
+    phone_digits = f"9{str(uuid4().int)[-9:]}"
+    admin_login = f"security_admin_{uuid4().hex[:6]}"
+    admin_password = "StrongAdmin!91"
+    asyncio.run(_ensure_admin_user(admin_login, admin_password))
+    admin_token = client.post(
+        "/api/auth/login",
+        json={"login": admin_login, "password": admin_password},
+    ).json()["access_token"]
+
+    first = client.post(
+        "/api/admin/users",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={
+            "full_name": "Петров Петр",
+            "phone": f"+7 {phone_digits[:3]} {phone_digits[3:6]}-{phone_digits[6:8]}-{phone_digits[8:10]}",
+            "plot_number": "321",
         },
     )
     assert first.status_code == 200
 
     duplicate = client.post(
-        "/auth/register",
+        "/api/admin/users",
+        headers={"Authorization": f"Bearer {admin_token}"},
         json={
-            "fullName": "Петрова Анна",
-            "phoneNumber": f"8 ({phone_digits[:3]}) {phone_digits[3:6]}-{phone_digits[6:8]}-{phone_digits[8:10]}",
-            "plotNumber": "322",
+            "full_name": "Петрова Анна",
+            "phone": f"8 ({phone_digits[:3]}) {phone_digits[3:6]}-{phone_digits[6:8]}-{phone_digits[8:10]}",
+            "plot_number": "322",
         },
     )
     assert duplicate.status_code == 409

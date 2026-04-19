@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from math import ceil
@@ -7,12 +8,15 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import get_settings
 from ..models import AccessEventLog, AccessKey, AccessPermission, AccessPoint, Request, User
 from ..utils.datetime import ensure_utc_datetime, utcnow
-from .gate import gate_client
+from .gate import GateOpenResult, gate_client
 
+settings = get_settings()
 OPEN_ACTION = "open"
 STATUS_PENDING = "pending"
 STATUS_SUCCESS = "success"
@@ -21,10 +25,11 @@ STATUS_FAILED = "failed"
 _RATE_WINDOW_SECONDS = 60
 _RATE_MAX_EVENTS = 12
 _DUPLICATE_WINDOW_SECONDS = 5
-_BARRIER_COOLDOWN_SECONDS = 60
+_BARRIER_COOLDOWN_SECONDS = 30
 _WICKET_COOLDOWN_SECONDS = 30
 _GATE_PASS_GRANTED_CODE = 2
 _GATE_EVENT_TIMEZONE = ZoneInfo("Europe/Moscow")
+_SYNC_ACCESS_POINTS_LOCK = asyncio.Lock()
 
 
 class AccessServiceError(Exception):
@@ -85,27 +90,42 @@ def _infer_access_point_type(name: str) -> str:
 
 
 async def sync_access_points(session: AsyncSession) -> None:
-    points = gate_client.get_access_points()
-    for point in points:
-        point_id = int(point["id"])
-        point_name = str(point["name"])
-        point_type = _normalize_access_point_type(point_name)
-        existing = await session.get(AccessPoint, point_id)
-        if existing is None:
-            session.add(
-                AccessPoint(
-                    id=point_id,
-                    name=point_name,
-                    code=f"gate_{point_id}",
-                    type=point_type,
-                    is_active=True,
+    async with _SYNC_ACCESS_POINTS_LOCK:
+        points = gate_client.get_access_points()
+        for point in points:
+            point_id = int(point["id"])
+            point_name = str(point["name"])
+            point_type = _normalize_access_point_type(point_name)
+            existing = await session.get(AccessPoint, point_id)
+            if existing is None:
+                session.add(
+                    AccessPoint(
+                        id=point_id,
+                        name=point_name,
+                        code=f"gate_{point_id}",
+                        type=point_type,
+                        is_active=True,
+                    )
                 )
-            )
-            continue
-        existing.name = point_name
-        existing.type = point_type
-        existing.is_active = True
-    await session.commit()
+                continue
+            existing.name = point_name
+            existing.type = point_type
+            existing.is_active = True
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            for point in points:
+                point_id = int(point["id"])
+                point_name = str(point["name"])
+                point_type = _normalize_access_point_type(point_name)
+                existing = await session.get(AccessPoint, point_id)
+                if existing is None:
+                    continue
+                existing.name = point_name
+                existing.type = point_type
+                existing.is_active = True
+            await session.commit()
 
 
 def _normalize_access_point_type(name: str) -> str:
@@ -232,7 +252,7 @@ async def _resolve_access_context(
     return access_point, access_key, primary
 
 
-async def _courier_completion_candidates(
+async def _courier_companion_candidates(
     session: AsyncSession,
     *,
     request_item: Request,
@@ -262,50 +282,48 @@ async def _courier_completion_candidates(
     return candidates
 
 
-async def _deactivate_access_key(session: AsyncSession, *, user_id: int, external_id: str) -> None:
-    keys_query = await session.execute(
-        select(AccessKey).where(
-            AccessKey.user_id == user_id,
-            AccessKey.external_id == external_id,
-            AccessKey.is_active.is_(True),
-        )
-    )
-    keys = list(keys_query.scalars().all())
-    if not keys:
-        return
-
-    key_ids = [key.id for key in keys]
-    for key in keys:
-        key.is_active = False
-
-    permissions_query = await session.execute(select(AccessPermission).where(AccessPermission.key_id.in_(key_ids)))
-    for permission in permissions_query.scalars().all():
-        permission.is_allowed = False
-
-
-async def _complete_courier_requests_after_exit(
+async def _schedule_courier_requests_after_entry(
     session: AsyncSession,
     *,
     request_item: Request,
     access_point_id: int,
-) -> list[int]:
-    candidates = await _courier_completion_candidates(
+    entry_at: datetime | None = None,
+) -> tuple[list[int], datetime]:
+    candidates = await _courier_companion_candidates(
         session,
         request_item=request_item,
         access_point_id=access_point_id,
     )
 
-    completed_ids: list[int] = []
-    completed_at = utcnow()
+    base_time = ensure_utc_datetime(entry_at) or utcnow()
+    expires_at = base_time + timedelta(hours=settings.courier_default_hours)
+    scheduled_ids: list[int] = []
+    gate_key_ids: list[str] = []
     for row in candidates:
+        row.is_permanent = False
+        row.expires_at = expires_at
+        scheduled_ids.append(int(row.id))
         if row.gate_key_id is not None:
-            gate_client.remove_key(int(row.gate_key_id))
-            await _deactivate_access_key(session, user_id=row.resident_id, external_id=str(row.gate_key_id))
-        row.status = "completed"
-        row.cancelled_at = completed_at
-        completed_ids.append(int(row.id))
+            gate_key_ids.append(str(row.gate_key_id))
 
-    return completed_ids
+    if gate_key_ids:
+        keys_query = await session.execute(
+            select(AccessKey).where(
+                AccessKey.user_id == request_item.resident_id,
+                AccessKey.external_id.in_(gate_key_ids),
+                AccessKey.is_active.is_(True),
+            )
+        )
+        keys = list(keys_query.scalars().all())
+        key_ids = [key.id for key in keys]
+        for key in keys:
+            key.valid_to = expires_at
+        if key_ids:
+            permissions_query = await session.execute(select(AccessPermission).where(AccessPermission.key_id.in_(key_ids)))
+            for permission in permissions_query.scalars().all():
+                permission.valid_to = expires_at
+
+    return scheduled_ids, expires_at
 
 
 def _gate_event_int(event: dict, key: str) -> int | None:
@@ -327,14 +345,14 @@ def _is_gate_pass_granted_event(event: dict) -> bool:
     return event_code == _GATE_PASS_GRANTED_CODE and user_ptr is not None and user_ptr > 0
 
 
-def _is_gate_exit_pass_event(event: dict, access_point: AccessPoint | None) -> bool:
+def _is_gate_pass_event_for_type(event: dict, access_point: AccessPoint | None, access_point_type: str) -> bool:
     if not _is_gate_pass_granted_event(event):
         return False
     if access_point is not None:
-        return access_point.type == "barrier_exit"
+        return access_point.type == access_point_type
 
     point_name = str(event.get("unit") or "")
-    return _normalize_access_point_type(point_name) == "barrier_exit"
+    return _normalize_access_point_type(point_name) == access_point_type
 
 
 def _gate_event_time_utc(event: dict) -> datetime | None:
@@ -353,7 +371,7 @@ def _gate_event_time_utc(event: dict) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
-async def process_courier_gate_exit_event(
+async def process_courier_gate_entry_event(
     session: AsyncSession,
     event: dict,
     *,
@@ -369,7 +387,7 @@ async def process_courier_gate_exit_event(
     if sync_points:
         await sync_access_points(session)
     access_point = await session.get(AccessPoint, access_point_id)
-    if not _is_gate_exit_pass_event(event, access_point):
+    if not _is_gate_pass_event_for_type(event, access_point, "barrier_entry"):
         return []
 
     query = await session.execute(
@@ -390,48 +408,50 @@ async def process_courier_gate_exit_event(
         if event_time < request_created_at - timedelta(seconds=5):
             return []
 
-    completed_request_ids = await _complete_courier_requests_after_exit(
+    scheduled_request_ids, expires_at = await _schedule_courier_requests_after_entry(
         session,
         request_item=request_item,
         access_point_id=access_point_id,
+        entry_at=event_time,
     )
-    if not completed_request_ids:
+    if not scheduled_request_ids:
         return []
 
     event_index = _gate_event_int(event, "index")
-    audit_request_id = f"gate-exit-{event_index}" if event_index is not None else f"gate-exit-{uuid4()}"
+    audit_request_id = f"gate-entry-{event_index}" if event_index is not None else f"gate-entry-{uuid4()}"
     session.add(
         AccessEventLog(
             user_id=request_item.resident_id,
             access_point_id=access_point_id,
             key_id=None,
             request_id=audit_request_id,
-            action="courier_gate_exit",
+            action="courier_gate_entry",
             status=STATUS_SUCCESS,
             details={
                 "transport": "gate_event_poll",
                 "gate_event": event,
                 "courier_request_id": request_item.id,
-                "courier_completed_request_ids": completed_request_ids,
-                "courier_cleanup": "completed",
+                "courier_scheduled_request_ids": scheduled_request_ids,
+                "courier_expires_at": expires_at.isoformat(),
+                "courier_cleanup": "scheduled_after_entry",
             },
         )
     )
     await session.commit()
-    return completed_request_ids
+    return scheduled_request_ids
 
 
-async def process_courier_gate_exit_events(session: AsyncSession, events: list[dict]) -> int:
-    completed_count = 0
+async def process_courier_gate_entry_events(session: AsyncSession, events: list[dict]) -> int:
+    scheduled_count = 0
     candidate_events = [event for event in events if _is_gate_pass_granted_event(event)]
     if not candidate_events:
         return 0
 
     await sync_access_points(session)
     for event in sorted(candidate_events, key=lambda item: _gate_event_int(item, "index") or 0):
-        completed_request_ids = await process_courier_gate_exit_event(session, event, sync_points=False)
-        completed_count += len(completed_request_ids)
-    return completed_count
+        scheduled_request_ids = await process_courier_gate_entry_event(session, event, sync_points=False)
+        scheduled_count += len(scheduled_request_ids)
+    return scheduled_count
 
 
 async def list_my_access_points(session: AsyncSession, *, user_id: int) -> list[AccessPoint]:
@@ -600,7 +620,19 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
     session.add(event)
     await session.commit()
 
-    result = gate_client.open_access_point(access_point.id, key_external_id=access_key.external_id)
+    try:
+        result = gate_client.open_access_point(access_point.id, key_external_id=access_key.external_id)
+    except Exception as exc:
+        result = GateOpenResult(
+            success=False,
+            message=f"Gate bridge error: {exc}",
+            code="gate_bridge_error",
+            details={
+                "transport": event.details.get("transport") if event.details else "unknown",
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            },
+        )
     event.status = STATUS_SUCCESS if result.success else STATUS_FAILED
     event.error_code = result.code if not result.success else None
     event.error_message = result.message if not result.success else None
@@ -609,18 +641,20 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
         **({"gate_result": result.details} if result.details else {}),
     }
     cleanup_error: str | None = None
-    if result.success and access_point.type == "barrier_exit" and bool(getattr(request_item, "is_courier", False)):
+    if result.success and access_point.type == "barrier_entry" and bool(getattr(request_item, "is_courier", False)):
         try:
-            completed_request_ids = await _complete_courier_requests_after_exit(
+            scheduled_request_ids, expires_at = await _schedule_courier_requests_after_entry(
                 session,
                 request_item=request_item,
                 access_point_id=access_point.id,
+                entry_at=utcnow(),
             )
             event.details = {
                 **(event.details or {}),
                 "courier_request_id": request_item.id,
-                "courier_completed_request_ids": completed_request_ids,
-                "courier_cleanup": "completed",
+                "courier_scheduled_request_ids": scheduled_request_ids,
+                "courier_expires_at": expires_at.isoformat(),
+                "courier_cleanup": "scheduled_after_entry",
             }
         except Exception as exc:
             cleanup_error = str(exc)

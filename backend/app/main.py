@@ -177,11 +177,6 @@ app.state.login_ip_rate_limiter = LoginRateLimiter(
     attempts=settings.login_ip_rate_limit_attempts,
     window_seconds=settings.login_ip_rate_limit_window_seconds,
 )
-app.state.registration_rate_limiter = LoginRateLimiter(
-    attempts=settings.registration_rate_limit_attempts,
-    window_seconds=settings.registration_rate_limit_window_seconds,
-)
-
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
@@ -237,7 +232,7 @@ async def startup_event() -> None:
         existing_task = getattr(app.state, "courier_gate_event_task", None)
         if existing_task is None or existing_task.done():
             app.state.courier_gate_event_task = asyncio.create_task(courier_gate_event_worker())
-            logging.info("Started Gate exit event courier worker")
+            logging.info("Started Gate entry event courier worker")
 
 
 @app.on_event("shutdown")

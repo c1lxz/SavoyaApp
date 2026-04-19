@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
-from ..models import Request, User
+from ..models import AccessKey, AccessPermission, Request, User
 from ..schemas import CreateRequestRequest
 from ..utils.datetime import ensure_utc_datetime, utcnow
 from ..utils.input_safety import normalize_phone_key
@@ -479,8 +479,24 @@ async def cleanup_expired_requests(session: AsyncSession, *, remove_gate_keys: b
                 Request.id != req.id, Request.key_value == req.key_value, Request.status == "active"
             )
         )
-        if remove_gate_keys and int(other_query.scalar_one()) == 0 and req.gate_key_id:
-            gate_client.remove_key(req.gate_key_id)
+        if int(other_query.scalar_one()) == 0 and req.gate_key_id:
+            key_query = await session.execute(
+                select(AccessKey).where(
+                    AccessKey.user_id == req.resident_id,
+                    AccessKey.external_id == str(req.gate_key_id),
+                    AccessKey.is_active.is_(True),
+                )
+            )
+            keys = list(key_query.scalars().all())
+            key_ids = [key.id for key in keys]
+            for key in keys:
+                key.is_active = False
+            if key_ids:
+                permissions_query = await session.execute(select(AccessPermission).where(AccessPermission.key_id.in_(key_ids)))
+                for permission in permissions_query.scalars().all():
+                    permission.is_allowed = False
+            if remove_gate_keys:
+                gate_client.remove_key(req.gate_key_id)
         changed += 1
 
     await session.commit()

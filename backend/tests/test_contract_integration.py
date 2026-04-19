@@ -7,19 +7,10 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from backend.app.database import SessionLocal
-from backend.app.models import Request, User
+from backend.app.models import User
 from backend.app.services.auth import hash_password
 from backend.app.services.gate import gate_client
-
-
-def _is_strong_temporary_password(value: str) -> bool:
-    return (
-        len(value) >= 10
-        and any(char.islower() for char in value)
-        and any(char.isupper() for char in value)
-        and any(char.isdigit() for char in value)
-        and any(not char.isalnum() for char in value)
-    )
+from backend.app.services.user_accounts import create_user_account
 
 
 def test_compat_login_success(client):
@@ -40,143 +31,39 @@ def test_compat_login_failure(client):
     assert data['error'] == 'Invalid login or password'
 
 
-def test_compat_register_account_generates_credentials_and_requires_password_change(client):
-    plot_number = str(200000 + (uuid4().int % 700000))
-    phone_number = f"+7999{str(uuid4().int)[-7:]}"
+async def _create_admin_managed_resident(full_name: str, phone_number: str, plot_number: str) -> tuple[str, str]:
+    async with SessionLocal() as session:
+        user, password = await create_user_account(
+            session,
+            full_name=full_name,
+            phone_number=phone_number,
+            plot_number=plot_number,
+            require_password_change=True,
+        )
+        return user.login or "", password
+
+
+def test_compat_register_account_endpoint_is_removed(client):
     response = client.post(
         '/auth/register',
         json={
             'fullName': 'Иванов Иван',
-            'phoneNumber': phone_number,
-            'plotNumber': plot_number,
+            'phoneNumber': f"+7999{str(uuid4().int)[-7:]}",
+            'plotNumber': '47',
         },
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body['success'] is True
-    assert body['login'] == f'с1Иванов{plot_number}'
-    assert body['user']['plotNumber'] == plot_number
-    assert body['user']['passwordChangeRequired'] is True
-    assert len(body['password']) >= 10
-    assert body['password'] != '1234'
-    assert _is_strong_temporary_password(body['password'])
-
-    login_response = client.post('/auth/login', json={'login': body['login'], 'password': body['password']})
-    assert login_response.status_code == 200
-    login_body = login_response.json()
-    assert login_body['success'] is True
-    assert login_body['passwordChangeRequired'] is True
-    assert login_body['user']['login'] == body['login']
-
-
-def test_compat_register_account_links_existing_gate_access_by_phone(client, monkeypatch):
-    plot_number = str(500 + (uuid4().int % 400))
-    phone_number = f"+7999{str(uuid4().int)[-7:]}"
-    captured_gate_call: list[dict] = []
-
-    monkeypatch.setattr(
-        gate_client,
-        "get_key_permissions",
-        lambda external_key_id: [
-            {"access_point_id": 19, "access_point_name": "Entry"},
-            {"access_point_id": 20, "access_point_name": "Exit"},
-            {"access_point_id": 19, "access_point_name": "Entry duplicate"},
-        ],
-    )
-
-    def _capture_add_permanent_key(**kwargs):
-        captured_gate_call.append(dict(kwargs))
-        return 88001
-
-    monkeypatch.setattr(gate_client, "add_permanent_key", _capture_add_permanent_key)
-
-    response = client.post(
-        '/auth/register',
-        json={
-            'fullName': 'Linked Resident',
-            'phoneNumber': phone_number,
-            'plotNumber': plot_number,
-        },
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body['linkedExistingPasses'] == 1
-    assert body['linkedAccessPointCount'] == 2
-    assert captured_gate_call
-    assert captured_gate_call[0]['key_type'] == 'Phone'
-    assert captured_gate_call[0]['key_value'] == phone_number
-    assert captured_gate_call[0]['access_point_ids'] == [19, 20]
-
-    async def _load_linked_request() -> tuple[Request, User]:
-        async with SessionLocal() as session:
-            user_query = await session.execute(select(User).where(User.login == body['login']))
-            user = user_query.scalar_one()
-            request_query = await session.execute(
-                select(Request).where(
-                    Request.resident_id == user.id,
-                    Request.key_type == "Phone",
-                    Request.status == "active",
-                )
-            )
-            request = request_query.scalar_one()
-            return request, user
-
-    linked_request, linked_user = asyncio.run(_load_linked_request())
-    assert linked_user.gate_user_id == 88001
-    assert linked_request.gate_key_id == 88001
-    assert linked_request.key_value == phone_number
-    assert linked_request.contact_phone == phone_number
-    assert linked_request.access_point_ids == [19, 20]
-    assert linked_request.is_permanent is True
-
-
-def test_compat_register_account_increments_owner_index_for_same_plot(client):
-    plot_number = str(200000 + (uuid4().int % 700000))
-    first_phone_number = f"+7999{str(uuid4().int)[-7:]}"
-    second_phone_number = f"+7999{str(uuid4().int)[-7:]}"
-
-    first_response = client.post(
-        '/auth/register',
-        json={
-            'fullName': 'Иванов Иван',
-            'phoneNumber': first_phone_number,
-            'plotNumber': plot_number,
-        },
-    )
-    second_response = client.post(
-        '/auth/register',
-        json={
-            'fullName': 'Петров Петр',
-            'phoneNumber': second_phone_number,
-            'plotNumber': plot_number,
-        },
-    )
-
-    assert first_response.status_code == 200
-    assert second_response.status_code == 200
-    assert first_response.json()['login'] == f'с1Иванов{plot_number}'
-    assert second_response.json()['login'] == f'с2Петров{plot_number}'
+    assert response.status_code in {404, 405}
 
 
 def test_compat_change_password_updates_login_credentials(client):
     plot_number = str(800 + (uuid4().int % 150))
     phone_number = f"+7999{str(uuid4().int)[-7:]}"
-    register_response = client.post(
-        '/auth/register',
-        json={
-            'fullName': 'Sidorov Sidor',
-            'phoneNumber': phone_number,
-            'plotNumber': plot_number,
-        },
-    )
-    assert register_response.status_code == 200
-    register_body = register_response.json()
+    login, password = asyncio.run(_create_admin_managed_resident('Sidorov Sidor', phone_number, plot_number))
 
     login_response = client.post(
         '/auth/login',
-        json={'login': register_body['login'], 'password': register_body['password']},
+        json={'login': login, 'password': password},
     )
     assert login_response.status_code == 200
     login_body = login_response.json()
@@ -195,14 +82,14 @@ def test_compat_change_password_updates_login_credentials(client):
 
     old_login_response = client.post(
         '/auth/login',
-        json={'login': register_body['login'], 'password': register_body['password']},
+        json={'login': login, 'password': password},
     )
     assert old_login_response.status_code == 200
     assert old_login_response.json()['success'] is False
 
     new_login_response = client.post(
         '/auth/login',
-        json={'login': register_body['login'], 'password': new_password},
+        json={'login': login, 'password': new_password},
     )
     assert new_login_response.status_code == 200
     new_login_body = new_login_response.json()
@@ -213,20 +100,11 @@ def test_compat_change_password_updates_login_credentials(client):
 def test_compat_password_change_prompt_is_shown_only_on_first_login(client):
     plot_number = str(900 + (uuid4().int % 90))
     phone_number = f"+7999{str(uuid4().int)[-7:]}"
-    register_response = client.post(
-        '/auth/register',
-        json={
-            'fullName': 'Petrov Petr',
-            'phoneNumber': phone_number,
-            'plotNumber': plot_number,
-        },
-    )
-    assert register_response.status_code == 200
-    register_body = register_response.json()
+    login, password = asyncio.run(_create_admin_managed_resident('Petrov Petr', phone_number, plot_number))
 
     first_login = client.post(
         '/auth/login',
-        json={'login': register_body['login'], 'password': register_body['password']},
+        json={'login': login, 'password': password},
     )
     assert first_login.status_code == 200
     first_login_body = first_login.json()
@@ -245,7 +123,7 @@ def test_compat_password_change_prompt_is_shown_only_on_first_login(client):
 
     second_login = client.post(
         '/auth/login',
-        json={'login': register_body['login'], 'password': register_body['password']},
+        json={'login': login, 'password': password},
     )
     assert second_login.status_code == 200
     second_login_body = second_login.json()

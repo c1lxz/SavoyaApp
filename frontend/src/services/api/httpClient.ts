@@ -5,10 +5,12 @@ import { getAccessToken } from '@/services/api/tokenStore';
 type RequestOptions = {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
+  timeoutMs?: number;
 };
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 const IS_WEB = Platform.OS === 'web';
+const DEFAULT_REQUEST_TIMEOUT_MS = 45000;
 
 const isLoopbackHost = (hostname: string): boolean => LOOPBACK_HOSTS.has(hostname.toLowerCase());
 
@@ -78,18 +80,39 @@ export const apiRequest = async <T>(path: string, options: RequestOptions = {}):
     throw new Error('Небезопасное соединение с API заблокировано');
   }
 
-  const response = await fetch(requestUrl.toString(), {
-    method: options.method ?? 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-    credentials: 'omit',
-    cache: 'no-store',
-    redirect: 'error',
-    referrerPolicy: 'no-referrer',
-  });
+  const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeoutId = controller
+    ? setTimeout(() => {
+        controller.abort();
+      }, timeoutMs)
+    : null;
+
+  let response: Response;
+  try {
+    response = await fetch(requestUrl.toString(), {
+      method: options.method ?? 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'error',
+      referrerPolicy: 'no-referrer',
+      signal: controller?.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Превышено время ожидания ответа сервера');
+    }
+    throw error;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
 
   if (!response.ok) {
     let message = 'Ошибка сети';

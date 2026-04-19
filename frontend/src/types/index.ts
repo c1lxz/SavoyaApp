@@ -19,19 +19,10 @@ export type AuthResult = {
   passwordChangeRequired?: boolean;
 };
 
-export type RegisterAccountPayload = {
+export type AdminCreateUserPayload = {
   fullName: string;
   phoneNumber: string;
   plotNumber: string;
-};
-
-export type RegisterAccountResult = {
-  success: boolean;
-  login: string;
-  password: string;
-  user: User;
-  linkedExistingPasses?: number;
-  linkedAccessPointCount?: number;
 };
 
 export type ChangePasswordPayload = {
