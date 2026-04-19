@@ -20,32 +20,43 @@ import { getLayoutMetrics } from '@/utils/layout';
 type Props = NativeStackScreenProps<RootStackParamList, 'AdminUsers'>;
 
 const USERS_REFRESH_MS = 15000;
-const COLUMNS = {
-  login: 190,
-  password: 190,
-  fullName: 240,
-  phone: 170,
-  plot: 110,
-  status: 130,
-  actions: 260,
-} as const;
+type TableColumn = 'login' | 'password' | 'fullName' | 'phone' | 'plot' | 'status' | 'actions';
 
-const TABLE_WIDTH = Object.values(COLUMNS).reduce((sum, width) => sum + width, 0);
+const getColumnStyle = (column: TableColumn) => {
+  switch (column) {
+    case 'login':
+      return styles.loginColumn;
+    case 'password':
+      return styles.passwordColumn;
+    case 'fullName':
+      return styles.fullNameColumn;
+    case 'phone':
+      return styles.phoneColumn;
+    case 'plot':
+      return styles.plotColumn;
+    case 'status':
+      return styles.statusColumn;
+    case 'actions':
+      return styles.actionsColumn;
+    default:
+      return null;
+  }
+};
 
 const TableCell = ({
-  width,
+  column,
   children,
   header = false,
   alignStart = true,
 }: {
-  width: number;
+  column: TableColumn;
   children: React.ReactNode;
   header?: boolean;
   alignStart?: boolean;
 }) => (
-  <View style={[styles.cell, { width }, !alignStart && styles.cellCentered]}>
+  <View style={[styles.cell, getColumnStyle(column), !alignStart && styles.cellCentered]}>
     {typeof children === 'string' ? (
-      <Text numberOfLines={2} style={header ? styles.headerCellText : styles.cellText}>
+      <Text numberOfLines={header ? 2 : 3} style={header ? styles.headerCellText : styles.cellText}>
         {children}
       </Text>
     ) : (
@@ -94,34 +105,78 @@ const UsersTable = ({
   users,
   onBlockToggle,
   onDelete,
+  compact,
 }: {
   users: AdminUserItem[];
   onBlockToggle: (item: AdminUserItem) => Promise<void>;
   onDelete: (item: AdminUserItem) => void;
-}) => (
-  <ScrollView horizontal showsHorizontalScrollIndicator>
-    <View style={[styles.table, { width: TABLE_WIDTH }]}>
+  compact: boolean;
+}) => {
+  if (compact) {
+    return (
+      <View testID="admin-users-table" style={styles.compactList}>
+        {users.map((item) => (
+          <View key={item.id} style={styles.userCard}>
+            <View style={styles.userCardHeader}>
+              <View style={styles.userCardTitleBlock}>
+                <Text style={styles.userCardLogin}>{item.login}</Text>
+                <Text style={styles.userCardName}>{item.fullName || '-'}</Text>
+              </View>
+              <Text style={[styles.userCardStatus, { color: statusColor(item) }]}>{statusLabel(item)}</Text>
+            </View>
+
+            <View style={styles.userCardGrid}>
+              <View style={styles.userCardField}>
+                <Text style={styles.userCardLabel}>Пароль</Text>
+                <Text style={styles.userCardValue}>{passwordLabel(item)}</Text>
+              </View>
+              <View style={styles.userCardField}>
+                <Text style={styles.userCardLabel}>Телефон</Text>
+                <Text style={styles.userCardValue}>{item.phone || '-'}</Text>
+              </View>
+              <View style={styles.userCardField}>
+                <Text style={styles.userCardLabel}>Участок</Text>
+                <Text style={styles.userCardValue}>{item.plotNumber || '-'}</Text>
+              </View>
+            </View>
+
+            <View style={styles.userCardActions}>
+              <ActionButton
+                title={item.isActive ? 'Заблокировать' : 'Разблокировать'}
+                icon={item.isActive ? 'lock-outline' : 'lock-open-outline'}
+                onPress={() => void onBlockToggle(item)}
+              />
+              <ActionButton title="Удалить" icon="trash-can-outline" onPress={() => onDelete(item)} danger />
+            </View>
+          </View>
+        ))}
+      </View>
+    );
+  }
+
+  return (
+    <View testID="admin-users-table" style={styles.table}>
       <View style={[styles.tableRow, styles.tableHeader]}>
-        <TableCell header width={COLUMNS.login}>Логин</TableCell>
-        <TableCell header width={COLUMNS.password}>Пароль</TableCell>
-        <TableCell header width={COLUMNS.fullName}>ФИО</TableCell>
-        <TableCell header width={COLUMNS.phone}>Телефон</TableCell>
-        <TableCell header width={COLUMNS.plot}>Участок</TableCell>
-        <TableCell header width={COLUMNS.status}>Статус</TableCell>
-        <TableCell header width={COLUMNS.actions}>Действия</TableCell>
+        <TableCell header column="login">Логин</TableCell>
+        <TableCell header column="password">Пароль</TableCell>
+        <TableCell header column="fullName">ФИО</TableCell>
+        <TableCell header column="phone">Телефон</TableCell>
+        <TableCell header column="plot">Участок</TableCell>
+        <TableCell header column="status">Статус</TableCell>
+        <TableCell header column="actions">Действия</TableCell>
       </View>
 
       {users.map((item, index) => (
         <View key={item.id} style={[styles.tableRow, index % 2 === 1 ? styles.tableRowAlt : null]}>
-          <TableCell width={COLUMNS.login}>{item.login}</TableCell>
-          <TableCell width={COLUMNS.password}>{passwordLabel(item)}</TableCell>
-          <TableCell width={COLUMNS.fullName}>{item.fullName || '-'}</TableCell>
-          <TableCell width={COLUMNS.phone}>{item.phone || '-'}</TableCell>
-          <TableCell width={COLUMNS.plot}>{item.plotNumber || '-'}</TableCell>
-          <TableCell width={COLUMNS.status}>
+          <TableCell column="login">{item.login}</TableCell>
+          <TableCell column="password">{passwordLabel(item)}</TableCell>
+          <TableCell column="fullName">{item.fullName || '-'}</TableCell>
+          <TableCell column="phone">{item.phone || '-'}</TableCell>
+          <TableCell column="plot">{item.plotNumber || '-'}</TableCell>
+          <TableCell column="status">
             <Text style={[styles.cellText, { color: statusColor(item) }]}>{statusLabel(item)}</Text>
           </TableCell>
-          <TableCell width={COLUMNS.actions}>
+          <TableCell column="actions">
             <View style={styles.actionsCell}>
               <ActionButton
                 title={item.isActive ? 'Заблокировать' : 'Разблокировать'}
@@ -134,8 +189,8 @@ const UsersTable = ({
         </View>
       ))}
     </View>
-  </ScrollView>
-);
+  );
+};
 
 export const AdminUsersScreen = ({ navigation }: Props) => {
   const { width, height } = useWindowDimensions();
@@ -412,7 +467,7 @@ export const AdminUsersScreen = ({ navigation }: Props) => {
             </View>
 
             {users.length > 0 ? (
-              <UsersTable users={users} onBlockToggle={handleBlockToggle} onDelete={confirmDeleteUser} />
+              <UsersTable users={users} onBlockToggle={handleBlockToggle} onDelete={confirmDeleteUser} compact={metrics.isHandset} />
             ) : loadState === 'loading' ? null : (
               <EmptyState text="Пользователи не найдены" />
             )}
@@ -565,6 +620,8 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   table: {
+    width: '100%',
+    alignSelf: 'stretch',
     borderWidth: 1,
     borderColor: theme.colors.border,
     borderRadius: 8,
@@ -585,6 +642,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.035)',
   },
   cell: {
+    minWidth: 0,
+    flexShrink: 1,
     justifyContent: 'center',
     borderRightWidth: 1,
     borderRightColor: 'rgba(219, 193, 134, 0.2)',
@@ -608,9 +667,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+    alignItems: 'center',
   },
   actionButton: {
     minHeight: 34,
+    maxWidth: '100%',
+    flexShrink: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -625,11 +687,100 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(225, 132, 132, 0.45)',
   },
   actionButtonText: {
+    minWidth: 0,
+    flexShrink: 1,
     color: theme.colors.textPrimary,
     fontSize: 13,
     fontWeight: '700',
   },
   actionButtonTextDanger: {
     color: theme.colors.danger,
+  },
+  loginColumn: {
+    flex: 1.05,
+  },
+  passwordColumn: {
+    flex: 1.1,
+  },
+  fullNameColumn: {
+    flex: 1.45,
+  },
+  phoneColumn: {
+    flex: 1,
+  },
+  plotColumn: {
+    flex: 0.58,
+  },
+  statusColumn: {
+    flex: 0.8,
+  },
+  actionsColumn: {
+    flex: 1.55,
+    borderRightWidth: 0,
+  },
+  compactList: {
+    width: '100%',
+    gap: theme.spacing.sm,
+  },
+  userCard: {
+    width: '100%',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.card,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+  },
+  userCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: theme.spacing.sm,
+  },
+  userCardTitleBlock: {
+    minWidth: 0,
+    flex: 1,
+    gap: 4,
+  },
+  userCardLogin: {
+    color: theme.colors.textPrimary,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  userCardName: {
+    color: theme.colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 19,
+  },
+  userCardStatus: {
+    flexShrink: 0,
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
+  userCardGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+  },
+  userCardField: {
+    minWidth: 120,
+    flex: 1,
+    gap: 4,
+  },
+  userCardLabel: {
+    color: theme.colors.textMuted,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  userCardValue: {
+    color: theme.colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 19,
+  },
+  userCardActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
   },
 });

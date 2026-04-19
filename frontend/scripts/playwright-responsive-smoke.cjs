@@ -71,6 +71,43 @@ const getWindowMetrics = async (page) =>
     bodyScrollWidth: document.body.scrollWidth,
   }));
 
+const getAdminUsersTableMetrics = async (page) =>
+  page.evaluate(() => {
+    const table = document.querySelector('[data-testid="admin-users-table"]');
+    const tableRect = table?.getBoundingClientRect() ?? null;
+    const horizontalScrollers = Array.from(document.querySelectorAll('*'))
+      .map((node) => {
+        const element = node;
+        const style = window.getComputedStyle(element);
+        return {
+          tag: element.tagName,
+          overflowX: style.overflowX,
+          clientWidth: element.clientWidth,
+          scrollWidth: element.scrollWidth,
+        };
+      })
+      .filter(
+        (item) =>
+          (item.overflowX === 'auto' || item.overflowX === 'scroll') &&
+          item.scrollWidth > item.clientWidth + 1,
+      );
+
+    return {
+      viewportWidth: window.innerWidth,
+      docScrollWidth: document.documentElement.scrollWidth,
+      bodyScrollWidth: document.body.scrollWidth,
+      tableWidth: tableRect ? Math.round(tableRect.width) : null,
+      tableLeft: tableRect ? Math.round(tableRect.left) : null,
+      tableRight: tableRect ? Math.round(tableRect.right) : null,
+      tableWithinViewport: Boolean(tableRect && tableRect.left >= -1 && tableRect.right <= window.innerWidth + 1),
+      pageNoHorizontalOverflow:
+        document.documentElement.scrollWidth <= window.innerWidth + 1 &&
+        document.body.scrollWidth <= window.innerWidth + 1,
+      horizontalScrollerCount: horizontalScrollers.length,
+      horizontalScrollers: horizontalScrollers.slice(0, 5),
+    };
+  });
+
 const getInputSlotMetrics = async (page, placeholder) =>
   page.evaluate((currentPlaceholder) => {
     const input = document.querySelector(`input[placeholder="${currentPlaceholder}"]`);
@@ -811,6 +848,10 @@ const evaluateDesktopAdminScenario = async (browserType, name, viewport, options
     await inputByPlaceholder(page, TEXT.searchUsersPlaceholder).fill(createdLogin);
     await exactText(page, createdLogin).waitFor();
 
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.waitForTimeout(150);
+    const adminUsersTable = await getAdminUsersTableMetrics(page);
+
     await pressableByText(page, TEXT.blockUser).click();
     await exactText(page, `Пользователь ${createdLogin} заблокирован`).waitFor();
 
@@ -828,6 +869,7 @@ const evaluateDesktopAdminScenario = async (browserType, name, viewport, options
       viewport,
       createdLogin,
       createdPassword,
+      adminUsersTable,
       deletedBlockedUser: deleteVisibleWhileBlocked,
       emptyStateVisible: (await exactText(page, 'Пользователи не найдены').count()) > 0,
     };
@@ -896,6 +938,12 @@ async function main() {
   );
 
   assertResult(desktopAdmin.emptyStateVisible, 'desktop admin: deleted user is still visible in the filtered table');
+  assertResult(desktopAdmin.adminUsersTable?.tableWithinViewport, 'desktop admin: users table does not fit the viewport');
+  assertResult(desktopAdmin.adminUsersTable?.pageNoHorizontalOverflow, 'desktop admin: users page has horizontal overflow');
+  assertResult(
+    desktopAdmin.adminUsersTable?.horizontalScrollerCount === 0,
+    'desktop admin: users table still has a horizontal scrollbar',
+  );
 
   console.log(
     JSON.stringify(
