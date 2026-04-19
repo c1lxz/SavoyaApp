@@ -11,7 +11,6 @@ import { LoadingOverlay } from '@/components/LoadingOverlay';
 import { ScreenHeader } from '@/components/ScreenHeader';
 import { RootStackParamList } from '@/navigation/types';
 import { apiAdminService } from '@/services/api/apiAdminService';
-import { useAuthStore } from '@/store/authStore';
 import { theme } from '@/theme';
 import { AdminRequestItem, AdminRequestStatus, RequestState } from '@/types';
 import { formatRequestForCopy } from '@/utils/adminRequests';
@@ -58,7 +57,6 @@ const FilterChip = ({
 export const AdminRequestsScreen = ({ navigation }: Props) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
-  const logout = useAuthStore((state) => state.logout);
 
   const [search, setSearch] = useState('');
   const [residentLogin, setResidentLogin] = useState('');
@@ -159,15 +157,6 @@ export const AdminRequestsScreen = ({ navigation }: Props) => {
     [handleCopyRequest, handleCopyText, metrics.isDesktop],
   );
 
-  const headerRightSlot = useMemo(
-    () => (
-      <Pressable style={styles.headerAction} onPress={() => void logout()}>
-        <Text style={styles.headerActionText}>Выйти</Text>
-      </Pressable>
-    ),
-    [logout],
-  );
-
   const listHeader = useMemo(
     () => (
       <View style={[styles.headerBlock, { gap: metrics.panelGap }]}>
@@ -240,7 +229,7 @@ export const AdminRequestsScreen = ({ navigation }: Props) => {
     <AppBackground>
       <SafeAreaView style={styles.safeArea}>
         <View style={[styles.content, { maxWidth: metrics.isDesktop ? 1200 : metrics.contentMaxWidth }]}>
-          <ScreenHeader title="Пропуски" onBack={() => goBackOrHome(navigation, 'Admin')} rightSlot={headerRightSlot} />
+          <ScreenHeader title="Пропуски" onBack={() => goBackOrHome(navigation, 'Admin')} />
 
           <FlatList
             data={requests}
@@ -374,19 +363,5 @@ const styles = StyleSheet.create({
   },
   desktopColumns: {
     gap: theme.spacing.md,
-  },
-  headerAction: {
-    minHeight: 36,
-    justifyContent: 'center',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    paddingHorizontal: 14,
-    backgroundColor: theme.colors.cardStrong,
-  },
-  headerActionText: {
-    color: theme.colors.textPrimary,
-    fontSize: 14,
-    fontWeight: '700',
   },
 });

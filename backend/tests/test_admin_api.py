@@ -322,6 +322,50 @@ def test_admin_users_crud_flow(client):
     assert not any(item['id'] == user_id for item in after_delete.json()['items'])
 
 
+def test_admin_can_delete_blocked_user_without_unblock(client):
+    admin_login = f'admin_delete_blocked_{uuid4().hex[:6]}'
+    admin_password = 'demo123'
+    asyncio.run(_ensure_user(admin_login, admin_password, full_name='Admin Delete Blocked', plot_number='955', is_admin=True))
+
+    admin_token = _api_login(client, admin_login, admin_password)
+    phone_number = f"+7999{str(uuid4().int)[-7:]}"
+    plot_number = str(210000 + (uuid4().int % 700000))
+
+    create_response = client.post(
+        '/api/admin/users',
+        headers={'Authorization': f'Bearer {admin_token}'},
+        json={
+            'full_name': 'Блоков Борис',
+            'phone': phone_number,
+            'plot_number': plot_number,
+        },
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()
+    user_id = created['id']
+    user_login = created['login']
+
+    block_response = client.post(
+        f'/api/admin/users/{user_id}/block',
+        headers={'Authorization': f'Bearer {admin_token}'},
+    )
+    assert block_response.status_code == 200
+    assert block_response.json()['is_active'] is False
+
+    delete_response = client.delete(
+        f'/api/admin/users/{user_id}',
+        headers={'Authorization': f'Bearer {admin_token}'},
+    )
+    assert delete_response.status_code == 200
+
+    after_delete = client.get(
+        f'/api/admin/users?search={user_login}',
+        headers={'Authorization': f'Bearer {admin_token}'},
+    )
+    assert after_delete.status_code == 200
+    assert not any(item['id'] == user_id for item in after_delete.json()['items'])
+
+
 def test_admin_delete_user_removes_related_access_records(client, monkeypatch):
     admin_login = f'admin_delete_{uuid4().hex[:6]}'
     admin_password = 'demo123'

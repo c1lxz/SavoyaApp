@@ -1,4 +1,4 @@
-import React, { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useDeferredValue, useEffect, useState } from 'react';
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -11,7 +11,6 @@ import { LoadingOverlay } from '@/components/LoadingOverlay';
 import { ScreenHeader } from '@/components/ScreenHeader';
 import { RootStackParamList } from '@/navigation/types';
 import { apiAdminService } from '@/services/api/apiAdminService';
-import { useAuthStore } from '@/store/authStore';
 import { theme } from '@/theme';
 import { AdminUserItem, RequestState } from '@/types';
 import { goBackOrHome } from '@/utils/backNavigation';
@@ -141,7 +140,6 @@ const UsersTable = ({
 export const AdminUsersScreen = ({ navigation }: Props) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
-  const logout = useAuthStore((state) => state.logout);
 
   const [users, setUsers] = useState<AdminUserItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -311,20 +309,11 @@ export const AdminUsersScreen = ({ navigation }: Props) => {
     ]);
   };
 
-  const headerRightSlot = useMemo(
-    () => (
-      <Pressable style={styles.headerAction} onPress={() => void logout()}>
-        <Text style={styles.headerActionText}>Выйти</Text>
-      </Pressable>
-    ),
-    [logout],
-  );
-
   return (
     <AppBackground>
       <SafeAreaView style={styles.safeArea}>
         <View style={[styles.content, { maxWidth: metrics.isDesktop ? 1360 : metrics.contentMaxWidth }]}>
-          <ScreenHeader title="Пользователи" onBack={() => goBackOrHome(navigation, 'Admin')} rightSlot={headerRightSlot} />
+          <ScreenHeader title="Пользователи" onBack={() => goBackOrHome(navigation, 'Admin')} />
 
           <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
             <View style={styles.summaryCard}>
@@ -642,19 +631,5 @@ const styles = StyleSheet.create({
   },
   actionButtonTextDanger: {
     color: theme.colors.danger,
-  },
-  headerAction: {
-    minHeight: 36,
-    justifyContent: 'center',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    paddingHorizontal: 14,
-    backgroundColor: theme.colors.cardStrong,
-  },
-  headerActionText: {
-    color: theme.colors.textPrimary,
-    fontSize: 14,
-    fontWeight: '700',
   },
 });

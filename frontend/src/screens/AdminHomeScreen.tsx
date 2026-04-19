@@ -73,7 +73,7 @@ export const AdminHomeScreen = ({ navigation }: Props) => {
               leftIcon={<MaterialCommunityIcons name="door" size={22} color={theme.colors.textPrimary} />}
             />
             <AppButton
-              title="Выйти"
+              title="Выход"
               onPress={() => void logout()}
               variant="card"
               leftIcon={<MaterialCommunityIcons name="logout" size={22} color={theme.colors.textPrimary} />}

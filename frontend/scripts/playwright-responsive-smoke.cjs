@@ -35,7 +35,6 @@ const TEXT = {
   searchUsersPlaceholder: 'Логин, ФИО, телефон или участок',
   deleteUser: 'Удалить',
   blockUser: 'Заблокировать',
-  unblockUser: 'Разблокировать',
   exitBarrier: 'Выезд',
   northWicket: 'Калитка Северная (СНТ Пальмира)',
   userBarrierMessage: 'Выездной шлагбаум открыт',
@@ -815,8 +814,8 @@ const evaluateDesktopAdminScenario = async (browserType, name, viewport, options
     await pressableByText(page, TEXT.blockUser).click();
     await exactText(page, `Пользователь ${createdLogin} заблокирован`).waitFor();
 
-    await pressableByText(page, TEXT.unblockUser).click();
-    await exactText(page, `Пользователь ${createdLogin} разблокирован`).waitFor();
+    const deleteVisibleWhileBlocked = (await pressableByText(page, TEXT.deleteUser).count()) > 0;
+    assertResult(deleteVisibleWhileBlocked, `${name}: blocked user cannot be deleted without unblock`);
 
     page.once('dialog', (dialog) => dialog.accept());
     await pressableByText(page, TEXT.deleteUser).click();
@@ -829,6 +828,7 @@ const evaluateDesktopAdminScenario = async (browserType, name, viewport, options
       viewport,
       createdLogin,
       createdPassword,
+      deletedBlockedUser: deleteVisibleWhileBlocked,
       emptyStateVisible: (await exactText(page, 'Пользователи не найдены').count()) > 0,
     };
   } finally {
