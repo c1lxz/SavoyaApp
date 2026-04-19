@@ -81,6 +81,43 @@ function Invoke-ExternalCommand {
     }
 }
 
+function Invoke-ExternalCommandResult {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [Parameter(Mandatory = $true)][string]$Description
+    )
+
+    $commandPreview = Format-CommandPreview -Executable $Executable -Arguments $Arguments
+    if ($Preview) {
+        Write-Host "[preview] $Description"
+        Write-Host "  $commandPreview"
+        return [pscustomobject]@{
+            ExitCode = 0
+            Output = ""
+        }
+    }
+
+    Push-Location -LiteralPath $WorkingDirectory
+    try {
+        $output = & $Executable @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        Pop-Location
+    }
+
+    if ($output) {
+        $output | ForEach-Object { Write-Host $_ }
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = ($output | Out-String).Trim()
+    }
+}
+
 function New-PowerShellWindowCommand {
     param(
         [Parameter(Mandatory = $true)][string]$Title,
@@ -155,6 +192,101 @@ function Invoke-CurlRequest {
         ExitCode = $exitCode
         Output = ($output | Out-String).Trim()
     }
+}
+
+function Get-NginxProcessesForExecutable {
+    param([Parameter(Mandatory = $true)][string]$ExecutablePath)
+
+    $resolvedExecutablePath = (Resolve-Path -LiteralPath $ExecutablePath).Path
+    return @(Get-CimInstance Win32_Process -Filter "name = 'nginx.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -and $_.ExecutablePath -ieq $resolvedExecutablePath })
+}
+
+function Wait-ForNginxProcessesToExit {
+    param(
+        [Parameter(Mandatory = $true)][string]$ExecutablePath,
+        [int]$TimeoutSeconds = 10
+    )
+
+    if ($Preview) {
+        return $true
+    }
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Get-NginxProcessesForExecutable -ExecutablePath $ExecutablePath)) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 500
+    }
+
+    return -not (Get-NginxProcessesForExecutable -ExecutablePath $ExecutablePath)
+}
+
+function Stop-NginxProcessesForExecutable {
+    param([Parameter(Mandatory = $true)][string]$ExecutablePath)
+
+    $processes = Get-NginxProcessesForExecutable -ExecutablePath $ExecutablePath
+    foreach ($process in $processes) {
+        try {
+            Write-Host "Stopping nginx PID $($process.ProcessId)" -ForegroundColor Yellow
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+        }
+        catch {
+            if (-not (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue)) {
+                continue
+            }
+            throw "Failed to stop nginx PID $($process.ProcessId). Run the launcher as Administrator or stop nginx manually. $($_.Exception.Message)"
+        }
+    }
+}
+
+function Start-NginxProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$ExecutablePath,
+        [Parameter(Mandatory = $true)][string]$ConfigPath,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory
+    )
+
+    $nginxStartPreview = Format-CommandPreview -Executable $ExecutablePath -Arguments @("-c", $ConfigPath)
+    if ($Preview) {
+        Write-Host "[preview] starting nginx"
+        Write-Host "  $nginxStartPreview"
+        return
+    }
+
+    Start-Process -FilePath $ExecutablePath `
+        -WorkingDirectory $WorkingDirectory `
+        -ArgumentList @("-c", $ConfigPath) | Out-Null
+}
+
+function Restart-NginxProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$ExecutablePath,
+        [Parameter(Mandatory = $true)][string]$ConfigPath,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory
+    )
+
+    $quitResult = Invoke-ExternalCommandResult `
+        -Executable $ExecutablePath `
+        -Arguments @("-s", "quit", "-c", $ConfigPath) `
+        -WorkingDirectory $WorkingDirectory `
+        -Description "Stopping nginx"
+
+    if ($quitResult.ExitCode -ne 0) {
+        Write-Warning "Graceful nginx stop failed with exit code $($quitResult.ExitCode). Trying direct process stop."
+        Stop-NginxProcessesForExecutable -ExecutablePath $ExecutablePath
+    }
+    elseif (-not (Wait-ForNginxProcessesToExit -ExecutablePath $ExecutablePath)) {
+        Write-Warning "nginx did not stop within the timeout. Trying direct process stop."
+        Stop-NginxProcessesForExecutable -ExecutablePath $ExecutablePath
+    }
+
+    if (-not (Wait-ForNginxProcessesToExit -ExecutablePath $ExecutablePath)) {
+        throw "nginx did not stop; cannot start a clean replacement."
+    }
+
+    Start-NginxProcess -ExecutablePath $ExecutablePath -ConfigPath $ConfigPath -WorkingDirectory $WorkingDirectory
 }
 
 function Wait-ForHttpSuccess {
@@ -360,23 +492,19 @@ Invoke-ExternalCommand `
 
 $nginxProcess = Get-Process -Name "nginx" -ErrorAction SilentlyContinue
 if ($nginxProcess) {
-    Invoke-ExternalCommand `
+    $reloadResult = Invoke-ExternalCommandResult `
         -Executable $resolvedNginxExePath `
         -Arguments @("-s", "reload", "-c", $resolvedNginxConfPath) `
         -WorkingDirectory $nginxWorkingDirectory `
         -Description "Reloading nginx"
+
+    if ($reloadResult.ExitCode -ne 0) {
+        Write-Warning "Reloading nginx failed with exit code $($reloadResult.ExitCode). Restarting nginx instead."
+        Restart-NginxProcess -ExecutablePath $resolvedNginxExePath -ConfigPath $resolvedNginxConfPath -WorkingDirectory $nginxWorkingDirectory
+    }
 }
 else {
-    $nginxStartPreview = Format-CommandPreview -Executable $resolvedNginxExePath -Arguments @("-c", $resolvedNginxConfPath)
-    if ($Preview) {
-        Write-Host "[preview] starting nginx"
-        Write-Host "  $nginxStartPreview"
-    }
-    else {
-        Start-Process -FilePath $resolvedNginxExePath `
-            -WorkingDirectory $nginxWorkingDirectory `
-            -ArgumentList @("-c", $resolvedNginxConfPath) | Out-Null
-    }
+    Start-NginxProcess -ExecutablePath $resolvedNginxExePath -ConfigPath $resolvedNginxConfPath -WorkingDirectory $nginxWorkingDirectory
 }
 
 Wait-ForHttpSuccess -Description "nginx frontend root page" -Probe {
