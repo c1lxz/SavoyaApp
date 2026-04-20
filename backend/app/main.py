@@ -17,6 +17,7 @@ from .routers import access, admin, auth, compatibility, gate, requests, user
 from .security import LoginRateLimiter
 from .services.auth import ensure_admin_user, ensure_bootstrap_test_users, ensure_demo_user
 from .services.gate_event_worker import courier_gate_event_worker
+from .services.gate_linking import ensure_existing_phone_requests_have_configured_access
 from .services.requests import (
     cleanup_broken_requests,
     cleanup_duplicate_requests,
@@ -217,6 +218,9 @@ async def startup_event() -> None:
         expired_count = await cleanup_expired_requests(session, remove_gate_keys=False)
         if expired_count:
             logging.info("Marked %s expired active requests as expired", expired_count)
+        expanded_phone_count = await ensure_existing_phone_requests_have_configured_access(session)
+        if expanded_phone_count:
+            logging.info("Expanded %s permanent phone requests to configured access points", expanded_phone_count)
         await ensure_active_request_unique_index(session)
         await ensure_demo_user(session)
         await ensure_admin_user(session)

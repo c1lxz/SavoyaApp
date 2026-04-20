@@ -417,14 +417,28 @@ def test_admin_create_user_links_existing_gate_access_by_phone(client, monkeypat
 
     phone_number = f"+7999{str(uuid4().int)[-7:]}"
     plot_number = str(700 + (uuid4().int % 200))
+    expected_access_point_ids = [15, 17, 19, 20, 21, 23, 5, 6]
+    captured_gate_calls = []
+
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.default_access_point_ids_json',
+        '[15,17,19,20,21,23]',
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.gsm_access_point_ids_json',
+        '[5,6]',
+    )
 
     monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.get_key_permissions',
-        lambda external_key_id: [{"access_point_id": 21, "access_point_name": "North"}],
+        lambda external_key_id: [
+            {"access_point_id": 6, "access_point_name": "GSM entry"},
+            {"access_point_id": 5, "access_point_name": "GSM exit"},
+        ],
     )
     monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.add_permanent_key',
-        lambda **kwargs: 88002,
+        lambda **kwargs: captured_gate_calls.append(dict(kwargs)) or 88002,
     )
 
     admin_token = _api_login(client, admin_login, admin_password)
@@ -459,7 +473,72 @@ def test_admin_create_user_links_existing_gate_access_by_phone(client, monkeypat
     assert linked_user.gate_user_id == 88002
     assert linked_request.gate_key_id == 88002
     assert linked_request.key_value == phone_number
-    assert linked_request.access_point_ids == [21]
+    assert linked_request.access_point_ids == expected_access_point_ids
+    assert captured_gate_calls[0]["access_point_ids"] == expected_access_point_ids
+
+
+def test_startup_expands_existing_permanent_phone_access_points(monkeypatch):
+    from backend.app.services.gate_linking import ensure_existing_phone_requests_have_configured_access
+
+    expected_access_point_ids = [15, 17, 19, 20, 21, 23, 5, 6]
+    captured_gate_calls = []
+
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.default_access_point_ids_json',
+        '[15,17,19,20,21,23]',
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.gsm_access_point_ids_json',
+        '[5,6]',
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.add_permanent_key',
+        lambda **kwargs: captured_gate_calls.append(dict(kwargs)) or 88003,
+    )
+
+    async def _create_existing_phone_request() -> int:
+        async with SessionLocal() as session:
+            user = User(
+                phone=f"+7999{str(uuid4().int)[-7:]}",
+                login=f"linked_existing_{uuid4().hex[:6]}",
+                password_hash=hash_password("demo123"),
+                name="Linked Existing",
+                apartment="711",
+                plot_number="711",
+                is_admin=False,
+                is_active=True,
+            )
+            session.add(user)
+            await session.flush()
+            request = Request(
+                resident_id=user.id,
+                key_type="Phone",
+                key_value=user.phone,
+                gate_key_id=88001,
+                access_point_ids=[6, 5],
+                is_permanent=True,
+                status="active",
+                contact_phone=user.phone,
+                plot_number=user.plot_number,
+            )
+            session.add(request)
+            await session.commit()
+            return request.id
+
+    request_id = asyncio.run(_create_existing_phone_request())
+
+    async def _expand_and_load() -> Request:
+        async with SessionLocal() as session:
+            changed = await ensure_existing_phone_requests_have_configured_access(session)
+            assert changed == 1
+            request = await session.get(Request, request_id)
+            assert request is not None
+            return request
+
+    expanded_request = asyncio.run(_expand_and_load())
+    assert expanded_request.gate_key_id == 88003
+    assert expanded_request.access_point_ids == expected_access_point_ids
+    assert captured_gate_calls[0]["access_point_ids"] == expected_access_point_ids
 
 
 def test_admin_monitor_endpoint_returns_app_open_events(client, monkeypatch):
