@@ -23,11 +23,13 @@ const normalizeApiBaseUrl = (value: string): string => {
   }
 
   if (!isAbsoluteUrl(trimmed)) {
-    return trimmed.startsWith('/') ? '' : trimmed;
+    return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
   }
 
   try {
-    return new URL(trimmed).origin;
+    const parsed = new URL(trimmed);
+    const normalizedPath = parsed.pathname.replace(/\/+$/, '');
+    return `${parsed.origin}${normalizedPath === '/' ? '' : normalizedPath}`;
   } catch {
     return trimmed;
   }
