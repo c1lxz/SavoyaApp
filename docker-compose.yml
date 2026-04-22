@@ -52,7 +52,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./certificate.crt:/etc/nginx/certs/certificate.crt:ro
+      - ./certificate.fullchain.crt:/etc/nginx/certs/certificate.fullchain.crt:ro
       - ./certificate.key:/etc/nginx/certs/certificate.key:ro
 
 volumes:

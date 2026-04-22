@@ -3,7 +3,7 @@ param(
     [string]$RepoRoot = "",
     [string]$NginxExePath = "C:\nginx\nginx.exe",
     [string]$NginxConfPath = "C:\nginx\conf\nginx.conf",
-    [string]$NginxServerName = "xn--80aaachc8cmu1au8c1f.xn--p1ai",
+    [string]$NginxServerName = "ipksavoya.ru",
     [switch]$SkipPull,
     [switch]$Bootstrap,
     [switch]$OpenToolShell,

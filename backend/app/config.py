@@ -18,15 +18,12 @@ class Settings(BaseSettings):
     debug: bool = False
     api_prefix: str = "/api"
     cors_allow_origins_json: str = (
-        '["https://xn--80aaachc8cmu1au8c1f.xn--p1ai", "https://www.xn--80aaachc8cmu1au8c1f.xn--p1ai", '
-        '"http://localhost", "http://127.0.0.1", "http://localhost:80", "http://127.0.0.1:80", '
-        '"http://localhost:8081", "http://127.0.0.1:8081", "http://localhost:8082", "http://127.0.0.1:8082", '
-        '"http://localhost:8083", "http://127.0.0.1:8083", "http://localhost:19006", "http://127.0.0.1:19006"]'
+        '["https://ipksavoya.ru", "https://www.ipksavoya.ru", "http://localhost", "http://127.0.0.1", '
+        '"http://localhost:80", "http://127.0.0.1:80", "http://localhost:8081", "http://127.0.0.1:8081", '
+        '"http://localhost:8082", "http://127.0.0.1:8082", "http://localhost:8083", "http://127.0.0.1:8083", '
+        '"http://localhost:19006", "http://127.0.0.1:19006"]'
     )
-    allowed_hosts_json: str = (
-        '["xn--80aaachc8cmu1au8c1f.xn--p1ai", "www.xn--80aaachc8cmu1au8c1f.xn--p1ai", '
-        '"localhost", "127.0.0.1", "testserver"]'
-    )
+    allowed_hosts_json: str = '["ipksavoya.ru", "www.ipksavoya.ru", "localhost", "127.0.0.1", "testserver"]'
     docs_enabled: bool = False
 
     database_url: str = "postgresql+asyncpg://user:password@localhost:5432/gate_app"
