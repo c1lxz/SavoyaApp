@@ -206,6 +206,37 @@ def test_admin_requests_endpoint_returns_requests_from_multiple_users(client):
     assert 'password_hash' not in by_login[user_a]['resident']
 
 
+def test_admin_requests_endpoint_detects_azerbaijan_plate_country(client):
+    admin_login = f'admin_plate_{uuid4().hex[:8]}'
+    resident_login = f'resident_plate_{uuid4().hex[:8]}'
+    password = 'demo123'
+
+    asyncio.run(_ensure_user(admin_login, password, full_name='Admin Plate', plot_number='911', is_admin=True))
+    asyncio.run(_ensure_user(resident_login, password, full_name='Resident Plate', plot_number='404'))
+
+    resident_token = _api_login(client, resident_login, password)
+    create_response = client.post(
+        '/passes',
+        headers={'Authorization': f'Bearer {resident_token}'},
+        json={
+            'carNumber': '10-PO-749',
+            'plotNumber': '404',
+            'phoneNumber': None,
+            'expiresAt': None,
+            'isPermanent': True,
+            'isCourier': False,
+        },
+    )
+    assert create_response.status_code == 200
+
+    admin_token = _api_login(client, admin_login, password)
+    response = client.get('/api/admin/requests', headers={'Authorization': f'Bearer {admin_token}'})
+
+    assert response.status_code == 200
+    by_login = {item['resident']['login']: item for item in response.json()['items']}
+    assert by_login[resident_login]['country_label'] == 'Азербайджан'
+
+
 def test_admin_requests_endpoint_supports_filters(client):
     admin_login = f'admin_filter_{uuid4().hex[:6]}'
     resident_login = f'resident_{uuid4().hex[:6]}'

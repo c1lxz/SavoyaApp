@@ -178,27 +178,27 @@ def test_access_open_cooldown_is_per_user_and_access_point(client):
 
     first_entry = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
     assert first_entry.status_code == 200
-    asyncio.run(_age_latest_open_event(user_id, 1, seconds=10))
+    asyncio.run(_age_latest_open_event(user_id, 1, seconds=6))
 
     repeated_entry = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
     assert repeated_entry.status_code == 429
     repeated_entry_detail = repeated_entry.json()["detail"]
     assert repeated_entry_detail["code"] == "open_cooldown"
     assert "Подождите" in repeated_entry_detail["message"]
-    assert repeated_entry_detail["retry_after_seconds"] <= 20
+    assert repeated_entry_detail["retry_after_seconds"] <= 5
 
     other_barrier = client.post("/api/access/open", headers=headers, json={"access_point_id": 2})
     assert other_barrier.status_code == 200
 
     first_wicket = client.post("/api/access/open", headers=headers, json={"access_point_id": 3})
     assert first_wicket.status_code == 200
-    asyncio.run(_age_latest_open_event(user_id, 3, seconds=10))
+    asyncio.run(_age_latest_open_event(user_id, 3, seconds=6))
 
     repeated_wicket = client.post("/api/access/open", headers=headers, json={"access_point_id": 3})
     assert repeated_wicket.status_code == 429
     repeated_wicket_detail = repeated_wicket.json()["detail"]
     assert repeated_wicket_detail["code"] == "open_cooldown"
-    assert repeated_wicket_detail["retry_after_seconds"] <= 20
+    assert repeated_wicket_detail["retry_after_seconds"] <= 5
 
 
 def test_compat_gate_open_returns_cooldown_message(client):
@@ -209,14 +209,14 @@ def test_compat_gate_open_returns_cooldown_message(client):
     first = client.post("/gates/open-action", headers=headers, json={"action": "entry"})
     assert first.status_code == 200
     assert first.json()["success"] is True
-    asyncio.run(_age_latest_open_event(user_id, entry_point_id, seconds=10))
+    asyncio.run(_age_latest_open_event(user_id, entry_point_id, seconds=6))
 
     repeated = client.post("/gates/open-action", headers=headers, json={"action": "entry"})
     assert repeated.status_code == 200
     body = repeated.json()
     assert body["success"] is False
     assert body["errorCode"] == "open_cooldown"
-    assert body["retryAfterSeconds"] <= 20
+    assert body["retryAfterSeconds"] <= 5
     assert "Подождите" in body["message"]
 
 
