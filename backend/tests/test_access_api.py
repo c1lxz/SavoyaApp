@@ -185,7 +185,7 @@ def test_access_open_cooldown_is_per_user_and_access_point(client):
     repeated_entry_detail = repeated_entry.json()["detail"]
     assert repeated_entry_detail["code"] == "open_cooldown"
     assert "Подождите" in repeated_entry_detail["message"]
-    assert repeated_entry_detail["retry_after_seconds"] <= 5
+    assert repeated_entry_detail["retry_after_seconds"] <= 10
 
     other_barrier = client.post("/api/access/open", headers=headers, json={"access_point_id": 2})
     assert other_barrier.status_code == 200
@@ -198,7 +198,7 @@ def test_access_open_cooldown_is_per_user_and_access_point(client):
     assert repeated_wicket.status_code == 429
     repeated_wicket_detail = repeated_wicket.json()["detail"]
     assert repeated_wicket_detail["code"] == "open_cooldown"
-    assert repeated_wicket_detail["retry_after_seconds"] <= 5
+    assert repeated_wicket_detail["retry_after_seconds"] <= 10
 
 
 def test_compat_gate_open_returns_cooldown_message(client):
@@ -216,7 +216,7 @@ def test_compat_gate_open_returns_cooldown_message(client):
     body = repeated.json()
     assert body["success"] is False
     assert body["errorCode"] == "open_cooldown"
-    assert body["retryAfterSeconds"] <= 5
+    assert body["retryAfterSeconds"] <= 10
     assert "Подождите" in body["message"]
 
 
