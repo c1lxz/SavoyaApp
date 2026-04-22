@@ -173,6 +173,7 @@ function Select-FirstExistingPath {
 function Invoke-CurlRequest {
     param(
         [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [string[]]$NoProxyHosts = @(),
         [switch]$AllowFailure
     )
 
@@ -181,7 +182,13 @@ function Invoke-CurlRequest {
         throw "curl.exe is required for nginx verification"
     }
 
-    $output = & $curl.Source @Arguments 2>&1
+    $effectiveArguments = @()
+    if ($NoProxyHosts.Count -gt 0) {
+        $effectiveArguments += @("--noproxy", ($NoProxyHosts -join ","))
+    }
+    $effectiveArguments += $Arguments
+
+    $output = & $curl.Source @effectiveArguments 2>&1
     $exitCode = $LASTEXITCODE
 
     if (-not $AllowFailure -and $exitCode -ne 0) {
@@ -193,6 +200,14 @@ function Invoke-CurlRequest {
         Output = ($output | Out-String).Trim()
     }
 }
+
+$proxyBypassHosts = @(
+    "127.0.0.1",
+    "localhost",
+    "::1",
+    $NginxServerName,
+    "www.$NginxServerName"
+) | Where-Object { $_ } | Select-Object -Unique
 
 function Get-NginxProcessesForExecutable {
     param([Parameter(Mandatory = $true)][string]$ExecutablePath)
@@ -480,7 +495,7 @@ Wait-ForHttpSuccess -Description "backend health endpoint" -Probe {
     $result = Invoke-CurlRequest -Arguments @(
         "-sS",
         "http://127.0.0.1:$BackendPort/health"
-    ) -AllowFailure
+    ) -NoProxyHosts $proxyBypassHosts -AllowFailure
     return $result.ExitCode -eq 0 -and $result.Output -match '"status"\s*:\s*"ok"'
 }
 
@@ -514,7 +529,7 @@ Wait-ForHttpSuccess -Description "nginx frontend root page" -Probe {
         "-I",
         "-H", "Host: $NginxServerName",
         "https://127.0.0.1/"
-    ) -AllowFailure
+    ) -NoProxyHosts $proxyBypassHosts -AllowFailure
     return $result.ExitCode -eq 0 -and $result.Output -match "200 OK"
 }
 
@@ -524,7 +539,7 @@ Wait-ForHttpSuccess -Description "nginx health proxy" -Probe {
         "-sS",
         "-H", "Host: $NginxServerName",
         "https://127.0.0.1/health"
-    ) -AllowFailure
+    ) -NoProxyHosts $proxyBypassHosts -AllowFailure
     return $result.ExitCode -eq 0 -and $result.Output -match '"status"\s*:\s*"ok"'
 }
 

@@ -1,7 +1,8 @@
 param(
     [string]$Domain = "ipksavoya.ru",
     [string]$HealthUrl = "https://ipksavoya.ru/health",
-    [string]$ExpectedIp = ""
+    [string]$ExpectedIp = "",
+    [string[]]$NoProxyHosts = @("127.0.0.1", "localhost", "::1", "ipksavoya.ru", "www.ipksavoya.ru")
 )
 
 Set-StrictMode -Version Latest
@@ -16,6 +17,63 @@ function Test-IsReservedBenchmarkIp {
     }
     catch {
         return $false
+    }
+}
+
+function Test-IsNonPublicIpv6 {
+    param([Parameter(Mandatory = $true)][string]$IpAddress)
+
+    try {
+        $address = [System.Net.IPAddress]::Parse($IpAddress)
+        if ($address.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetworkV6) {
+            return $false
+        }
+
+        $bytes = $address.GetAddressBytes()
+        $firstByte = $bytes[0]
+
+        # fc00::/7 unique local, fe80::/10 link-local, ::1 loopback
+        if (($firstByte -band 0xFE) -eq 0xFC) {
+            return $true
+        }
+        if ($firstByte -eq 0xFE -and ($bytes[1] -band 0xC0) -eq 0x80) {
+            return $true
+        }
+        if ($address.IsIPv6LinkLocal -or $address.IsIPv6SiteLocal -or $address.IsIPv6Multicast) {
+            return $true
+        }
+        if ($address.Equals([System.Net.IPAddress]::IPv6Loopback)) {
+            return $true
+        }
+
+        return $false
+    }
+    catch {
+        return $false
+    }
+}
+
+function Invoke-HealthRequestWithoutProxy {
+    param([Parameter(Mandatory = $true)][string]$Uri)
+
+    $handler = [System.Net.Http.HttpClientHandler]::new()
+    $handler.UseProxy = $false
+    $handler.AllowAutoRedirect = $true
+
+    $client = [System.Net.Http.HttpClient]::new($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(10)
+    try {
+        $response = $client.GetAsync($Uri).GetAwaiter().GetResult()
+        $content = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+
+        return [pscustomobject]@{
+            StatusCode = [int]$response.StatusCode
+            Content = $content
+        }
+    }
+    finally {
+        $client.Dispose()
+        $handler.Dispose()
     }
 }
 
@@ -39,15 +97,34 @@ catch {
 }
 
 Write-Host ""
+Write-Host "== DNS AAAA =="
+try {
+    $resolvedIpv6 = Resolve-DnsName -Name $Domain -Type AAAA | Select-Object Name, IPAddress
+    $resolvedIpv6 | Format-Table -AutoSize
+
+    foreach ($row in $resolvedIpv6) {
+        if (Test-IsNonPublicIpv6 -IpAddress $row.IPAddress) {
+            Write-Warning "DNS AAAA record points to a non-public IPv6 address: $($row.IPAddress). Remove the AAAA record in DNS or replace it with a real public IPv6 address."
+        }
+    }
+}
+catch {
+    Write-Host "AAAA lookup failed: $($_.Exception.Message)"
+}
+
+Write-Host ""
 Write-Host "== HTTP =="
 try {
-    $response = Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing -TimeoutSec 10
+    $response = Invoke-HealthRequestWithoutProxy -Uri $HealthUrl
     Write-Host "StatusCode: $($response.StatusCode)"
     Write-Host $response.Content
 }
 catch {
-    if ($_.Exception.Response) {
-        Write-Host "StatusCode: $([int]$_.Exception.Response.StatusCode)"
-    }
-    Write-Host "HTTP check failed: $($_.Exception.Message)"
+    Write-Host "HTTP check failed without proxy: $($_.Exception.Message)"
 }
+
+Write-Host ""
+Write-Host "== Proxy Bypass =="
+$normalizedNoProxyHosts = $NoProxyHosts | Where-Object { $_ } | Select-Object -Unique
+Write-Host ('$env:NO_PROXY="{0}"' -f ($normalizedNoProxyHosts -join ","))
+Write-Host ('$env:no_proxy="{0}"' -f ($normalizedNoProxyHosts -join ","))
