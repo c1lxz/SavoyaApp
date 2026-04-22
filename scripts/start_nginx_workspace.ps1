@@ -340,6 +340,17 @@ function Wait-ForHttpSuccess {
     throw "Timed out waiting for $Description."
 }
 
+function Get-FirstWebScriptPath {
+    param([Parameter(Mandatory = $true)][string]$Html)
+
+    $match = [regex]::Match($Html, "<script[^>]+src=['""]([^'""]+)['""]")
+    if (-not $match.Success) {
+        return ""
+    }
+
+    return $match.Groups[1].Value
+}
+
 $resolvedRepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $frontendRoot = Join-Path $resolvedRepoRoot "frontend"
 $frontendNodeModules = Join-Path $frontendRoot "node_modules"
@@ -531,6 +542,39 @@ Wait-ForHttpSuccess -Description "nginx frontend root page" -Probe {
         "https://127.0.0.1/"
     ) -NoProxyHosts $proxyBypassHosts -AllowFailure
     return $result.ExitCode -eq 0 -and $result.Output -match "200 OK"
+}
+
+$frontendIndexResult = Invoke-CurlRequest -Arguments @(
+    "-k",
+    "-sS",
+    "-H", "Host: $NginxServerName",
+    "https://127.0.0.1/"
+) -NoProxyHosts $proxyBypassHosts -AllowFailure
+
+if ($frontendIndexResult.ExitCode -ne 0) {
+    throw "Failed to fetch nginx frontend index page."
+}
+
+$frontendScriptPath = Get-FirstWebScriptPath -Html $frontendIndexResult.Output
+if (-not $frontendScriptPath) {
+    throw "Frontend index page does not reference a JavaScript bundle."
+}
+
+if ($frontendScriptPath -notmatch '^/') {
+    $frontendScriptPath = "/$frontendScriptPath"
+}
+
+Wait-ForHttpSuccess -Description "nginx frontend JavaScript bundle $frontendScriptPath" -Probe {
+    $result = Invoke-CurlRequest -Arguments @(
+        "-k",
+        "-sS",
+        "-I",
+        "-H", "Host: $NginxServerName",
+        "https://127.0.0.1$frontendScriptPath"
+    ) -NoProxyHosts $proxyBypassHosts -AllowFailure
+    return $result.ExitCode -eq 0 -and
+        $result.Output -match "200 OK" -and
+        $result.Output -match "Content-Type:\s*(application/javascript|text/javascript)"
 }
 
 Wait-ForHttpSuccess -Description "nginx health proxy" -Probe {
