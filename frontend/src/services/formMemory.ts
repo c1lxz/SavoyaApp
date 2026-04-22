@@ -3,14 +3,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export type CreatePassDraft = {
   residentName: string;
   carNumber: string;
-  phoneNumber: string;
   isCourier: boolean;
 };
 
 const EMPTY_DRAFT: CreatePassDraft = {
   residentName: '',
   carNumber: '',
-  phoneNumber: '',
   isCourier: false,
 };
 
@@ -21,7 +19,6 @@ const normalizeDraft = (draft: Partial<CreatePassDraft>): CreatePassDraft => ({
   carNumber: String(draft.carNumber ?? '')
     .trim()
     .toUpperCase(),
-  phoneNumber: String(draft.phoneNumber ?? '').trim(),
   isCourier: Boolean(draft.isCourier),
 });
 

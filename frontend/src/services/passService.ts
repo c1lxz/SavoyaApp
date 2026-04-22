@@ -1,5 +1,6 @@
-﻿import { CreatePassPayload, PassItem, PassStatus } from '@/types';
+import { CreatePassPayload, PassItem, PassStatus } from '@/types';
 import { apiPassService } from '@/services/api/apiPassService';
+import { mockAuthService } from '@/services/authService';
 import { USE_REAL_API } from '@/services/api/config';
 
 export interface PassService {
@@ -28,8 +29,10 @@ export const mockPassService: PassService = {
       return apiPassService.createPass(payload);
     }
 
+    const currentUser = await mockAuthService.getCurrentUser();
+    const phoneNumber = payload.phoneNumber ?? currentUser?.phoneNumber ?? null;
     const keyType: PassItem['keyType'] = payload.carNumber ? 'VehicleNumber' : 'Phone';
-    const keyValue = payload.carNumber ?? payload.phoneNumber ?? '';
+    const keyValue = payload.carNumber ?? phoneNumber ?? '';
 
     const draft = {
       id: Date.now().toString(36),
@@ -37,7 +40,7 @@ export const mockPassService: PassService = {
       keyValue,
       carNumber: payload.carNumber?.toUpperCase() ?? null,
       plotNumber: payload.plotNumber,
-      phoneNumber: payload.phoneNumber ?? null,
+      phoneNumber,
       expiresAt: payload.expiresAt,
       isPermanent: payload.isPermanent,
       isCourier: payload.isCourier,

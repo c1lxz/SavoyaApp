@@ -43,7 +43,6 @@ export const CreatePassScreen = ({ navigation }: Props) => {
   const [fullName, setFullName] = useState(user?.fullName ?? '');
   const [carNumber, setCarNumber] = useState('');
   const [plotNumber, setPlotNumber] = useState(user?.plotNumber ?? '');
-  const [phoneNumber, setPhoneNumber] = useState(user?.phoneNumber ?? '');
   const [isPermanent, setIsPermanent] = useState(false);
   const [isCourier, setIsCourier] = useState(false);
   const [expiresAtInput, setExpiresAtInput] = useState('');
@@ -64,7 +63,6 @@ export const CreatePassScreen = ({ navigation }: Props) => {
 
       setFullName(draft.residentName || user?.fullName || '');
       setCarNumber(draft.carNumber);
-      setPhoneNumber(draft.phoneNumber || user?.phoneNumber || '');
       setIsCourier(Boolean(draft.isCourier));
       setDraftLoaded(true);
     };
@@ -74,7 +72,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     return () => {
       isCancelled = true;
     };
-  }, [user?.fullName, user?.id, user?.phoneNumber]);
+  }, [user?.fullName, user?.id]);
 
   useEffect(() => {
     if (!draftLoaded) {
@@ -84,10 +82,9 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     void saveCreatePassDraft(user?.id, {
       residentName: fullName,
       carNumber,
-      phoneNumber,
       isCourier,
     });
-  }, [carNumber, draftLoaded, fullName, isCourier, phoneNumber, user?.id]);
+  }, [carNumber, draftLoaded, fullName, isCourier, user?.id]);
 
   const onExpiresAtChange = (value: string) => {
     setExpiresAtInput(formatDateInput(value));
@@ -108,7 +105,6 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     const normalizedFullName = fullName.trim();
     const normalizedCarNumber = carNumber.trim().toUpperCase();
     const normalizedPlotNumber = plotNumber.trim();
-    const normalizedPhoneNumber = phoneNumber.replace(/\D/g, '');
     const normalizedExpiresAtInput = expiresAtInput.trim();
     const normalizedExpiresAt = parseDateInput(normalizedExpiresAtInput);
 
@@ -117,7 +113,12 @@ export const CreatePassScreen = ({ navigation }: Props) => {
       return;
     }
 
-    if (normalizedCarNumber && !/^[A-ZА-Я0-9\s-]{6,12}$/i.test(normalizedCarNumber)) {
+    if (!normalizedCarNumber) {
+      setFormError('Введите номер автомобиля');
+      return;
+    }
+
+    if (!/^[A-ZА-Я0-9\s-]{6,12}$/i.test(normalizedCarNumber)) {
       setFormError('Проверьте формат номера автомобиля');
       return;
     }
@@ -129,16 +130,6 @@ export const CreatePassScreen = ({ navigation }: Props) => {
 
     if (!/^\d{1,4}$/.test(normalizedPlotNumber)) {
       setFormError('Номер участка должен содержать только цифры');
-      return;
-    }
-
-    if (!normalizedCarNumber && !normalizedPhoneNumber) {
-      setFormError('Введите номер телефона или номер автомобиля');
-      return;
-    }
-
-    if (normalizedPhoneNumber && (normalizedPhoneNumber.length < 7 || normalizedPhoneNumber.length > 15)) {
-      setFormError('Проверьте номер телефона');
       return;
     }
 
@@ -163,10 +154,9 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     }
 
     const success = await createPass({
-      carNumber: normalizedCarNumber || undefined,
+      carNumber: normalizedCarNumber,
       residentName: normalizedFullName || undefined,
       plotNumber: normalizedPlotNumber,
-      phoneNumber: normalizedPhoneNumber || undefined,
       expiresAt: isPermanent ? null : toIsoDate(normalizedExpiresAt as Date),
       isPermanent,
       isCourier,
@@ -218,16 +208,6 @@ export const CreatePassScreen = ({ navigation }: Props) => {
                 value={plotNumber}
                 onChangeText={setPlotNumber}
                 keyboardType="number-pad"
-              />
-
-              <AppInput
-                label="Номер телефона без +"
-                icon="phone"
-                value={phoneNumber}
-                onChangeText={setPhoneNumber}
-                keyboardType="phone-pad"
-                placeholder="79991234567"
-                rightSlot={phoneNumber ? renderClearButton(() => setPhoneNumber('')) : null}
               />
 
               <View style={isPermanent && styles.dateDisabled}>

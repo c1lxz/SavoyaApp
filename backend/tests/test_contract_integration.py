@@ -197,6 +197,42 @@ def test_temporary_pass_create_and_list_with_sqlite_datetimes(client):
     assert any(item['carNumber'] == car_number for item in rows)
 
 
+def test_passes_create_uses_account_phone_when_phone_number_is_omitted(client):
+    login_name = f'account_phone_{uuid4().hex[:8]}'
+    password = 'demo123'
+    asyncio.run(_ensure_user(login_name, password, full_name='Account Phone User', plot_number='31'))
+
+    login = client.post('/auth/login', json={'login': login_name, 'password': password}).json()
+    token = login['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    account_phone = login['user']['phoneNumber']
+    car_number = f'Z{uuid4().hex[:5]}'.upper()
+
+    create_response = client.post(
+        '/passes',
+        headers=headers,
+        json={
+            'carNumber': car_number,
+            'plotNumber': '31',
+            'expiresAt': None,
+            'isPermanent': True,
+            'isCourier': False,
+        },
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created['keyType'] == 'VehicleNumber'
+    assert created['phoneNumber'] == account_phone
+
+    list_response = client.get('/passes/my', headers=headers)
+    assert list_response.status_code == 200
+    rows = list_response.json()
+    assert len(rows) == 1
+    assert rows[0]['keyType'] == 'VehicleNumber'
+    assert rows[0]['keyValue'] == car_number
+    assert rows[0]['phoneNumber'] == account_phone
+
+
 def test_passes_create_creates_vehicle_and_phone_requests_when_both_provided(client):
     login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
     token = login['access_token']

@@ -158,7 +158,11 @@ def _merge_access_point_ids(*groups: list[int]) -> list[int]:
     return merged
 
 
-def _build_compat_create_payloads(payload: CompatCreatePassPayload) -> list[CreateRequestRequest]:
+def _build_compat_create_payloads(
+    payload: CompatCreatePassPayload,
+    *,
+    contact_phone_number: str | None,
+) -> list[CreateRequestRequest]:
     hours: int | None = None
     if not payload.isPermanent and payload.expiresAt:
         try:
@@ -177,7 +181,7 @@ def _build_compat_create_payloads(payload: CompatCreatePassPayload) -> list[Crea
             CreateRequestRequest(
                 key_type="VehicleNumber",
                 key_value=payload.carNumber,
-                phone_number=payload.phoneNumber,
+                phone_number=payload.phoneNumber or contact_phone_number,
                 resident_name=payload.residentName,
                 access_point_ids=default_access_point_ids,
                 is_permanent=payload.isPermanent,
@@ -296,7 +300,14 @@ async def compat_create_pass(
     session: AsyncSession = Depends(get_db_session),
     user: User = Depends(get_current_user),
 ) -> CompatPassItem:
-    create_payloads = _build_compat_create_payloads(payload)
+    contact_phone_number = (user.phone or "").strip() or None
+    if payload.carNumber and not (payload.phoneNumber or contact_phone_number):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "missing_account_phone", "message": "Account phone is required to create a pass"},
+        )
+
+    create_payloads = _build_compat_create_payloads(payload, contact_phone_number=contact_phone_number)
     if not create_payloads:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
