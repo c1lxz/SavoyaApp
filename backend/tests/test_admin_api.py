@@ -273,6 +273,53 @@ def test_admin_requests_endpoint_supports_filters(client):
     assert body['items'][0]['status'] == 'permanent'
 
 
+def test_admin_can_delete_request_without_deleting_user(client):
+    admin_login = f'admin_delete_request_{uuid4().hex[:6]}'
+    resident_login = f'resident_delete_request_{uuid4().hex[:6]}'
+    password = 'demo123'
+
+    asyncio.run(_ensure_user(admin_login, password, full_name='Admin Delete Request', plot_number='930', is_admin=True))
+    asyncio.run(_ensure_user(resident_login, password, full_name='Resident Delete Request', plot_number='415'))
+
+    resident_token = _api_login(client, resident_login, password)
+    create_response = client.post(
+        '/passes',
+        headers={'Authorization': f'Bearer {resident_token}'},
+        json={
+            'carNumber': 'A555AA77',
+            'plotNumber': '415',
+            'phoneNumber': '+79990001122',
+            'expiresAt': None,
+            'isPermanent': True,
+            'isCourier': False,
+        },
+    )
+    assert create_response.status_code == 200
+    pass_id = create_response.json()['id']
+
+    admin_token = _api_login(client, admin_login, password)
+    delete_response = client.delete(
+        f'/api/admin/requests/{pass_id}',
+        headers={'Authorization': f'Bearer {admin_token}'},
+    )
+    assert delete_response.status_code == 200
+
+    resident_passes = client.get(
+        '/passes/my',
+        headers={'Authorization': f'Bearer {resident_token}'},
+    )
+    assert resident_passes.status_code == 200
+    assert resident_passes.json() == []
+
+    resident_users = client.get(
+        f'/api/admin/users?search={resident_login}',
+        headers={'Authorization': f'Bearer {admin_token}'},
+    )
+    assert resident_users.status_code == 200
+    listed_users = resident_users.json()['items']
+    assert any(item['login'] == resident_login for item in listed_users)
+
+
 def test_admin_users_crud_flow(client):
     admin_login = f'admin_users_{uuid4().hex[:6]}'
     admin_password = 'demo123'

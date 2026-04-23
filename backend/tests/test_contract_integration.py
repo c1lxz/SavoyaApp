@@ -233,7 +233,7 @@ def test_passes_create_uses_account_phone_when_phone_number_is_omitted(client):
     assert rows[0]['phoneNumber'] == account_phone
 
 
-def test_passes_create_creates_vehicle_and_phone_requests_when_both_provided(client):
+def test_passes_create_keeps_vehicle_request_only_when_phone_number_is_provided(client):
     login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
     token = login['access_token']
     headers = {'Authorization': f'Bearer {token}'}
@@ -260,8 +260,10 @@ def test_passes_create_creates_vehicle_and_phone_requests_when_both_provided(cli
     list_response = client.get('/passes/my', headers=headers)
     assert list_response.status_code == 200
     rows = list_response.json()
-    assert any(item['keyType'] == 'VehicleNumber' and item['keyValue'] == car_number for item in rows)
-    assert any(item['keyType'] == 'Phone' and item['keyValue'] == phone_number for item in rows)
+    assert len(rows) == 1
+    assert rows[0]['keyType'] == 'VehicleNumber'
+    assert rows[0]['keyValue'] == car_number
+    assert rows[0]['phoneNumber'] == phone_number
 
 
 def test_passes_create_rejects_duplicate_active_car_number(client):
@@ -305,11 +307,6 @@ def test_gate_open_action(client):
     token = login['access_token']
     headers = {'Authorization': f'Bearer {token}'}
 
-    client.post(
-        '/passes',
-        headers=headers,
-        json={'carNumber': 'B234CC', 'plotNumber': '25', 'phoneNumber': '+79991112233', 'expiresAt': None, 'isPermanent': True, 'isCourier': False},
-    )
     response = client.post('/gates/open-action', headers=headers, json={'action': 'entry'})
     assert response.status_code == 200
     data = response.json()

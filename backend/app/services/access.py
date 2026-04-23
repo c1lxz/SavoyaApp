@@ -55,8 +55,36 @@ class OpenAccessResult:
     request_id: str
 
 
+@dataclass
+class ResolvedAccessContext:
+    access_point: AccessPoint
+    access_key: AccessKey
+    request_item: Request | None
+    key_external_id: str
+    key_type: str
+    key_value: str
+    source: str
+
+
 def _utcnow() -> datetime:
     return utcnow()
+
+
+def _merge_access_point_ids(*groups: list[int]) -> list[int]:
+    merged: list[int] = []
+    seen: set[int] = set()
+    for group in groups:
+        for item in group:
+            point_id = int(item)
+            if point_id <= 0 or point_id in seen:
+                continue
+            seen.add(point_id)
+            merged.append(point_id)
+    return merged
+
+
+def _account_access_point_ids() -> list[int]:
+    return _merge_access_point_ids(list(settings.default_access_point_ids), list(settings.gsm_access_point_ids))
 
 
 def _request_priority(item: Request, *, prefer_courier: bool) -> tuple[int, int, float]:
@@ -149,11 +177,18 @@ def _normalize_access_point_type(name: str) -> str:
     return _infer_access_point_type(name)
 
 
-async def _get_or_create_access_key(session: AsyncSession, request_item: Request) -> AccessKey:
-    external_id = str(request_item.gate_key_id)
+async def _get_or_create_access_key_by_external_id(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    external_id: str,
+    valid_from: datetime | None,
+    valid_to: datetime | None,
+    protocol_type: str = "gate_mdb_user",
+) -> AccessKey:
     query = await session.execute(
         select(AccessKey).where(
-            AccessKey.user_id == request_item.resident_id,
+            AccessKey.user_id == user_id,
             AccessKey.external_id == external_id,
             AccessKey.is_active.is_(True),
         )
@@ -163,16 +198,26 @@ async def _get_or_create_access_key(session: AsyncSession, request_item: Request
         return key
 
     key = AccessKey(
-        user_id=request_item.resident_id,
+        user_id=user_id,
         external_id=external_id,
-        protocol_type="gate_mdb_user",
+        protocol_type=protocol_type,
         is_active=True,
-        valid_from=request_item.created_at,
-        valid_to=request_item.expires_at,
+        valid_from=valid_from,
+        valid_to=valid_to,
     )
     session.add(key)
     await session.flush()
     return key
+
+
+async def _get_or_create_access_key(session: AsyncSession, request_item: Request) -> AccessKey:
+    return await _get_or_create_access_key_by_external_id(
+        session,
+        user_id=request_item.resident_id,
+        external_id=str(request_item.gate_key_id),
+        valid_from=request_item.created_at,
+        valid_to=request_item.expires_at,
+    )
 
 
 async def _ensure_permission(
@@ -212,7 +257,7 @@ async def _ensure_permission(
 
 async def _resolve_access_context(
     session: AsyncSession, *, user_id: int, access_point_id: int
-) -> tuple[AccessPoint, AccessKey, Request]:
+) -> ResolvedAccessContext:
     await sync_access_points(session)
 
     access_point = await session.get(AccessPoint, access_point_id)
@@ -230,26 +275,101 @@ async def _resolve_access_context(
     rows = list(query.scalars().all())
     now = _utcnow()
     matching = [item for item in rows if access_point_id in (item.access_point_ids or []) and _is_request_active(item, now)]
-    if not matching:
+    with_key = [item for item in matching if item.gate_key_id is not None]
+    if with_key:
+        prefer_courier = access_point.type == "barrier_exit"
+        primary = sorted(with_key, key=lambda item: _request_priority(item, prefer_courier=prefer_courier))[0]
+        access_key = await _get_or_create_access_key(session, primary)
+        await _ensure_permission(
+            session,
+            user_id=user_id,
+            access_point_id=access_point_id,
+            key_id=access_key.id,
+            valid_from=primary.created_at,
+            valid_to=primary.expires_at,
+        )
+        await session.commit()
+        return ResolvedAccessContext(
+            access_point=access_point,
+            access_key=access_key,
+            request_item=primary,
+            key_external_id=str(access_key.external_id or primary.gate_key_id),
+            key_type=primary.key_type,
+            key_value=primary.key_value,
+            source="request",
+        )
+
+    account_access_point_ids = _account_access_point_ids()
+    if access_point.id not in account_access_point_ids:
+        if matching:
+            raise AccessServiceError(code="key_not_found", message="Active key not found", http_status=404)
         raise AccessServiceError(code="forbidden", message="No access to this point", http_status=403)
 
-    with_key = [item for item in matching if item.gate_key_id is not None]
-    if not with_key:
-        raise AccessServiceError(code="key_not_found", message="Active key not found", http_status=404)
+    user = await session.get(User, user_id)
+    if user is None:
+        raise AccessServiceError(code="user_not_found", message="User not found", http_status=404)
+    if not (user.phone or "").strip():
+        raise AccessServiceError(
+            code="account_phone_required",
+            message="Account phone is required for account access",
+            http_status=403,
+        )
 
-    prefer_courier = access_point.type == "barrier_exit"
-    primary = sorted(with_key, key=lambda item: _request_priority(item, prefer_courier=prefer_courier))[0]
-    access_key = await _get_or_create_access_key(session, primary)
+    gate_key_id = user.gate_user_id
+    if gate_key_id is None:
+        try:
+            gate_key_id = gate_client.add_permanent_key(
+                key_type="Phone",
+                key_value=user.phone,
+                phone_number=user.phone,
+                access_point_ids=account_access_point_ids,
+                resident_name=user.name or user.login or "Resident",
+                plot_number=user.plot_number or user.apartment,
+            )
+        except Exception as exc:
+            raise AccessServiceError(
+                code="gate_bridge_error",
+                message=f"Failed to provision account gate access: {exc}",
+                http_status=502,
+            ) from exc
+
+        if gate_key_id <= 0:
+            raise AccessServiceError(
+                code="invalid_gate_key",
+                message=f"Gate returned invalid key id for account access: {gate_key_id}",
+                http_status=502,
+            )
+
+        user.gate_user_id = gate_key_id
+        session.add(user)
+        await session.flush()
+
+    access_key = await _get_or_create_access_key_by_external_id(
+        session,
+        user_id=user.id,
+        external_id=str(gate_key_id),
+        valid_from=user.created_at,
+        valid_to=None,
+        protocol_type="gate_account_phone",
+    )
     await _ensure_permission(
         session,
-        user_id=user_id,
+        user_id=user.id,
         access_point_id=access_point_id,
         key_id=access_key.id,
-        valid_from=primary.created_at,
-        valid_to=primary.expires_at,
+        valid_from=user.created_at,
+        valid_to=None,
     )
     await session.commit()
-    return access_point, access_key, primary
+    return ResolvedAccessContext(
+        access_point=access_point,
+        access_key=access_key,
+        request_item=None,
+        key_external_id=str(gate_key_id),
+        key_type="Phone",
+        key_value=user.phone,
+        source="account",
+    )
 
 
 async def _courier_companion_candidates(
@@ -493,7 +613,7 @@ async def list_my_access_points(session: AsyncSession, *, user_id: int) -> list[
     rows = list(query.scalars().all())
     now = _utcnow()
 
-    allowed_ids: set[int] = set()
+    allowed_ids: set[int] = set(_account_access_point_ids())
     for item in rows:
         if item.gate_key_id is None:
             continue
@@ -621,11 +741,14 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
         await _check_rate_limit(session, user_id=user_id)
     await _check_duplicate(session, user_id=user_id, access_point_id=access_point_id)
 
-    access_point, access_key, request_item = await _resolve_access_context(
+    context = await _resolve_access_context(
         session,
         user_id=user_id,
         access_point_id=access_point_id,
     )
+    access_point = context.access_point
+    access_key = context.access_key
+    request_item = context.request_item
     await _check_open_cooldown(session, user=user, access_point=access_point)
 
     request_id = str(uuid4())
@@ -639,11 +762,12 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
         details={
             "access_point_code": access_point.code,
             "access_point_name": access_point.name,
-            "request_db_id": request_item.id,
-            "gate_key_id": request_item.gate_key_id,
+            "request_db_id": request_item.id if request_item is not None else None,
+            "gate_key_id": int(context.key_external_id),
             "key_external_id": access_key.external_id,
-            "key_type": request_item.key_type,
-            "key_value": request_item.key_value,
+            "key_type": context.key_type,
+            "key_value": context.key_value,
+            "access_source": context.source,
             "actor_login": user.login if user is not None else None,
             "actor_name": user.name if user is not None else None,
             "actor_phone": user.phone if user is not None else None,
@@ -666,15 +790,57 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
                 "exception_message": str(exc),
             },
         )
+    if (
+        not result.success
+        and context.source == "account"
+        and result.code in {"key_not_found", "access_denied"}
+        and (user.phone or "").strip()
+    ):
+        try:
+            refreshed_gate_key_id = gate_client.add_permanent_key(
+                key_type="Phone",
+                key_value=user.phone,
+                phone_number=user.phone,
+                access_point_ids=_account_access_point_ids(),
+                resident_name=user.name or user.login or "Resident",
+                plot_number=user.plot_number or user.apartment,
+            )
+            if refreshed_gate_key_id > 0:
+                user.gate_user_id = refreshed_gate_key_id
+                session.add(user)
+                access_key.external_id = str(refreshed_gate_key_id)
+                access_key.protocol_type = "gate_account_phone"
+                await session.commit()
+                context.key_external_id = str(refreshed_gate_key_id)
+                result = gate_client.open_access_point(access_point.id, key_external_id=access_key.external_id)
+        except Exception as exc:
+            result = GateOpenResult(
+                success=False,
+                message=f"Gate bridge error: {exc}",
+                code="gate_bridge_error",
+                details={
+                    "transport": event.details.get("transport") if event.details else "unknown",
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc),
+                    "retry_mode": "refresh_account_access",
+                },
+            )
     event.status = STATUS_SUCCESS if result.success else STATUS_FAILED
     event.error_code = result.code if not result.success else None
     event.error_message = result.message if not result.success else None
     event.details = {
         **(event.details or {}),
+        "gate_key_id": int(context.key_external_id),
+        "key_external_id": access_key.external_id,
         **({"gate_result": result.details} if result.details else {}),
     }
     cleanup_error: str | None = None
-    if result.success and access_point.type == "barrier_entry" and bool(getattr(request_item, "is_courier", False)):
+    if (
+        result.success
+        and request_item is not None
+        and access_point.type == "barrier_entry"
+        and bool(getattr(request_item, "is_courier", False))
+    ):
         try:
             scheduled_request_ids, expires_at = await _schedule_courier_requests_after_entry(
                 session,

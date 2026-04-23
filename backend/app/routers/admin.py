@@ -19,7 +19,12 @@ from ..schemas import (
 )
 from ..services.admin_monitor import list_admin_monitor_events
 from ..services.gate_linking import link_existing_gate_passes_by_phone
-from ..services.requests import cleanup_expired_requests, list_requests_for_admin, resolve_request_status
+from ..services.requests import (
+    cleanup_expired_requests,
+    delete_request_for_admin,
+    list_requests_for_admin,
+    resolve_request_status,
+)
 from ..services.user_accounts import UserAccountError, build_admin_user_payload, create_user_account, delete_user_account
 from ..utils.vehicle_country import detect_vehicle_country
 
@@ -82,6 +87,18 @@ async def admin_list_requests(
         total=total,
         items=[_to_admin_request_item(request, resident) for request, resident in rows],
     )
+
+
+@router.delete("/requests/{request_id}", response_model=MessageResponse)
+async def admin_delete_request(
+    request_id: int,
+    session: AsyncSession = Depends(get_db_session),
+    _admin: User = Depends(get_current_admin_user),
+) -> MessageResponse:
+    deleted = await delete_request_for_admin(session, request_id)
+    if deleted is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пропуск не найден")
+    return MessageResponse(message="Пропуск удалён")
 
 
 @router.get("/users", response_model=AdminUserListResponse)

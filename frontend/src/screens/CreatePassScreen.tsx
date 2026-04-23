@@ -270,7 +270,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
                 }
               >
                 <View style={[styles.checkbox, isCourier && styles.checkboxChecked]} />
-                <Text style={[styles.checkboxText, { fontSize: metrics.bodyFontSize }]}>Курьер</Text>
+                <Text style={[styles.checkboxText, { fontSize: metrics.bodyFontSize }]}>Курьер / Такси</Text>
               </Pressable>
 
               {formError ? <Text style={styles.error}>{formError}</Text> : null}

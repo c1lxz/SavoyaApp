@@ -203,6 +203,12 @@ export const apiAdminService = {
     };
   },
 
+  async deleteRequest(requestId: string): Promise<void> {
+    await apiRequest<void>(`/api/admin/requests/${requestId}`, {
+      method: 'DELETE',
+    });
+  },
+
   async getUsers(query: AdminUserQuery = {}): Promise<AdminUserList> {
     const params = new URLSearchParams();
 

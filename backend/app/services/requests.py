@@ -3,12 +3,12 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, func, inspect, or_, select, text
+from sqlalchemy import and_, delete, func, inspect, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
-from ..models import AccessKey, AccessPermission, Request, User
+from ..models import AccessEventLog, AccessKey, AccessPermission, Request, User
 from ..schemas import CreateRequestRequest
 from ..utils.datetime import ensure_utc_datetime, utcnow
 from ..utils.input_safety import normalize_phone_key
@@ -435,6 +435,56 @@ async def cancel_request(session: AsyncSession, user_id: int, request_id: int) -
     return request
 
 
+async def delete_request_for_admin(session: AsyncSession, request_id: int) -> Request | None:
+    query = await session.execute(select(Request).where(Request.id == request_id))
+    request = query.scalar_one_or_none()
+    if request is None:
+        return None
+
+    gate_key_id = int(request.gate_key_id) if request.gate_key_id is not None else None
+    key_ids: list[int] = []
+    if gate_key_id is not None:
+        key_query = await session.execute(
+            select(AccessKey).where(
+                AccessKey.user_id == request.resident_id,
+                AccessKey.external_id == str(gate_key_id),
+            )
+        )
+        key_ids = [int(item.id) for item in key_query.scalars().all()]
+
+    other_active_count = 0
+    if gate_key_id is not None:
+        other_query = await session.execute(
+            select(func.count(Request.id)).where(
+                and_(
+                    Request.id != request.id,
+                    Request.gate_key_id == gate_key_id,
+                    Request.status == "active",
+                )
+            )
+        )
+        other_active_count = int(other_query.scalar_one() or 0)
+
+    user = await session.get(User, request.resident_id)
+    if user is not None and gate_key_id is not None and user.gate_user_id == gate_key_id:
+        user.gate_user_id = None
+        session.add(user)
+
+    if key_ids:
+        await session.execute(update(AccessEventLog).where(AccessEventLog.key_id.in_(key_ids)).values(key_id=None))
+        await session.execute(delete(AccessPermission).where(AccessPermission.key_id.in_(key_ids)))
+        await session.execute(delete(AccessKey).where(AccessKey.id.in_(key_ids)))
+
+    await session.delete(request)
+    await session.flush()
+
+    if other_active_count == 0 and gate_key_id is not None:
+        gate_client.remove_key(gate_key_id)
+
+    await session.commit()
+    return request
+
+
 async def has_access_to_point(session: AsyncSession, user_id: int, access_point_id: int) -> bool:
     query = await session.execute(
         select(Request).where(
@@ -454,6 +504,8 @@ async def has_access_to_point(session: AsyncSession, user_id: int, access_point_
             return True
         if normalized_expires_at >= now:
             return True
+    if access_point_id in _merge_access_point_ids(list(settings.default_access_point_ids), list(settings.gsm_access_point_ids)):
+        return True
     return False
 
 

@@ -173,8 +173,6 @@ def _build_compat_create_payloads(
             hours = 24
 
     default_access_point_ids = _runtime_default_access_point_ids()
-    phone_access_point_ids = _merge_access_point_ids(default_access_point_ids, _runtime_gsm_access_point_ids())
-
     requests: list[CreateRequestRequest] = []
     if payload.carNumber:
         requests.append(
@@ -184,20 +182,6 @@ def _build_compat_create_payloads(
                 phone_number=payload.phoneNumber or contact_phone_number,
                 resident_name=payload.residentName,
                 access_point_ids=default_access_point_ids,
-                is_permanent=payload.isPermanent,
-                is_courier=payload.isCourier,
-                hours=None if payload.isPermanent else (hours or 24),
-                plot_number=payload.plotNumber,
-            )
-        )
-    if payload.phoneNumber:
-        requests.append(
-            CreateRequestRequest(
-                key_type="Phone",
-                key_value=payload.phoneNumber,
-                phone_number=payload.phoneNumber,
-                resident_name=payload.residentName,
-                access_point_ids=phone_access_point_ids,
                 is_permanent=payload.isPermanent,
                 is_courier=payload.isCourier,
                 hours=None if payload.isPermanent else (hours or 24),
@@ -301,6 +285,12 @@ async def compat_create_pass(
     user: User = Depends(get_current_user),
 ) -> CompatPassItem:
     contact_phone_number = (user.phone or "").strip() or None
+    if not payload.carNumber:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "missing_vehicle_number", "message": "Vehicle number is required to create a pass"},
+        )
+
     if payload.carNumber and not (payload.phoneNumber or contact_phone_number):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

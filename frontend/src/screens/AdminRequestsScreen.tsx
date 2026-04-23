@@ -1,5 +1,5 @@
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Alert, FlatList, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -65,6 +65,7 @@ export const AdminRequestsScreen = ({ navigation }: Props) => {
   const [requests, setRequests] = useState<AdminRequestItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loadState, setLoadState] = useState<RequestState>('idle');
+  const [actionState, setActionState] = useState<RequestState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
@@ -146,15 +147,59 @@ export const AdminRequestsScreen = ({ navigation }: Props) => {
     [],
   );
 
+  const confirmDeleteRequest = useCallback(
+    (item: AdminRequestItem) => {
+      const runDelete = async () => {
+        setActionState('loading');
+        setError(null);
+
+        try {
+          await apiAdminService.deleteRequest(item.id);
+          setCopyFeedback(`Пропуск #${item.id} удалён`);
+          await loadRequests(false);
+          setActionState('success');
+        } catch (deleteError) {
+          const message = deleteError instanceof Error ? deleteError.message : 'Не удалось удалить пропуск';
+          setError(message);
+          setActionState('error');
+        }
+      };
+
+      if (Platform.OS === 'web' && typeof globalThis.confirm === 'function') {
+        if (globalThis.confirm(`Удалить пропуск?\n${item.resident.fullName || item.resident.login}\n${item.keyValue}`)) {
+          void runDelete();
+        }
+        return;
+      }
+
+      Alert.alert('Удалить пропуск?', `${item.resident.fullName || item.resident.login}\n${item.keyValue}`, [
+        { text: 'Отмена', style: 'cancel' },
+        {
+          text: 'Удалить',
+          style: 'destructive',
+          onPress: () => {
+            void runDelete();
+          },
+        },
+      ]);
+    },
+    [loadRequests],
+  );
+
   const keyExtractor = useCallback((item: AdminRequestItem) => item.id, []);
 
   const renderItem = useCallback(
     ({ item }: { item: AdminRequestItem }) => (
       <View style={[styles.cardWrap, metrics.isDesktop && styles.cardWrapDesktop]}>
-        <AdminRequestCard item={item} onCopyRequest={handleCopyRequest} onCopyText={handleCopyText} />
+        <AdminRequestCard
+          item={item}
+          onCopyRequest={handleCopyRequest}
+          onCopyText={handleCopyText}
+          onDeleteRequest={confirmDeleteRequest}
+        />
       </View>
     ),
-    [handleCopyRequest, handleCopyText, metrics.isDesktop],
+    [confirmDeleteRequest, handleCopyRequest, handleCopyText, metrics.isDesktop],
   );
 
   const listHeader = useMemo(
@@ -244,7 +289,7 @@ export const AdminRequestsScreen = ({ navigation }: Props) => {
             showsVerticalScrollIndicator={false}
           />
 
-          <LoadingOverlay visible={loadState === 'loading'} />
+          <LoadingOverlay visible={loadState === 'loading' || actionState === 'loading'} />
         </View>
       </SafeAreaView>
     </AppBackground>

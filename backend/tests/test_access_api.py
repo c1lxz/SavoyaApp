@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from backend.app.config import get_settings
 from backend.app.database import SessionLocal
-from backend.app.models import AccessEventLog, AccessKey, AccessPermission, Request, User
+from backend.app.models import AccessEventLog, AccessKey, AccessPermission, AccessPoint, Request, User
 from backend.app.services.access import process_courier_gate_entry_events
 from backend.app.services.auth import hash_password
 from backend.app.services.gate import GateOpenResult, gate_client
@@ -77,6 +77,27 @@ async def _insert_active_courier_request(user_id: int, access_point_id: int, gat
         return request_id
 
 
+async def _ensure_access_point(access_point_id: int, *, name: str, point_type: str = "gate") -> None:
+    async with SessionLocal() as session:
+        point = await session.get(AccessPoint, access_point_id)
+        if point is None:
+            session.add(
+                AccessPoint(
+                    id=access_point_id,
+                    name=name,
+                    code=f"test-{access_point_id}",
+                    type=point_type,
+                    is_active=True,
+                )
+            )
+        else:
+            point.name = name
+            point.code = point.code or f"test-{access_point_id}"
+            point.type = point_type
+            point.is_active = True
+        await session.commit()
+
+
 async def _age_latest_open_event(user_id: int, access_point_id: int, seconds: int) -> None:
     async with SessionLocal() as session:
         query = await session.execute(
@@ -118,15 +139,15 @@ def _create_permanent_request(client, headers: dict[str, str], access_point_ids:
     assert response.status_code == 200
 
 
-def test_access_open_success_for_allowed_point(client):
+def test_access_open_success_for_account_without_pass(client):
     headers, _ = _create_user_and_login(client)
-    _create_permanent_request(client, headers, [1])
+    entry_point_id = get_settings().gate_action_map["entry"]
 
     points = client.get("/api/access/points/my", headers=headers)
     assert points.status_code == 200
-    assert any(item["id"] == 1 for item in points.json())
+    assert any(item["id"] == entry_point_id for item in points.json())
 
-    opened = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
+    opened = client.post("/api/access/open", headers=headers, json={"access_point_id": entry_point_id})
     assert opened.status_code == 200
     body = opened.json()
     assert body["status"] == "success"
@@ -135,25 +156,25 @@ def test_access_open_success_for_allowed_point(client):
 
 def test_access_open_forbidden_without_permission(client):
     headers, _ = _create_user_and_login(client)
-    _create_permanent_request(client, headers, [1])
+    asyncio.run(_ensure_access_point(99, name="Restricted Test Gate"))
 
-    opened = client.post("/api/access/open", headers=headers, json={"access_point_id": 2})
+    opened = client.post("/api/access/open", headers=headers, json={"access_point_id": 99})
     assert opened.status_code == 403
     assert opened.json()["detail"]["code"] == "forbidden"
 
 
 def test_access_open_fails_without_key(client):
     headers, user_id = _create_user_and_login(client)
-    asyncio.run(_insert_active_request_without_key(user_id, 3))
+    asyncio.run(_ensure_access_point(98, name="Request Only Gate"))
+    asyncio.run(_insert_active_request_without_key(user_id, 98))
 
-    opened = client.post("/api/access/open", headers=headers, json={"access_point_id": 3})
+    opened = client.post("/api/access/open", headers=headers, json={"access_point_id": 98})
     assert opened.status_code == 404
     assert opened.json()["detail"]["code"] == "key_not_found"
 
 
 def test_access_open_fails_for_missing_access_point(client):
     headers, _ = _create_user_and_login(client)
-    _create_permanent_request(client, headers, [1])
 
     opened = client.post("/api/access/open", headers=headers, json={"access_point_id": 99999})
     assert opened.status_code == 404
@@ -162,39 +183,42 @@ def test_access_open_fails_for_missing_access_point(client):
 
 def test_access_open_duplicate_request(client):
     headers, _ = _create_user_and_login(client)
-    _create_permanent_request(client, headers, [1])
+    entry_point_id = get_settings().gate_action_map["entry"]
 
-    first = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
+    first = client.post("/api/access/open", headers=headers, json={"access_point_id": entry_point_id})
     assert first.status_code == 200
 
-    second = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
+    second = client.post("/api/access/open", headers=headers, json={"access_point_id": entry_point_id})
     assert second.status_code == 409
     assert second.json()["detail"]["code"] == "duplicate_request"
 
 
 def test_access_open_cooldown_is_per_user_and_access_point(client):
     headers, user_id = _create_user_and_login(client)
-    _create_permanent_request(client, headers, [1, 2, 3])
+    settings = get_settings()
+    entry_point_id = settings.gate_action_map["entry"]
+    exit_point_id = settings.gate_action_map["exit"]
+    wicket_point_id = settings.gate_action_map["wicket_north"]
 
-    first_entry = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
+    first_entry = client.post("/api/access/open", headers=headers, json={"access_point_id": entry_point_id})
     assert first_entry.status_code == 200
-    asyncio.run(_age_latest_open_event(user_id, 1, seconds=6))
+    asyncio.run(_age_latest_open_event(user_id, entry_point_id, seconds=6))
 
-    repeated_entry = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
+    repeated_entry = client.post("/api/access/open", headers=headers, json={"access_point_id": entry_point_id})
     assert repeated_entry.status_code == 429
     repeated_entry_detail = repeated_entry.json()["detail"]
     assert repeated_entry_detail["code"] == "open_cooldown"
     assert "Подождите" in repeated_entry_detail["message"]
     assert repeated_entry_detail["retry_after_seconds"] <= 10
 
-    other_barrier = client.post("/api/access/open", headers=headers, json={"access_point_id": 2})
+    other_barrier = client.post("/api/access/open", headers=headers, json={"access_point_id": exit_point_id})
     assert other_barrier.status_code == 200
 
-    first_wicket = client.post("/api/access/open", headers=headers, json={"access_point_id": 3})
+    first_wicket = client.post("/api/access/open", headers=headers, json={"access_point_id": wicket_point_id})
     assert first_wicket.status_code == 200
-    asyncio.run(_age_latest_open_event(user_id, 3, seconds=6))
+    asyncio.run(_age_latest_open_event(user_id, wicket_point_id, seconds=6))
 
-    repeated_wicket = client.post("/api/access/open", headers=headers, json={"access_point_id": 3})
+    repeated_wicket = client.post("/api/access/open", headers=headers, json={"access_point_id": wicket_point_id})
     assert repeated_wicket.status_code == 429
     repeated_wicket_detail = repeated_wicket.json()["detail"]
     assert repeated_wicket_detail["code"] == "open_cooldown"
@@ -204,7 +228,6 @@ def test_access_open_cooldown_is_per_user_and_access_point(client):
 def test_compat_gate_open_returns_cooldown_message(client):
     headers, user_id = _create_user_and_login(client)
     entry_point_id = get_settings().gate_action_map["entry"]
-    _create_permanent_request(client, headers, [entry_point_id])
 
     first = client.post("/gates/open-action", headers=headers, json={"action": "entry"})
     assert first.status_code == 200
@@ -222,7 +245,7 @@ def test_compat_gate_open_returns_cooldown_message(client):
 
 def test_access_open_integration_error(client):
     headers, _ = _create_user_and_login(client)
-    _create_permanent_request(client, headers, [2])
+    entry_point_id = get_settings().gate_action_map["entry"]
 
     original = gate_client.open_access_point
     gate_client.open_access_point = lambda access_point_id, key_external_id=None: GateOpenResult(
@@ -231,7 +254,7 @@ def test_access_open_integration_error(client):
         code="integration_unavailable",
     )
     try:
-        opened = client.post("/api/access/open", headers=headers, json={"access_point_id": 2})
+        opened = client.post("/api/access/open", headers=headers, json={"access_point_id": entry_point_id})
         assert opened.status_code == 200
         body = opened.json()
         assert body["status"] == "failed"
@@ -242,7 +265,7 @@ def test_access_open_integration_error(client):
 
 def test_access_open_bridge_exception_records_failed_event_and_allows_retry(client):
     headers, _ = _create_user_and_login(client)
-    _create_permanent_request(client, headers, [2])
+    entry_point_id = get_settings().gate_action_map["entry"]
 
     original = gate_client.open_access_point
 
@@ -251,7 +274,7 @@ def test_access_open_bridge_exception_records_failed_event_and_allows_retry(clie
 
     gate_client.open_access_point = _raise_bridge_error
     try:
-        failed = client.post("/api/access/open", headers=headers, json={"access_point_id": 2})
+        failed = client.post("/api/access/open", headers=headers, json={"access_point_id": entry_point_id})
         assert failed.status_code == 200
         failed_body = failed.json()
         assert failed_body["status"] == "failed"
@@ -260,7 +283,7 @@ def test_access_open_bridge_exception_records_failed_event_and_allows_retry(clie
     finally:
         gate_client.open_access_point = original
 
-    retry = client.post("/api/access/open", headers=headers, json={"access_point_id": 2})
+    retry = client.post("/api/access/open", headers=headers, json={"access_point_id": entry_point_id})
     assert retry.status_code == 200
     assert retry.json()["status"] == "success"
 
@@ -272,9 +295,9 @@ def test_access_open_bridge_exception_records_failed_event_and_allows_retry(clie
 
 def test_access_events_are_logged(client):
     headers, _ = _create_user_and_login(client)
-    _create_permanent_request(client, headers, [1])
+    entry_point_id = get_settings().gate_action_map["entry"]
 
-    opened = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
+    opened = client.post("/api/access/open", headers=headers, json={"access_point_id": entry_point_id})
     request_id = opened.json()["request_id"]
 
     events = client.get("/api/access/events/my", headers=headers)
@@ -285,7 +308,7 @@ def test_access_events_are_logged(client):
 
 def test_access_events_include_gate_diagnostics(client):
     headers, _ = _create_user_and_login(client)
-    _create_permanent_request(client, headers, [1])
+    entry_point_id = get_settings().gate_action_map["entry"]
 
     original = gate_client.open_access_point
     gate_client.open_access_point = lambda access_point_id, key_external_id=None: GateOpenResult(
@@ -294,7 +317,7 @@ def test_access_events_include_gate_diagnostics(client):
         details={"transport": "dry_run", "packet": {"frame_hex": "2026073"}},
     )
     try:
-        opened = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
+        opened = client.post("/api/access/open", headers=headers, json={"access_point_id": entry_point_id})
         assert opened.status_code == 200
         request_id = opened.json()["request_id"]
 
@@ -309,14 +332,15 @@ def test_access_events_include_gate_diagnostics(client):
 
 def test_access_open_entry_schedules_courier_request_expiration(client):
     headers, user_id = _create_user_and_login(client)
-    request_id = asyncio.run(_insert_active_courier_request(user_id, 1, 200501))
+    entry_point_id = get_settings().gate_action_map["entry"]
+    request_id = asyncio.run(_insert_active_courier_request(user_id, entry_point_id, 200501))
 
     removed_key_ids: list[int] = []
     original_remove_key = gate_client.remove_key
     gate_client.remove_key = lambda key_id: removed_key_ids.append(int(key_id)) or True
     try:
         opened_at = datetime.now(timezone.utc)
-        opened = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
+        opened = client.post("/api/access/open", headers=headers, json={"access_point_id": entry_point_id})
         assert opened.status_code == 200
         assert opened.json()["status"] == "success"
     finally:
@@ -351,9 +375,10 @@ def test_access_open_entry_schedules_courier_request_expiration(client):
 
 def test_cleanup_expired_courier_request_removes_gate_key_after_entry_ttl(client):
     headers, user_id = _create_user_and_login(client)
-    request_id = asyncio.run(_insert_active_courier_request(user_id, 1, 200551))
+    entry_point_id = get_settings().gate_action_map["entry"]
+    request_id = asyncio.run(_insert_active_courier_request(user_id, entry_point_id, 200551))
 
-    opened = client.post("/api/access/open", headers=headers, json={"access_point_id": 1})
+    opened = client.post("/api/access/open", headers=headers, json={"access_point_id": entry_point_id})
     assert opened.status_code == 200
 
     async def _expire_and_cleanup() -> None:
@@ -398,13 +423,14 @@ def test_cleanup_expired_courier_request_removes_gate_key_after_entry_ttl(client
 
 def test_access_open_exit_does_not_complete_courier_request(client):
     headers, user_id = _create_user_and_login(client)
-    request_id = asyncio.run(_insert_active_courier_request(user_id, 2, 200601))
+    exit_point_id = get_settings().gate_action_map["exit"]
+    request_id = asyncio.run(_insert_active_courier_request(user_id, exit_point_id, 200601))
 
     removed_key_ids: list[int] = []
     original_remove_key = gate_client.remove_key
     gate_client.remove_key = lambda key_id: removed_key_ids.append(int(key_id)) or True
     try:
-        opened = client.post("/api/access/open", headers=headers, json={"access_point_id": 2})
+        opened = client.post("/api/access/open", headers=headers, json={"access_point_id": exit_point_id})
         assert opened.status_code == 200
         assert opened.json()["status"] == "success"
     finally:
@@ -422,7 +448,7 @@ def test_access_open_exit_does_not_complete_courier_request(client):
     asyncio.run(_assert_request_still_active())
 
 
-def test_access_open_entry_schedules_vehicle_and_phone_courier_companions(client):
+def test_access_open_entry_schedules_created_courier_vehicle_request(client):
     headers, user_id = _create_user_and_login(client)
     entry_point_id = get_settings().gate_action_map["entry"]
     phone_number = f"7911{str(uuid4().int)[:7]}"
@@ -440,7 +466,7 @@ def test_access_open_entry_schedules_vehicle_and_phone_courier_companions(client
     )
     assert create_response.status_code == 200
 
-    async def _active_courier_request_ids() -> list[int]:
+    async def _active_courier_row() -> Request:
         async with SessionLocal() as session:
             query = await session.execute(
                 select(Request)
@@ -448,40 +474,34 @@ def test_access_open_entry_schedules_vehicle_and_phone_courier_companions(client
                 .order_by(Request.id)
             )
             rows = list(query.scalars().all())
-            assert {row.key_type for row in rows} == {"VehicleNumber", "Phone"}
-            return [int(row.id) for row in rows]
+            assert len(rows) == 1
+            return rows[0]
 
-    request_ids = asyncio.run(_active_courier_request_ids())
+    courier_row = asyncio.run(_active_courier_row())
+    assert courier_row.key_type == "VehicleNumber"
+    assert courier_row.contact_phone == phone_number
     opened_at = datetime.now(timezone.utc)
     opened = client.post("/api/access/open", headers=headers, json={"access_point_id": entry_point_id})
     assert opened.status_code == 200
-    body = opened.json()
-    assert body["status"] == "success"
+    assert opened.json()["status"] == "success"
 
-    async def _assert_all_courier_requests_scheduled() -> None:
+    async def _assert_courier_request_scheduled() -> None:
         async with SessionLocal() as session:
-            query = await session.execute(
-                select(Request)
-                .where(Request.resident_id == user_id, Request.is_courier.is_(True))
-                .order_by(Request.id)
-            )
-            rows = list(query.scalars().all())
-            assert len(rows) == 2
-            assert sorted(row.id for row in rows) == sorted(request_ids)
-            assert all(row.status == "active" for row in rows)
-            assert all(row.cancelled_at is None for row in rows)
-            expires_values = {row.expires_at for row in rows}
-            assert len(expires_values) == 1
-            expires_at = next(iter(expires_values))
-            assert expires_at is not None
+            row = await session.get(Request, courier_row.id)
+            assert row is not None
+            assert row.status == "active"
+            assert row.cancelled_at is None
+            assert row.contact_phone == phone_number
+            assert row.expires_at is not None
+            expires_at = row.expires_at
             normalized = expires_at.replace(tzinfo=timezone.utc) if expires_at.tzinfo is None else expires_at
             remaining = normalized - opened_at
             assert timedelta(hours=1, minutes=59) <= remaining <= timedelta(hours=2, minutes=1)
 
-    asyncio.run(_assert_all_courier_requests_scheduled())
+    asyncio.run(_assert_courier_request_scheduled())
 
 
-def test_gate_entry_event_schedules_phone_opened_courier_pass(client):
+def test_gate_entry_event_schedules_vehicle_only_courier_pass(client):
     headers, user_id = _create_user_and_login(client)
     entry_point_id = get_settings().gate_action_map["entry"]
     phone_number = f"7922{str(uuid4().int)[:7]}"
@@ -499,34 +519,19 @@ def test_gate_entry_event_schedules_phone_opened_courier_pass(client):
     )
     assert create_response.status_code == 200
 
-    async def _active_courier_rows() -> list[Request]:
+    async def _active_courier_row() -> Request:
         async with SessionLocal() as session:
             query = await session.execute(
                 select(Request)
                 .where(Request.resident_id == user_id, Request.status == "active", Request.is_courier.is_(True))
                 .order_by(Request.id)
             )
-            return list(query.scalars().all())
+            rows = list(query.scalars().all())
+            assert len(rows) == 1
+            return rows[0]
 
-    active_rows = asyncio.run(_active_courier_rows())
-    assert {row.key_type for row in active_rows} == {"VehicleNumber", "Phone"}
-    phone_row = next(row for row in active_rows if row.key_type == "Phone")
-
-    async def _remove_entry_reader_from_vehicle_part() -> None:
-        async with SessionLocal() as session:
-            query = await session.execute(
-                select(Request).where(
-                    Request.resident_id == user_id,
-                    Request.status == "active",
-                    Request.is_courier.is_(True),
-                    Request.key_type == "VehicleNumber",
-                )
-            )
-            vehicle_row = query.scalar_one()
-            vehicle_row.access_point_ids = [point_id for point_id in vehicle_row.access_point_ids if point_id != entry_point_id]
-            await session.commit()
-
-    asyncio.run(_remove_entry_reader_from_vehicle_part())
+    courier_row = asyncio.run(_active_courier_row())
+    assert courier_row.key_type == "VehicleNumber"
 
     async def _process_gate_event() -> int:
         async with SessionLocal() as session:
@@ -540,8 +545,8 @@ def test_gate_entry_event_schedules_phone_opened_courier_pass(client):
                         "access_point_id": entry_point_id,
                         "unit": "Считыватель въезд GSM",
                         "message": "Проход по ключу разрешен",
-                        "name": phone_number,
-                        "user_ptr": phone_row.gate_key_id,
+                        "name": courier_row.key_value,
+                        "user_ptr": courier_row.gate_key_id,
                     },
                     {
                         "index": 900002,
@@ -551,29 +556,22 @@ def test_gate_entry_event_schedules_phone_opened_courier_pass(client):
                         "unit": "Считыватель въезд GSM",
                         "message": "Проход совершен",
                         "name": phone_number,
-                        "user_ptr": phone_row.gate_key_id,
+                        "user_ptr": courier_row.gate_key_id,
                     },
                 ],
             )
 
     event_at = datetime.now(timezone.utc)
     scheduled_count = asyncio.run(_process_gate_event())
-    assert scheduled_count == 2
+    assert scheduled_count == 1
 
     async def _assert_courier_event_schedule() -> None:
         async with SessionLocal() as session:
-            query = await session.execute(
-                select(Request)
-                .where(Request.resident_id == user_id, Request.is_courier.is_(True))
-                .order_by(Request.id)
-            )
-            rows = list(query.scalars().all())
-            assert len(rows) == 2
-            assert all(row.status == "active" for row in rows)
-            expires_values = {row.expires_at for row in rows}
-            assert len(expires_values) == 1
-            expires_at = next(iter(expires_values))
-            assert expires_at is not None
+            row = await session.get(Request, courier_row.id)
+            assert row is not None
+            assert row.status == "active"
+            assert row.expires_at is not None
+            expires_at = row.expires_at
             normalized = expires_at.replace(tzinfo=timezone.utc) if expires_at.tzinfo is None else expires_at
             remaining = normalized - event_at
             assert timedelta(hours=1, minutes=59) <= remaining <= timedelta(hours=2, minutes=1)
@@ -583,15 +581,15 @@ def test_gate_entry_event_schedules_phone_opened_courier_pass(client):
             )
             log = log_query.scalar_one()
             assert log.action == "courier_gate_entry"
-            assert sorted(log.details["courier_scheduled_request_ids"]) == sorted([row.id for row in rows])
+            assert log.details["courier_scheduled_request_ids"] == [courier_row.id]
             assert log.details["courier_cleanup"] == "scheduled_after_entry"
 
     asyncio.run(_assert_courier_event_schedule())
 
 
-def test_gate_entry_event_schedules_vehicle_camera_opened_courier_pass(client):
+def test_gate_entry_event_schedules_vehicle_only_courier_pass_when_reader_looks_like_entry(client):
     headers, user_id = _create_user_and_login(client)
-    entry_point_id = get_settings().gate_action_map["entry"]
+    wicket_point_id = get_settings().gate_action_map["wicket_admin"]
     phone_number = f"7933{str(uuid4().int)[:7]}"
     create_response = client.post(
         "/passes",
@@ -607,20 +605,22 @@ def test_gate_entry_event_schedules_vehicle_camera_opened_courier_pass(client):
     )
     assert create_response.status_code == 200
 
-    async def _active_courier_rows() -> list[Request]:
+    async def _active_courier_row() -> Request:
         async with SessionLocal() as session:
             query = await session.execute(
                 select(Request)
                 .where(Request.resident_id == user_id, Request.status == "active", Request.is_courier.is_(True))
                 .order_by(Request.id)
             )
-            return list(query.scalars().all())
+            rows = list(query.scalars().all())
+            assert len(rows) == 1
+            return rows[0]
 
-    active_rows = asyncio.run(_active_courier_rows())
-    assert {row.key_type for row in active_rows} == {"VehicleNumber", "Phone"}
-    vehicle_row = next(row for row in active_rows if row.key_type == "VehicleNumber")
+    courier_row = asyncio.run(_active_courier_row())
+    assert courier_row.key_type == "VehicleNumber"
+    original_expires_at = courier_row.expires_at
 
-    async def _process_camera_event() -> int:
+    async def _process_non_entry_event() -> int:
         async with SessionLocal() as session:
             return await process_courier_gate_entry_events(
                 session,
@@ -629,41 +629,37 @@ def test_gate_entry_event_schedules_vehicle_camera_opened_courier_pass(client):
                         "index": 900101,
                         "event_type": 1,
                         "event_code": 2,
-                        "access_point_id": entry_point_id,
+                        "access_point_id": wicket_point_id,
                         "unit": "Камера Въезда",
                         "message": "Проход по ключу разрешен",
-                        "name": vehicle_row.key_value,
-                        "user_ptr": vehicle_row.gate_key_id,
+                        "name": courier_row.key_value,
+                        "user_ptr": courier_row.gate_key_id,
                     }
                 ],
             )
 
-    scheduled_count = asyncio.run(_process_camera_event())
-    assert scheduled_count == 2
+    scheduled_count = asyncio.run(_process_non_entry_event())
+    assert scheduled_count == 1
 
-    async def _assert_camera_event_schedule() -> None:
+    async def _assert_entry_like_event_schedule() -> None:
         async with SessionLocal() as session:
-            query = await session.execute(
-                select(Request)
-                .where(Request.resident_id == user_id, Request.is_courier.is_(True))
-                .order_by(Request.id)
-            )
-            rows = list(query.scalars().all())
-            assert len(rows) == 2
-            assert all(row.status == "active" for row in rows)
-            assert all(row.expires_at is not None for row in rows)
+            row = await session.get(Request, courier_row.id)
+            assert row is not None
+            assert row.status == "active"
+            assert row.expires_at is not None
+            assert row.expires_at != original_expires_at
 
             log_query = await session.execute(
                 select(AccessEventLog).where(AccessEventLog.request_id == "gate-entry-900101")
             )
             log = log_query.scalar_one()
             assert log.action == "courier_gate_entry"
-            assert sorted(log.details["courier_scheduled_request_ids"]) == sorted([row.id for row in rows])
+            assert log.details["courier_scheduled_request_ids"] == [courier_row.id]
 
-    asyncio.run(_assert_camera_event_schedule())
+    asyncio.run(_assert_entry_like_event_schedule())
 
 
-def test_gate_entry_event_schedules_gsm_phone_opened_courier_pass(client):
+def test_vehicle_only_courier_passes_do_not_create_phone_rows(client):
     headers, user_id = _create_user_and_login(client)
     gsm_entry_point_id = get_settings().gate_action_map["wicket_admin"]
     phone_number = f"7944{str(uuid4().int)[:7]}"
@@ -680,6 +676,21 @@ def test_gate_entry_event_schedules_gsm_phone_opened_courier_pass(client):
         },
     )
     assert create_response.status_code == 200
+
+    async def _courier_rows() -> list[Request]:
+        async with SessionLocal() as session:
+            query = await session.execute(
+                select(Request)
+                .where(Request.resident_id == user_id, Request.status == "active", Request.is_courier.is_(True))
+                .order_by(Request.id)
+            )
+            return list(query.scalars().all())
+
+    rows = asyncio.run(_courier_rows())
+    assert len(rows) == 1
+    assert rows[0].key_type == "VehicleNumber"
+    assert rows[0].contact_phone == phone_number
+    return
 
     async def _phone_row() -> Request:
         async with SessionLocal() as session:

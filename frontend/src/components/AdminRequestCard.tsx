@@ -12,6 +12,7 @@ type AdminRequestCardProps = {
   item: AdminRequestItem;
   onCopyRequest: (item: AdminRequestItem) => void;
   onCopyText: (value: string) => void;
+  onDeleteRequest: (item: AdminRequestItem) => void;
 };
 
 const statusMeta: Record<
@@ -43,10 +44,24 @@ const statusMeta: Record<
   },
 };
 
-const ActionButton = ({ label, icon, onPress }: { label: string; icon: string; onPress: () => void }) => (
-  <Pressable style={styles.actionButton} onPress={onPress}>
-    <MaterialCommunityIcons name={icon as never} size={18} color={theme.colors.textPrimary} />
-    <Text style={styles.actionLabel}>{label}</Text>
+const ActionButton = ({
+  label,
+  icon,
+  onPress,
+  danger = false,
+}: {
+  label: string;
+  icon: string;
+  onPress: () => void;
+  danger?: boolean;
+}) => (
+  <Pressable style={[styles.actionButton, danger && styles.actionButtonDanger]} onPress={onPress}>
+    <MaterialCommunityIcons
+      name={icon as never}
+      size={18}
+      color={danger ? theme.colors.danger : theme.colors.textPrimary}
+    />
+    <Text style={[styles.actionLabel, danger && styles.actionLabelDanger]}>{label}</Text>
   </Pressable>
 );
 
@@ -57,7 +72,7 @@ const MetaLine = ({ label, value }: { label: string; value: string }) => (
   </View>
 );
 
-const AdminRequestCardComponent = ({ item, onCopyRequest, onCopyText }: AdminRequestCardProps) => {
+const AdminRequestCardComponent = ({ item, onCopyRequest, onCopyText, onDeleteRequest }: AdminRequestCardProps) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
   const resolvedKey = formatAdminRequestKey(item);
@@ -104,6 +119,12 @@ const AdminRequestCardComponent = ({ item, onCopyRequest, onCopyText }: AdminReq
         {item.phoneNumber ? (
           <ActionButton label="Копировать телефон" icon="phone-outline" onPress={() => onCopyText(item.phoneNumber ?? '')} />
         ) : null}
+        <ActionButton
+          label="Удалить пропуск"
+          icon="trash-can-outline"
+          onPress={() => onDeleteRequest(item)}
+          danger
+        />
       </View>
     </View>
   );
@@ -183,9 +204,16 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.cardStrong,
   },
+  actionButtonDanger: {
+    backgroundColor: 'rgba(88, 41, 41, 0.32)',
+    borderColor: 'rgba(225, 132, 132, 0.45)',
+  },
   actionLabel: {
     color: theme.colors.textPrimary,
     fontSize: 14,
     fontWeight: '600',
+  },
+  actionLabelDanger: {
+    color: theme.colors.danger,
   },
 });
