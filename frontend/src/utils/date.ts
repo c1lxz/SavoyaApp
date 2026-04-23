@@ -23,6 +23,18 @@ export const formatDateTime = (input: string | number | Date): string => {
   }).format(date);
 };
 
+export const addDays = (input: string | number | Date, days: number): Date => {
+  const date = new Date(input);
+  date.setDate(date.getDate() + days);
+  return date;
+};
+
+export const endOfDay = (input: string | number | Date): Date => {
+  const date = new Date(input);
+  date.setHours(23, 59, 59, 999);
+  return date;
+};
+
 export const formatDateInput = (value: string): string => {
   const digits = value.replace(/\D/g, '').slice(0, 8);
 
@@ -62,7 +74,5 @@ export const parseDateInput = (value: string): Date | null => {
 };
 
 export const toIsoDate = (date: Date): string => {
-  const normalized = new Date(date);
-  normalized.setHours(23, 59, 59, 999);
-  return normalized.toISOString();
+  return endOfDay(date).toISOString();
 };

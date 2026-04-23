@@ -15,7 +15,7 @@ import { useAuthStore } from '@/store/authStore';
 import { usePassesStore } from '@/store/passesStore';
 import { theme } from '@/theme';
 import { goBackOrHome } from '@/utils/backNavigation';
-import { formatDate, formatDateInput, parseDateInput, toIsoDate } from '@/utils/date';
+import { addDays, endOfDay, formatDate, formatDateInput, formatDateTime, parseDateInput, toIsoDate } from '@/utils/date';
 import { getLayoutMetrics } from '@/utils/layout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CreatePass'>;
@@ -51,6 +51,8 @@ export const CreatePassScreen = ({ navigation }: Props) => {
   const [draftLoaded, setDraftLoaded] = useState(false);
 
   const parsedExpiresAt = parseDateInput(expiresAtInput);
+  const actualExpiresAtPreview = parsedExpiresAt ? endOfDay(parsedExpiresAt) : null;
+  const displayedPassDatePreview = parsedExpiresAt ? addDays(parsedExpiresAt, 1) : null;
 
   useEffect(() => {
     let isCancelled = false;
@@ -212,7 +214,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
 
               <View style={isPermanent && styles.dateDisabled}>
                 <AppInput
-                  label="Дата окончания"
+                  label="По"
                   value={expiresAtInput}
                   onChangeText={onExpiresAtChange}
                   placeholder="ДД.ММ.ГГГГ"
@@ -239,6 +241,13 @@ export const CreatePassScreen = ({ navigation }: Props) => {
                   }
                 />
               </View>
+
+              {!isPermanent && actualExpiresAtPreview ? (
+                <View style={styles.datePreviewWrap}>
+                  <Text style={styles.datePreviewText}>{`На экране: По ${formatDate(displayedPassDatePreview as Date)}`}</Text>
+                  <Text style={styles.datePreviewText}>{`Фактически работает до ${formatDateTime(actualExpiresAtPreview)}`}</Text>
+                </View>
+              ) : null}
 
               <Pressable
                 style={styles.checkboxRow}
@@ -315,6 +324,13 @@ const styles = StyleSheet.create({
   form: {},
   dateDisabled: {
     opacity: 0.6,
+  },
+  datePreviewWrap: {
+    gap: 4,
+  },
+  datePreviewText: {
+    color: theme.colors.textMuted,
+    fontSize: 14,
   },
   checkboxRow: {
     flexDirection: 'row',

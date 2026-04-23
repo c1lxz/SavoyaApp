@@ -259,16 +259,30 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
 
     is_permanent = payload.is_permanent
     request_hours = payload.hours
+    requested_expires_at = ensure_utc_datetime(payload.expires_at)
+    now = utcnow()
 
     if payload.is_courier and settings.courier_ttl_only_enabled:
         is_permanent = False
-        base_hours = request_hours if request_hours is not None else settings.courier_default_hours
-        request_hours = min(base_hours, settings.courier_max_hours)
+        if requested_expires_at is not None:
+            max_expires_at = now + timedelta(hours=settings.courier_max_hours)
+            requested_expires_at = min(requested_expires_at, max_expires_at)
+        else:
+            base_hours = request_hours if request_hours is not None else settings.courier_default_hours
+            request_hours = min(base_hours, settings.courier_max_hours)
 
     expires_at: datetime | None = None
     if not is_permanent:
-        hours = request_hours if request_hours is not None else 24
-        expires_at = utcnow() + timedelta(hours=hours)
+        if requested_expires_at is not None:
+            if requested_expires_at <= now:
+                raise RequestIntegrationError(
+                    code="invalid_expires_at",
+                    message="Pass expiry must be in the future",
+                )
+            expires_at = requested_expires_at
+        else:
+            hours = request_hours if request_hours is not None else 24
+            expires_at = now + timedelta(hours=hours)
 
     try:
         resident_name = (payload.resident_name or "").strip() or user.name or user.login or "Resident"

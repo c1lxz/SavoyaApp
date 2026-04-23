@@ -163,6 +163,7 @@ def _build_compat_create_payloads(
     *,
     contact_phone_number: str | None,
 ) -> list[CreateRequestRequest]:
+    expires_at: datetime | None = None
     hours: int | None = None
     if not payload.isPermanent and payload.expiresAt:
         try:
@@ -184,7 +185,8 @@ def _build_compat_create_payloads(
                 access_point_ids=default_access_point_ids,
                 is_permanent=payload.isPermanent,
                 is_courier=payload.isCourier,
-                hours=None if payload.isPermanent else (hours or 24),
+                expires_at=None if payload.isPermanent else expires_at,
+                hours=None if payload.isPermanent else (None if expires_at is not None else (hours or 24)),
                 plot_number=payload.plotNumber,
             )
         )

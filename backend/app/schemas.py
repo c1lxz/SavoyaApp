@@ -69,6 +69,7 @@ class CreateRequestRequest(BaseModel):
     access_point_ids: list[int] = Field(min_length=1)
     is_permanent: bool = False
     is_courier: bool = False
+    expires_at: datetime | None = None
     hours: int | None = Field(default=None, ge=1, le=24 * 365)
     plot_number: str | None = None
 

@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { theme } from '@/theme';
 import { PassItem } from '@/types';
-import { formatDate } from '@/utils/date';
+import { addDays, formatDate, formatDateTime } from '@/utils/date';
 import { getLayoutMetrics } from '@/utils/layout';
 import { formatVehicleLabel } from '@/utils/vehicleCountry';
 import { StatusBadge } from './StatusBadge';
@@ -16,6 +16,7 @@ type PassCardProps = {
 const PassCardComponent = ({ item }: PassCardProps) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
+  const displayDate = item.expiresAt ? addDays(item.expiresAt, 1) : null;
 
   return (
     <View style={styles.card}>
@@ -27,16 +28,22 @@ const PassCardComponent = ({ item }: PassCardProps) => {
           <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>
             {item.keyType === 'Phone' ? 'Телефонный пропуск' : 'Пропуск по номеру ТС'}
           </Text>
-          <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>Участок №{item.plotNumber}</Text>
+          <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>{`Участок №${item.plotNumber}`}</Text>
           {item.isCourier ? (
             <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>Курьерский пропуск</Text>
           ) : null}
           {item.phoneNumber && item.keyType !== 'Phone' ? (
-            <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>Телефон: {item.phoneNumber}</Text>
+            <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>{`Телефон: ${item.phoneNumber}`}</Text>
           ) : null}
           <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>
-            {item.isPermanent ? 'Без срока' : `До ${item.expiresAt ? formatDate(item.expiresAt) : '-'}`}
+            {item.isPermanent ? 'Без срока' : `По ${displayDate ? formatDate(displayDate) : '-'}`}
           </Text>
+          {!item.isPermanent && item.expiresAt ? (
+            <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>
+              {`Фактически работает до ${formatDateTime(item.expiresAt)}`}
+            </Text>
+          ) : null}
+          <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>{`Создан: ${formatDateTime(item.createdAt)}`}</Text>
         </View>
         <View style={[styles.statusWrap, metrics.isShortHeight && styles.statusWrapCompact]}>
           <Ionicons name="checkmark-circle" size={36} color={theme.colors.success} />

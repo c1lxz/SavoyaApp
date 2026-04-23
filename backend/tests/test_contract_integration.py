@@ -197,6 +197,35 @@ def test_temporary_pass_create_and_list_with_sqlite_datetimes(client):
     assert any(item['carNumber'] == car_number for item in rows)
 
 
+def test_temporary_pass_create_preserves_exact_expiry_time(client):
+    login_name = f'exact_expiry_{uuid4().hex[:8]}'
+    password = 'demo123'
+    asyncio.run(_ensure_user(login_name, password, full_name='Exact Expiry User', plot_number='26'))
+
+    login = client.post('/auth/login', json={'login': login_name, 'password': password}).json()
+    token = login['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    requested_expires_at = (datetime.now(timezone.utc) + timedelta(hours=7, minutes=35)).replace(microsecond=0)
+
+    create_response = client.post(
+        '/passes',
+        headers=headers,
+        json={
+            'carNumber': f'E{uuid4().hex[:5]}'.upper(),
+            'plotNumber': '26',
+            'phoneNumber': '+79998887766',
+            'expiresAt': requested_expires_at.isoformat(),
+            'isPermanent': False,
+            'isCourier': False,
+        },
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()
+    created_expires_at = datetime.fromisoformat(created['expiresAt'].replace('Z', '+00:00'))
+
+    assert abs(created_expires_at - requested_expires_at) <= timedelta(minutes=1)
+
+
 def test_passes_create_uses_account_phone_when_phone_number_is_omitted(client):
     login_name = f'account_phone_{uuid4().hex[:8]}'
     password = 'demo123'
