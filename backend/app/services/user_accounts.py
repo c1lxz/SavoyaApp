@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..models import AccessEventLog, AccessKey, AccessPermission, Log, Request, User
 from .gate import gate_client
+from ..utils.datetime import ensure_utc_datetime
 from ..utils.input_safety import (
     normalize_account_phone,
     normalize_full_name,
@@ -245,7 +246,7 @@ def build_admin_user_payload(user: User) -> dict[str, str | int | bool | None | 
         "owner_index": user.owner_index,
         "is_active": user.is_active,
         "password_change_required": user.password_change_required,
-        "created_at": user.created_at,
+        "created_at": ensure_utc_datetime(user.created_at),
     }
 
 

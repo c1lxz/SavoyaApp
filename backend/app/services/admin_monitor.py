@@ -142,7 +142,7 @@ async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) 
         item = AdminMonitorEventItem(
             id=f"app-{event.id}",
             source="app",
-            created_at=event.created_at,
+            created_at=ensure_utc_datetime(event.created_at) or event.created_at,
             status=event.status,
             action=event.action,
             message=event.error_message if event.status == "failed" else "Команда открытия обработана приложением",
@@ -169,7 +169,7 @@ async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) 
         app_context = {
             "item_id": item.id,
             "event_id": event.id,
-            "created_at": event.created_at,
+            "created_at": ensure_utc_datetime(event.created_at) or event.created_at,
             "status": event.status,
             "message": event.error_message if event.status == "failed" else None,
             "request_id": event.request_id,

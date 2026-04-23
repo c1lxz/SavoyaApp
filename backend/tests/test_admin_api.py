@@ -273,6 +273,41 @@ def test_admin_requests_endpoint_supports_filters(client):
     assert body['items'][0]['status'] == 'permanent'
 
 
+def test_admin_requests_endpoint_returns_timezone_aware_timestamps(client):
+    admin_login = f'admin_tz_{uuid4().hex[:6]}'
+    resident_login = f'resident_tz_{uuid4().hex[:6]}'
+    password = 'demo123'
+
+    asyncio.run(_ensure_user(admin_login, password, full_name='Admin Timezone', plot_number='902', is_admin=True))
+    asyncio.run(_ensure_user(resident_login, password, full_name='Resident Timezone', plot_number='304'))
+
+    resident_token = _api_login(client, resident_login, password)
+    create_response = client.post(
+        '/passes',
+        headers={'Authorization': f'Bearer {resident_token}'},
+        json={
+            'carNumber': 'T555TT77',
+            'plotNumber': '304',
+            'phoneNumber': None,
+            'expiresAt': (datetime.now(timezone.utc) + timedelta(hours=5)).isoformat(),
+            'isPermanent': False,
+            'isCourier': False,
+        },
+    )
+    assert create_response.status_code == 200
+
+    admin_token = _api_login(client, admin_login, password)
+    response = client.get('/api/admin/requests', headers={'Authorization': f'Bearer {admin_token}'})
+
+    assert response.status_code == 200
+    body = response.json()
+    item = next(row for row in body['items'] if row['resident']['login'] == resident_login)
+    created_at = datetime.fromisoformat(item['created_at'].replace('Z', '+00:00'))
+    expires_at = datetime.fromisoformat(item['expires_at'].replace('Z', '+00:00'))
+    assert created_at.tzinfo is not None
+    assert expires_at.tzinfo is not None
+
+
 def test_admin_can_delete_request_without_deleting_user(client):
     admin_login = f'admin_delete_request_{uuid4().hex[:6]}'
     resident_login = f'resident_delete_request_{uuid4().hex[:6]}'

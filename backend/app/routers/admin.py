@@ -26,6 +26,7 @@ from ..services.requests import (
     resolve_request_status,
 )
 from ..services.user_accounts import UserAccountError, build_admin_user_payload, create_user_account, delete_user_account
+from ..utils.datetime import ensure_utc_datetime
 from ..utils.vehicle_country import detect_vehicle_country
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -50,10 +51,10 @@ def _to_admin_request_item(item: Request, resident: User) -> AdminRequestItem:
         gate_key_id=item.gate_key_id,
         is_permanent=item.is_permanent,
         is_courier=item.is_courier,
-        expires_at=item.expires_at,
+        expires_at=ensure_utc_datetime(item.expires_at),
         status=resolve_request_status(item.is_permanent, item.expires_at) if item.status == "active" else item.status,
-        created_at=item.created_at,
-        cancelled_at=item.cancelled_at,
+        created_at=ensure_utc_datetime(item.created_at),
+        cancelled_at=ensure_utc_datetime(item.cancelled_at),
         plot_number=item.plot_number,
     )
 
