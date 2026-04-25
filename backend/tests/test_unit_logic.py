@@ -41,6 +41,10 @@ def test_normalize_vehicle_number_converts_cyrillic_lookalikes_to_ascii():
     assert normalize_vehicle_number("а123сх 77") == "A123CX 77"
 
 
+def test_normalize_vehicle_number_supports_real_cyrillic_letters():
+    assert normalize_vehicle_number("\u0430123\u0441\u0445 77") == "A123CX 77"
+
+
 def test_normalize_vehicle_number_rejects_unsupported_cyrillic_letters():
     with pytest.raises(ValueError, match="vehicle_number contains unsupported characters"):
         normalize_vehicle_number("Ж123АА77")

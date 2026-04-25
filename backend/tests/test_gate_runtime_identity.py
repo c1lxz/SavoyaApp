@@ -251,12 +251,13 @@ def test_build_identity_for_phone_populates_required_number(monkeypatch):
     assert identity.number_u == "009991234567"
 
 
-def test_build_identity_for_vehicle_uses_vehicle_number_for_number_u():
+def test_build_identity_for_vehicle_uses_vehicle_number_for_number_u(monkeypatch):
+    monkeypatch.setattr(gate_runtime, "_generate_unique_number_u", lambda cursor: "ABC123NUMBER")
     identity = gate_runtime._build_identity(object(), "VehicleNumber", "A123AA77")
 
     assert identity.number == "A123AA77"
     assert identity.phone is None
-    assert identity.number_u == "A123AA77"
+    assert identity.number_u == "ABC123NUMBER"
 
 
 def test_split_access_expiry_separates_date_and_time():
@@ -583,6 +584,7 @@ def test_upsert_existing_vehicle_user_heals_number_u_field(monkeypatch):
     monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 3)
     monkeypatch.setattr(gate_runtime, "_find_existing_user_ptr", lambda *args, **kwargs: 42)
     monkeypatch.setattr(gate_runtime, "_find_reusable_deleted_user_ptr", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_resolve_vehicle_number_u", lambda *args, **kwargs: "ABC123NUMBER")
     monkeypatch.setattr(gate_runtime, "_ensure_access_permissions", lambda *_args, **_kwargs: None)
 
     user_ptr = gate_runtime._upsert_real_user(
@@ -600,7 +602,7 @@ def test_upsert_existing_vehicle_user_heals_number_u_field(monkeypatch):
     assert user_ptr == 42
     assert any(
         sql == "UPDATE Users SET [Number] = ?, [NumberU] = ? WHERE UserPtr = ?"
-        and params == ("A123AA77", "A123AA77", 42)
+        and params == ("A123AA77", "ABC123NUMBER", 42)
         for sql, params in cursor.commands
     )
 
@@ -749,6 +751,87 @@ def test_sample_phone_user_defaults_prefers_dominant_gsm_group(monkeypatch):
     assert defaults["NoFacility"] is False
 
 
+def test_sample_vehicle_user_defaults_prefers_dominant_nonzero_group(monkeypatch):
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 3)
+    cursor = _TemplateSamplingCursor(
+        access_rows=[
+            SimpleNamespace(
+                UserPtr=77,
+                GroupPtr=0,
+                IdleNotLimited=False,
+                NoFacility=False,
+                BgPtr=0,
+                SendSms=False,
+                SendMail=False,
+                UniPassMode=0,
+                Number="A777AA77",
+                NumberU="BAD777777777",
+                Phone="",
+                KeyType=3,
+                Deleted=False,
+                Status=0,
+                AccessCount=6,
+            ),
+            SimpleNamespace(
+                UserPtr=76,
+                GroupPtr=2,
+                IdleNotLimited=True,
+                NoFacility=False,
+                BgPtr=5,
+                SendSms=False,
+                SendMail=False,
+                UniPassMode=0,
+                Number="A776AA77",
+                NumberU="ABC776000000",
+                Phone="89110000000",
+                KeyType=3,
+                Deleted=False,
+                Status=0,
+                AccessCount=6,
+            ),
+            SimpleNamespace(
+                UserPtr=75,
+                GroupPtr=2,
+                IdleNotLimited=True,
+                NoFacility=False,
+                BgPtr=4,
+                SendSms=False,
+                SendMail=False,
+                UniPassMode=0,
+                Number="A775AA77",
+                NumberU="ABC775000000",
+                Phone="",
+                KeyType=3,
+                Deleted=False,
+                Status=0,
+                AccessCount=6,
+            ),
+            SimpleNamespace(
+                UserPtr=74,
+                GroupPtr=1,
+                IdleNotLimited=False,
+                NoFacility=True,
+                BgPtr=1,
+                SendSms=False,
+                SendMail=False,
+                UniPassMode=0,
+                Number="A774AA77",
+                NumberU="ABC774000000",
+                Phone="",
+                KeyType=3,
+                Deleted=False,
+                Status=0,
+                AccessCount=6,
+            ),
+        ]
+    )
+
+    defaults = gate_runtime._sample_user_defaults(cursor, "VehicleNumber")
+
+    assert defaults["GroupPtr"] == 2
+    assert defaults["IdleNotLimited"] is True
+
+
 def test_user_is_active_rejects_non_zero_status():
     cursor = _UserActiveCursor(
         SimpleNamespace(
@@ -791,6 +874,14 @@ def test_normalize_phone_keeps_legacy_formats_compatible():
 
 def test_normalize_vehicle_canonicalizes_lookalikes_and_separators():
     assert gate_runtime._normalize_vehicle("А 123-АА 77") == "A123AA77"
+
+
+def test_normalize_vehicle_accepts_real_cyrillic_plates():
+    assert gate_runtime._normalize_vehicle("\u0410 123-\u0410\u0410 77") == "A123AA77"
+
+
+def test_normalize_vehicle_repairs_utf8_mojibake_before_ascii_canonicalization():
+    assert gate_runtime._normalize_vehicle("\u0420\u0452123\u0420\u0452\u0420\u045277") == "A123AA77"
 
 
 def test_sample_key_type_prefers_phone_reader_device_key_type(monkeypatch):

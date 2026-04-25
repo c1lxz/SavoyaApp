@@ -536,36 +536,10 @@ def _sample_user_defaults(
     *,
     exclude_user_ptr: int | None = None,
 ) -> dict[str, Any]:
-    if key_type != "Phone":
-        where_sql = """
-            (Deleted = 0 OR Deleted IS NULL)
-            AND Number IS NOT NULL
-            AND Trim(Number) <> ''
-            AND (Phone IS NULL OR Trim(Phone) = '')
-        """
-        params: list[Any] = []
-        if exclude_user_ptr is not None:
-            where_sql += "\n            AND UserPtr <> ?"
-            params.append(int(exclude_user_ptr))
-
-        row = cursor.execute(
-            f"""
-            SELECT TOP 1
-                GroupPtr,
-                IdleNotLimited,
-                NoFacility,
-                BgPtr,
-                SendSms,
-                SendMail,
-                UniPassMode
-            FROM Users
-            WHERE {where_sql}
-            ORDER BY UserPtr DESC
-            """,
-            params,
-        ).fetchone()
-    else:
+    if key_type == "Phone":
         row = _sample_phone_user_defaults(cursor, exclude_user_ptr=exclude_user_ptr)
+    else:
+        row = _sample_vehicle_user_defaults(cursor, exclude_user_ptr=exclude_user_ptr)
 
     if row is None:
         return {}
@@ -620,9 +594,39 @@ def _build_identity(cursor: pyodbc.Cursor, key_type: str, normalized_key_value: 
     return RealGateIdentity(
         number=normalized_key_value,
         phone=None,
-        number_u=normalized_key_value,
+        number_u=_resolve_vehicle_number_u(cursor, normalized_key_value=normalized_key_value),
         number_mifare=None,
     )
+
+
+def _needs_vehicle_number_u_refresh(current_number_u: Any, normalized_key_value: str) -> bool:
+    normalized_number_u = _normalize_optional_text(current_number_u)
+    if not normalized_number_u:
+        return True
+    return normalized_number_u == normalized_key_value
+
+
+def _resolve_vehicle_number_u(
+    cursor: pyodbc.Cursor,
+    *,
+    normalized_key_value: str,
+    user_ptr: int | None = None,
+) -> str:
+    if user_ptr is None or not hasattr(cursor, "execute"):
+        return _generate_unique_number_u(cursor)
+
+    row = cursor.execute(
+        """
+        SELECT TOP 1 NumberU
+        FROM Users
+        WHERE UserPtr = ?
+        """,
+        (int(user_ptr),),
+    ).fetchone()
+    current_number_u = getattr(row, "NumberU", None) if row is not None else None
+    if _needs_vehicle_number_u_refresh(current_number_u, normalized_key_value):
+        return _generate_unique_number_u(cursor)
+    return str(current_number_u).strip()
 
 
 def _normalize_optional_phone(value: Any) -> str:
@@ -983,6 +987,13 @@ def _reactivate_real_user(
     expiry_date, expiry_time = _split_access_expiry(expires_at, key_type=key_type)
     lock_date = _access_lock_date(expires_at)
     last_name, first_name, father_name = _split_name(resident_name)
+    vehicle_number_u: str | None = None
+    if key_type != "Phone":
+        vehicle_number_u = _resolve_vehicle_number_u(
+            cursor,
+            normalized_key_value=normalized_key_value,
+            user_ptr=user_ptr,
+        )
     assignments = [
         "[Deleted] = ?",
         "[UseExpiry] = ?",
@@ -1017,7 +1028,7 @@ def _reactivate_real_user(
         assignments.append("[Number] = ?")
         params.append(normalized_key_value)
         assignments.append("[NumberU] = ?")
-        params.append(normalized_key_value)
+        params.append(vehicle_number_u)
         if phone_number is not None:
             assignments.append("[Phone] = ?")
             params.append(_normalize_contact_phone(phone_number))
@@ -1040,7 +1051,7 @@ def _reactivate_real_user(
             plot_number=plot_number,
             storage_phone=storage_phone,
         )
-        _apply_user_defaults(cursor, user_ptr=user_ptr, key_type=key_type, exclude_user_ptr=user_ptr)
+    _apply_user_defaults(cursor, user_ptr=user_ptr, key_type=key_type, exclude_user_ptr=user_ptr)
     return user_ptr
 
 
@@ -1463,6 +1474,13 @@ def _upsert_real_user(
         expiry_date, expiry_time = _split_access_expiry(expires_at, key_type=key_type)
         lock_date = _access_lock_date(expires_at)
         last_name, first_name, father_name = _split_name(resident_name)
+        vehicle_number_u: str | None = None
+        if key_type != "Phone":
+            vehicle_number_u = _resolve_vehicle_number_u(
+                cursor,
+                normalized_key_value=normalized_key_value,
+                user_ptr=existing_user_ptr,
+            )
         cursor.execute(
             """
             UPDATE Users
@@ -1497,7 +1515,7 @@ def _upsert_real_user(
         else:
             cursor.execute(
                 "UPDATE Users SET [Number] = ?, [NumberU] = ? WHERE UserPtr = ?",
-                (normalized_key_value, normalized_key_value, existing_user_ptr),
+                (normalized_key_value, vehicle_number_u, existing_user_ptr),
             )
         if phone_number is not None and key_type != "Phone":
             cursor.execute("UPDATE Users SET Phone = ? WHERE UserPtr = ?", (_normalize_contact_phone(phone_number), existing_user_ptr))
@@ -1505,13 +1523,12 @@ def _upsert_real_user(
             "UPDATE Users SET [LastName] = ?, [FirstName] = ?, [FatherName] = ? WHERE UserPtr = ?",
             (last_name, first_name, father_name, existing_user_ptr),
         )
-        if key_type == "Phone":
-            _apply_user_defaults(
-                cursor,
-                user_ptr=existing_user_ptr,
-                key_type=key_type,
-                exclude_user_ptr=existing_user_ptr,
-            )
+        _apply_user_defaults(
+            cursor,
+            user_ptr=existing_user_ptr,
+            key_type=key_type,
+            exclude_user_ptr=existing_user_ptr,
+        )
         if key_type == "Phone":
             _cleanup_conflicting_phone_rows(
                 cursor,
@@ -2257,6 +2274,77 @@ def _sample_phone_user_defaults(cursor: pyodbc.Cursor, *, exclude_user_ptr: int 
         if getattr(item, "GroupPtr", None) == dominant_group:
             return item
     return candidates[0]
+
+
+def _sample_vehicle_user_defaults(cursor: pyodbc.Cursor, *, exclude_user_ptr: int | None = None) -> Any | None:
+    vehicle_key_type_value = _sample_key_type(cursor, "VehicleNumber")
+    rows = cursor.execute(
+        """
+        SELECT TOP 1000
+            u.UserPtr,
+            u.GroupPtr,
+            u.IdleNotLimited,
+            u.NoFacility,
+            u.BgPtr,
+            u.SendSms,
+            u.SendMail,
+            u.UniPassMode,
+            u.Number,
+            u.NumberU,
+            u.Phone,
+            u.KeyType,
+            u.Deleted,
+            u.Status,
+            COUNT(a.RdrPtr) AS AccessCount
+        FROM Users AS u
+        LEFT JOIN AccessTable AS a ON a.UserPtr = u.UserPtr
+        WHERE u.Number IS NOT NULL
+          AND Trim(u.Number) <> ''
+        GROUP BY
+            u.UserPtr,
+            u.GroupPtr,
+            u.IdleNotLimited,
+            u.NoFacility,
+            u.BgPtr,
+            u.SendSms,
+            u.SendMail,
+            u.UniPassMode,
+            u.Number,
+            u.NumberU,
+            u.Phone,
+            u.KeyType,
+            u.Deleted,
+            u.Status
+        ORDER BY u.UserPtr DESC
+        """
+    ).fetchall()
+
+    active_candidates = [
+        item
+        for item in rows
+        if (exclude_user_ptr is None or int(getattr(item, "UserPtr", 0) or 0) != int(exclude_user_ptr))
+        and not bool(getattr(item, "Deleted", False))
+        and _is_active_user_status(getattr(item, "Status", None))
+        and (
+            vehicle_key_type_value is None
+            or getattr(item, "KeyType", None) == vehicle_key_type_value
+        )
+    ]
+    if not active_candidates:
+        return None
+
+    grouped_candidates = [
+        item for item in active_candidates if int(getattr(item, "GroupPtr", 0) or 0) > 0
+    ]
+    if not grouped_candidates:
+        grouped_candidates = active_candidates
+
+    group_counts = Counter(getattr(item, "GroupPtr", None) for item in grouped_candidates)
+    dominant_group = group_counts.most_common(1)[0][0]
+    for item in grouped_candidates:
+        if getattr(item, "GroupPtr", None) == dominant_group:
+            return item
+    return grouped_candidates[0]
 
 
 def _is_active_user_status(raw_status: Any) -> bool:
