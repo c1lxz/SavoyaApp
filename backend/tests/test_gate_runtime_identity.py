@@ -251,6 +251,14 @@ def test_build_identity_for_phone_populates_required_number(monkeypatch):
     assert identity.number_u == "009991234567"
 
 
+def test_build_identity_for_vehicle_uses_vehicle_number_for_number_u():
+    identity = gate_runtime._build_identity(object(), "VehicleNumber", "A123AA77")
+
+    assert identity.number == "A123AA77"
+    assert identity.phone is None
+    assert identity.number_u == "A123AA77"
+
+
 def test_split_access_expiry_separates_date_and_time():
     local_expiry = datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
     expiry_date, expiry_time = gate_runtime._split_access_expiry(
@@ -567,6 +575,34 @@ def test_upsert_existing_phone_user_verifies_final_state(monkeypatch):
         "phone_key_type_value": 6,
         "access_point_ids": [5, 6],
     }
+
+
+def test_upsert_existing_vehicle_user_heals_number_u_field(monkeypatch):
+    cursor = _FakeCursor()
+
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 3)
+    monkeypatch.setattr(gate_runtime, "_find_existing_user_ptr", lambda *args, **kwargs: 42)
+    monkeypatch.setattr(gate_runtime, "_find_reusable_deleted_user_ptr", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_ensure_access_permissions", lambda *_args, **_kwargs: None)
+
+    user_ptr = gate_runtime._upsert_real_user(
+        cursor,
+        key_type="VehicleNumber",
+        normalized_key_value="A123AA77",
+        phone_number="+79991234567",
+        resident_name="Vehicle User",
+        plot_number="301",
+        is_visitor=False,
+        expires_at=None,
+        access_point_ids=[19],
+    )
+
+    assert user_ptr == 42
+    assert any(
+        sql == "UPDATE Users SET [Number] = ?, [NumberU] = ? WHERE UserPtr = ?"
+        and params == ("A123AA77", "A123AA77", 42)
+        for sql, params in cursor.commands
+    )
 
 
 def test_insert_real_phone_user_sets_gate_details(monkeypatch):

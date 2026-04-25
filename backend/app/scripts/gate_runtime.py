@@ -609,7 +609,6 @@ def _apply_user_defaults(
 
 
 def _build_identity(cursor: pyodbc.Cursor, key_type: str, normalized_key_value: str) -> RealGateIdentity:
-    number_u = _generate_unique_number_u(cursor)
     if key_type == "Phone":
         storage_phone = _format_phone_for_storage(cursor, normalized_key_value)
         return RealGateIdentity(
@@ -618,7 +617,12 @@ def _build_identity(cursor: pyodbc.Cursor, key_type: str, normalized_key_value: 
             number_u=normalized_key_value,
             number_mifare=None,
         )
-    return RealGateIdentity(number=normalized_key_value, phone=None, number_u=number_u, number_mifare=None)
+    return RealGateIdentity(
+        number=normalized_key_value,
+        phone=None,
+        number_u=normalized_key_value,
+        number_mifare=None,
+    )
 
 
 def _normalize_optional_phone(value: Any) -> str:
@@ -1011,6 +1015,8 @@ def _reactivate_real_user(
         params.append(normalized_key_value)
     else:
         assignments.append("[Number] = ?")
+        params.append(normalized_key_value)
+        assignments.append("[NumberU] = ?")
         params.append(normalized_key_value)
         if phone_number is not None:
             assignments.append("[Phone] = ?")
@@ -1489,7 +1495,10 @@ def _upsert_real_user(
                 storage_phone=storage_phone,
             )
         else:
-            cursor.execute("UPDATE Users SET [Number] = ? WHERE UserPtr = ?", (normalized_key_value, existing_user_ptr))
+            cursor.execute(
+                "UPDATE Users SET [Number] = ?, [NumberU] = ? WHERE UserPtr = ?",
+                (normalized_key_value, normalized_key_value, existing_user_ptr),
+            )
         if phone_number is not None and key_type != "Phone":
             cursor.execute("UPDATE Users SET Phone = ? WHERE UserPtr = ?", (_normalize_contact_phone(phone_number), existing_user_ptr))
         cursor.execute(
