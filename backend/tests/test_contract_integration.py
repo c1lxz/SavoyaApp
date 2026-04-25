@@ -7,7 +7,7 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from backend.app.database import SessionLocal
-from backend.app.models import User
+from backend.app.models import Request, User
 from backend.app.services.auth import hash_password
 from backend.app.services.gate import gate_client
 from backend.app.services.user_accounts import create_user_account
@@ -160,6 +160,47 @@ def test_passes_create_and_list(client):
     rows = list_response.json()
     assert len(rows) >= 1
     assert any(item['carNumber'] == car_number for item in rows)
+
+
+def test_passes_create_normalizes_cyrillic_vehicle_number_to_ascii(client):
+    login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
+    token = login['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+
+    create_response = client.post(
+        '/passes',
+        headers=headers,
+        json={
+            'carNumber': 'А123СХ 77',
+            'plotNumber': '25',
+            'phoneNumber': '+79991234567',
+            'expiresAt': None,
+            'isPermanent': True,
+            'isCourier': False,
+        },
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created['carNumber'] == 'A123CX 77'
+
+    async def _latest_request_key_value() -> str:
+        async with SessionLocal() as session:
+            row = (
+                await session.execute(
+                    select(User.id).where(User.login == 'demo')
+                )
+            ).scalar_one()
+            request_row = (
+                await session.execute(
+                    select(Request)
+                    .where(Request.resident_id == row, Request.key_type == 'VehicleNumber')
+                    .order_by(Request.id.desc())
+                    .limit(1)
+                )
+            ).scalar_one()
+            return str(request_row.key_value)
+
+    assert asyncio.run(_latest_request_key_value()) == 'A123CX 77'
 
 
 def test_temporary_pass_create_and_list_with_sqlite_datetimes(client):

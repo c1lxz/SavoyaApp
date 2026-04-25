@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import tempfile
 import time as time_module
@@ -16,6 +15,7 @@ from typing import Any, Iterable
 
 import pyodbc
 from backend.app.services.gate_controller import GateController
+from backend.app.utils.vehicle_number import compact_vehicle_number
 
 try:
     from dotenv import load_dotenv
@@ -34,33 +34,6 @@ WIEGAND_BITS = 26
 _ACCESS_RECORD_STATE_PENDING_SYNC = 2
 _GATETERM_UI_TRANSPORTS = {"gateterm_ui", "gate_terminal_ui", "gateterm"}
 _GATETERM_ACCESS_WINDOW_TITLE = "Управление точками доступа"
-_VEHICLE_LOOKALIKE_MAP = {
-    "A": "А",
-    "B": "В",
-    "C": "С",
-    "E": "Е",
-    "H": "Н",
-    "K": "К",
-    "M": "М",
-    "O": "О",
-    "P": "Р",
-    "T": "Т",
-    "X": "Х",
-    "Y": "У",
-    "А": "А",
-    "В": "В",
-    "С": "С",
-    "Е": "Е",
-    "Н": "Н",
-    "К": "К",
-    "М": "М",
-    "О": "О",
-    "Р": "Р",
-    "Т": "Т",
-    "Х": "Х",
-    "У": "У",
-}
-_VEHICLE_SEPARATORS_RE = re.compile(r"[\s-]+")
 _PHONE_READER_HINTS = (
     "gsm",
     "gate terminal",
@@ -698,10 +671,7 @@ def _update_phone_user_details(
 
 
 def _normalize_optional_text(value: Any) -> str:
-    if value is None:
-        return ""
-    compact = _VEHICLE_SEPARATORS_RE.sub("", str(value).upper())
-    return "".join(_VEHICLE_LOOKALIKE_MAP.get(ch, ch) for ch in compact)
+    return compact_vehicle_number(value)
 
 
 def _looks_like_phone_identity_number(value: Any) -> bool:
@@ -1807,7 +1777,7 @@ def _resolve_user_ptr(cursor: pyodbc.Cursor, external_key_id: str | None) -> int
     normalized_phone = ""
     if _looks_like_phone_identity_number(value):
         normalized_phone = _normalize_phone(value)
-    normalized_text = "".join(value.upper().split())
+    normalized_text = _normalize_optional_text(value)
     rows = cursor.execute(
         """
         SELECT UserPtr, Phone, Number, NumberU, Deleted

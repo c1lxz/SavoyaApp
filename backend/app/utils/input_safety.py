@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import re
 
+from .vehicle_number import canonicalize_vehicle_letters
+
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
 _MULTISPACE_RE = re.compile(r"\s+")
 _LOGIN_RE = re.compile(r"^[A-Za-zА-Яа-яЁё0-9_.@+-]{3,100}$")
 _PLOT_RE = re.compile(r"^[A-Za-zА-Яа-я0-9/\- ]{1,20}$")
-_VEHICLE_RE = re.compile(r"^[A-Za-zА-Яа-я0-9 \-]{3,20}$")
+_VEHICLE_RE = re.compile(r"^[A-Z0-9 \-]{3,20}$")
 
 
 def normalize_plain_text(value: str, *, max_length: int, field_name: str) -> str:
@@ -88,7 +90,7 @@ def normalize_account_phone(value: str) -> str:
 
 
 def normalize_vehicle_number(value: str) -> str:
-    normalized = normalize_plain_text(value, max_length=20, field_name="vehicle_number").upper()
+    normalized = canonicalize_vehicle_letters(normalize_plain_text(value, max_length=20, field_name="vehicle_number"))
     if not _VEHICLE_RE.fullmatch(normalized):
         raise ValueError("vehicle_number contains unsupported characters")
     return normalized

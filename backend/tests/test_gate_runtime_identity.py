@@ -754,7 +754,7 @@ def test_normalize_phone_keeps_legacy_formats_compatible():
 
 
 def test_normalize_vehicle_canonicalizes_lookalikes_and_separators():
-    assert gate_runtime._normalize_vehicle("A 123-AA 77") == "А123АА77"
+    assert gate_runtime._normalize_vehicle("А 123-АА 77") == "A123AA77"
 
 
 def test_sample_key_type_prefers_phone_reader_device_key_type(monkeypatch):
@@ -1119,6 +1119,24 @@ def test_find_existing_user_ptr_matches_vehicle_number_with_mixed_alphabet():
     user_ptr = gate_runtime._find_existing_user_ptr(cursor, "VehicleNumber", gate_runtime._normalize_vehicle("A123AA77"))
 
     assert user_ptr == 24
+
+
+def test_resolve_user_ptr_matches_vehicle_number_stored_with_cyrillic_lookalikes():
+    cursor = _ResolveUserPtrCursor(
+        [
+            SimpleNamespace(
+                UserPtr=8123,
+                Phone=None,
+                Number="А123АА77",
+                NumberU="А123АА77",
+                Deleted=False,
+            )
+        ]
+    )
+
+    user_ptr = gate_runtime._resolve_user_ptr(cursor, "A123AA77")
+
+    assert user_ptr == 8123
 
 
 def test_find_existing_phone_user_ptr_ignores_vehicle_user_with_same_contact_phone():
