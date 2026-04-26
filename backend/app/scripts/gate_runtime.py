@@ -33,7 +33,15 @@ ALLOWED_KEY_TYPES = {"Phone", "VehicleNumber"}
 WIEGAND_BITS = 26
 _ACCESS_RECORD_STATE_PENDING_SYNC = 2
 _GATETERM_UI_TRANSPORTS = {"gateterm_ui", "gate_terminal_ui", "gateterm"}
+# GateTerm UI strings must stay as real Unicode text for pywinauto lookups.
 _GATETERM_ACCESS_WINDOW_TITLE = "Управление точками доступа"
+_GATETERM_MAIN_WINDOW_TITLE = "GATE Terminal"
+_GATETERM_USERS_MENU_PATH = "Бюро пропусков->Пользователи"
+_GATETERM_USERS_WINDOW_TITLE = "Список пользователей"
+_GATETERM_USER_SEARCH_WINDOW_TITLE = "Поиск пользователя"
+_GATETERM_USER_EDIT_WINDOW_TITLE = "Изменение пользователя"
+_GATETERM_USER_SEARCH_FIELD_KEY_NUMBER = "Номер ключа"
+_GATETERM_USER_SEARCH_FIELD_KEY_NUMBER_INDEX = 4
 _PHONE_READER_HINTS = (
     "gsm",
     "gate terminal",
@@ -432,6 +440,13 @@ def _generate_unique_number_u(cursor: pyodbc.Cursor) -> str:
     raise RuntimeError("Failed to generate a unique Users.NumberU value")
 
 
+def _vehicle_number_u_mode() -> str:
+    raw_mode = str(_env("GATE_VEHICLE_NUMBER_U_MODE", default="plate") or "plate").strip().lower()
+    if raw_mode == "random":
+        return "random"
+    return "plate"
+
+
 def _reader_device_key_types(
     cursor: pyodbc.Cursor,
     access_point_ids: Iterable[int] | None,
@@ -601,9 +616,11 @@ def _build_identity(cursor: pyodbc.Cursor, key_type: str, normalized_key_value: 
 
 def _needs_vehicle_number_u_refresh(current_number_u: Any, normalized_key_value: str) -> bool:
     normalized_number_u = _normalize_optional_text(current_number_u)
-    if not normalized_number_u:
-        return True
-    return normalized_number_u == normalized_key_value
+    if _vehicle_number_u_mode() == "random":
+        if not normalized_number_u:
+            return True
+        return normalized_number_u == normalized_key_value
+    return normalized_number_u != normalized_key_value
 
 
 def _resolve_vehicle_number_u(
@@ -611,19 +628,25 @@ def _resolve_vehicle_number_u(
     *,
     normalized_key_value: str,
     user_ptr: int | None = None,
+    current_number_u: Any | None = None,
 ) -> str:
-    if user_ptr is None or not hasattr(cursor, "execute"):
-        return _generate_unique_number_u(cursor)
+    if _vehicle_number_u_mode() != "random":
+        return normalized_key_value
 
-    row = cursor.execute(
-        """
-        SELECT TOP 1 NumberU
-        FROM Users
-        WHERE UserPtr = ?
-        """,
-        (int(user_ptr),),
-    ).fetchone()
-    current_number_u = getattr(row, "NumberU", None) if row is not None else None
+    if current_number_u is None:
+        if user_ptr is None or not hasattr(cursor, "execute"):
+            return _generate_unique_number_u(cursor)
+
+        row = cursor.execute(
+            """
+            SELECT TOP 1 NumberU
+            FROM Users
+            WHERE UserPtr = ?
+            """,
+            (int(user_ptr),),
+        ).fetchone()
+        current_number_u = getattr(row, "NumberU", None) if row is not None else None
+
     if _needs_vehicle_number_u_refresh(current_number_u, normalized_key_value):
         return _generate_unique_number_u(cursor)
     return str(current_number_u).strip()
@@ -727,6 +750,22 @@ def _is_phone_user_match(row: Any, *, normalized_key_value: str, phone_key_type_
         return True
 
     return _looks_like_phone_identity_number(getattr(row, "Number", None))
+
+
+def _is_vehicle_identity_row(row: Any, *, vehicle_key_type_value: Any | None = None) -> bool:
+    if bool(getattr(row, "Deleted", False)):
+        return False
+
+    normalized_number = _normalize_optional_text(getattr(row, "Number", None))
+    if not normalized_number:
+        return False
+    if _looks_like_phone_identity_number(getattr(row, "Number", None)):
+        return False
+
+    row_key_type = getattr(row, "KeyType", None)
+    if vehicle_key_type_value is not None:
+        return row_key_type == vehicle_key_type_value
+    return True
 
 
 def _find_existing_user_ptr(
@@ -1757,6 +1796,52 @@ def cleanup_expired_keys(now: datetime | None = None) -> int:
     return removed
 
 
+def repair_vehicle_number_u(*, include_deleted: bool = False) -> dict[str, Any]:
+    repaired_user_ptrs: list[int] = []
+    scanned = 0
+
+    with _transaction_cursor() as (_, cursor):
+        vehicle_key_type_value = _sample_key_type(cursor, "VehicleNumber")
+        rows = cursor.execute(
+            """
+            SELECT UserPtr, KeyType, Number, NumberU, Deleted
+            FROM Users
+            ORDER BY UserPtr DESC
+            """
+        ).fetchall()
+        for row in rows:
+            user_ptr = int(getattr(row, "UserPtr", 0) or 0)
+            if user_ptr <= 0:
+                continue
+            if not include_deleted and bool(getattr(row, "Deleted", False)):
+                continue
+            if not _is_vehicle_identity_row(row, vehicle_key_type_value=vehicle_key_type_value):
+                continue
+
+            scanned += 1
+            normalized_number = _normalize_optional_text(getattr(row, "Number", None))
+            normalized_number_u = _normalize_optional_text(getattr(row, "NumberU", None))
+            resolved_number_u = _resolve_vehicle_number_u(
+                cursor,
+                normalized_key_value=normalized_number,
+                current_number_u=getattr(row, "NumberU", None),
+            )
+            if normalized_number_u == _normalize_optional_text(resolved_number_u):
+                continue
+
+            cursor.execute(
+                "UPDATE Users SET [NumberU] = ? WHERE UserPtr = ?",
+                (resolved_number_u, user_ptr),
+            )
+            repaired_user_ptrs.append(user_ptr)
+
+    return {
+        "scanned": scanned,
+        "updated": len(repaired_user_ptrs),
+        "user_ptrs": repaired_user_ptrs,
+    }
+
+
 def get_access_points() -> list[dict[str, Any]]:
     with _readonly_cursor() as (_, cursor):
         rows = cursor.execute(
@@ -1945,6 +2030,38 @@ def get_wiegand_credentials(external_key_id: str) -> list[dict[str, Any]]:
         return [_build_synthetic_wiegand_credential(user_ptr=user_ptr, access_point_id=int(row.RdrPtr)) for row in rows]
 
 
+def post_sync_vehicle_key(key_id: int) -> dict[str, Any]:
+    if not isinstance(key_id, int) or key_id <= 0:
+        raise ValueError("key_id must be a positive integer")
+
+    with _readonly_cursor() as (_, cursor):
+        row = cursor.execute(
+            """
+            SELECT TOP 1 UserPtr, KeyType, Number, NumberU, Deleted
+            FROM Users
+            WHERE UserPtr = ?
+            """,
+            (key_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(f"Gate vehicle key {key_id} was not found after MDB write")
+
+        vehicle_key_type_value = _sample_key_type(cursor, "VehicleNumber")
+        if not _is_vehicle_identity_row(row, vehicle_key_type_value=vehicle_key_type_value):
+            raise RuntimeError(f"Gate key {key_id} is not a live vehicle pass")
+
+        normalized_key_value = _normalize_vehicle(
+            str(getattr(row, "Number", None) or getattr(row, "NumberU", None) or "")
+        )
+        expected_number_u = str(getattr(row, "NumberU", None) or "").strip() or None
+
+    return _post_sync_vehicle_key_via_gateterm_ui(
+        user_ptr=key_id,
+        normalized_key_value=normalized_key_value,
+        expected_number_u=expected_number_u,
+    )
+
+
 def _send_wiegand26(access_point_id: int, credential: dict[str, Any], external_key_id: str | None = None) -> GateOpenResponse:
     controller = GateController.from_env()
     result = controller.open_gate(
@@ -1987,6 +2104,486 @@ def _env_float(name: str, default: float) -> float:
         return float(raw.strip())
     except ValueError:
         return default
+
+
+def _find_gateterm_window(app: Any, title_fragment: str) -> Any | None:
+    normalized_fragment = str(title_fragment or "").strip().casefold()
+    if not normalized_fragment:
+        return None
+
+    for window in app.windows():
+        try:
+            window_title = str(window.window_text() or "").strip()
+            if normalized_fragment in window_title.casefold():
+                return app.window(handle=window.handle)
+        except Exception:
+            continue
+    return None
+
+
+def _list_gateterm_windows(app: Any) -> list[str]:
+    labels: list[str] = []
+    for window in app.windows():
+        try:
+            title = str(window.window_text() or "").strip()
+            class_name = str(window.class_name() or "").strip()
+            if not title and not class_name:
+                continue
+            labels.append(f"{title or '<untitled>'} [{class_name or '?'}]")
+        except Exception:
+            continue
+    return labels
+
+
+def _try_wait_for_gateterm_window(app: Any, title_fragment: str, *, timeout_seconds: float | None = None) -> Any | None:
+    timeout = _env_float("GATE_GATETERM_UI_WINDOW_WAIT_TIMEOUT_SECONDS", 3.0)
+    if timeout_seconds is not None:
+        timeout = timeout_seconds
+    deadline = time_module.monotonic() + max(timeout, 0.0)
+
+    while True:
+        window = _find_gateterm_window(app, title_fragment)
+        if window is not None:
+            return window
+        if time_module.monotonic() >= deadline:
+            return None
+        time_module.sleep(0.1)
+
+
+def _wait_for_gateterm_window_to_close(app: Any, title_fragment: str, *, timeout_seconds: float | None = None) -> None:
+    timeout = _env_float("GATE_GATETERM_UI_WINDOW_WAIT_TIMEOUT_SECONDS", 3.0)
+    if timeout_seconds is not None:
+        timeout = timeout_seconds
+    deadline = time_module.monotonic() + max(timeout, 0.0)
+
+    while True:
+        if _find_gateterm_window(app, title_fragment) is None:
+            return
+        if time_module.monotonic() >= deadline:
+            raise RuntimeError(
+                f"GateTerm window {title_fragment!r} did not close; open windows: {_list_gateterm_windows(app)!r}"
+            )
+        time_module.sleep(0.1)
+
+
+def _wait_for_enabled_gateterm_window(app: Any, title_fragment: str, *, timeout_seconds: float | None = None) -> Any:
+    timeout = _env_float("GATE_GATETERM_UI_WINDOW_WAIT_TIMEOUT_SECONDS", 3.0)
+    if timeout_seconds is not None:
+        timeout = timeout_seconds
+    deadline = time_module.monotonic() + max(timeout, 0.0)
+
+    while True:
+        window = _find_gateterm_window(app, title_fragment)
+        if window is not None:
+            try:
+                if window.is_enabled():
+                    try:
+                        window.set_focus()
+                    except Exception:
+                        pass
+                    return window
+            except Exception:
+                pass
+        if time_module.monotonic() >= deadline:
+            raise RuntimeError(
+                f"GateTerm window {title_fragment!r} is not ready; open windows: {_list_gateterm_windows(app)!r}"
+            )
+        time_module.sleep(0.1)
+
+
+def _gateterm_window_has_menu(window: Any) -> bool:
+    try:
+        menu = window.menu()
+        if menu is None:
+            return False
+        return bool(menu.items())
+    except Exception:
+        return False
+
+
+def _find_gateterm_main_window(app: Any) -> Any | None:
+    for window in app.windows():
+        try:
+            candidate = app.window(handle=window.handle)
+            title = str(candidate.window_text() or "").strip().casefold()
+            class_name = str(candidate.class_name() or "").strip()
+            if "gate terminal" in title and class_name == "ThunderRT6FormDC" and _gateterm_window_has_menu(candidate):
+                return candidate
+        except Exception:
+            continue
+
+    main_window = _find_gateterm_window(app, _GATETERM_MAIN_WINDOW_TITLE)
+    if main_window is not None and _gateterm_window_has_menu(main_window):
+        return main_window
+
+    for window in app.windows():
+        try:
+            candidate = app.window(handle=window.handle)
+            if _gateterm_window_has_menu(candidate):
+                return candidate
+        except Exception:
+            continue
+
+    for window in app.windows():
+        try:
+            if str(window.class_name() or "") == "ThunderRT6Main":
+                return app.window(handle=window.handle)
+        except Exception:
+            continue
+    return None
+
+
+def _find_gateterm_users_window(app: Any) -> Any | None:
+    return _find_gateterm_window(app, _GATETERM_USERS_WINDOW_TITLE)
+
+
+def _visible_gateterm_control_by_id(window: Any, control_id: int, *class_names: str) -> Any:
+    for class_name in class_names or ("",):
+        lookup: dict[str, Any] = {"control_id": control_id}
+        if class_name:
+            lookup["class_name"] = class_name
+        try:
+            control = window.child_window(**lookup).wrapper_object()
+            if control.is_visible():
+                return control
+        except Exception:
+            continue
+
+    for control in window.descendants():
+        try:
+            if int(control.control_id()) != int(control_id):
+                continue
+            wrapper = control.wrapper_object()
+            if not wrapper.is_visible():
+                continue
+            if class_names and wrapper.class_name() not in class_names:
+                continue
+            return wrapper
+        except Exception:
+            continue
+
+    raise RuntimeError(
+        f"GateTerm UI control with control_id={control_id} was not found in {window.window_text()!r}"
+    )
+
+
+def _click_gateterm_control(window: Any, control_id: int, *class_names: str) -> None:
+    control = _visible_gateterm_control_by_id(window, control_id, *class_names)
+    try:
+        control.click()
+    except Exception:
+        control.click_input()
+
+
+def _close_gateterm_search_window_if_open(app: Any) -> None:
+    search_window = _find_gateterm_window(app, _GATETERM_USER_SEARCH_WINDOW_TITLE)
+    if search_window is None:
+        return
+    try:
+        _click_gateterm_control(search_window, 5, "ThunderRT6CommandButton", "Button")
+    except Exception:
+        search_window.type_keys("{ESC}")
+    _wait_for_gateterm_window_to_close(
+        app,
+        _GATETERM_USER_SEARCH_WINDOW_TITLE,
+        timeout_seconds=_env_float("GATE_GATETERM_UI_USER_SEARCH_CLOSE_DELAY_SECONDS", 0.8),
+    )
+
+
+def _close_gateterm_user_edit_window_if_open(app: Any) -> None:
+    edit_window = _find_gateterm_window(app, _GATETERM_USER_EDIT_WINDOW_TITLE)
+    if edit_window is None:
+        return
+    try:
+        _click_gateterm_control(edit_window, 2, "ThunderRT6CommandButton", "Button")
+    except Exception:
+        edit_window.type_keys("{ESC}")
+    _close_gateterm_message_boxes_if_open(app)
+    _wait_for_gateterm_window_to_close(
+        app,
+        _GATETERM_USER_EDIT_WINDOW_TITLE,
+        timeout_seconds=_env_float("GATE_GATETERM_UI_USER_EDIT_CLOSE_DELAY_SECONDS", 1.2),
+    )
+
+
+def _close_gateterm_message_boxes_if_open(app: Any) -> None:
+    for window in app.windows():
+        try:
+            window_title = str(window.window_text() or "").strip()
+            if window_title != "GateTerm" or str(window.class_name() or "") == "ThunderRT6Main":
+                continue
+            dialog = app.window(handle=window.handle)
+            try:
+                _click_gateterm_control(dialog, 2, "Button", "ThunderRT6CommandButton")
+            except Exception:
+                dialog.type_keys("{ENTER}")
+        except Exception:
+            continue
+    time_module.sleep(_env_float("GATE_GATETERM_UI_MESSAGE_BOX_CLOSE_DELAY_SECONDS", 0.15))
+
+
+def _window_contains_vehicle_key(values: Iterable[Any], normalized_key_value: str) -> bool:
+    for value in values:
+        if _normalize_optional_text(value) == normalized_key_value:
+            return True
+    return False
+
+
+def _collect_gateterm_window_values(window: Any) -> list[str]:
+    values: list[str] = []
+    try:
+        values.extend(str(item or "") for item in window.texts())
+    except Exception:
+        pass
+
+    try:
+        descendants = window.descendants()
+    except Exception:
+        descendants = []
+
+    for control in descendants:
+        try:
+            text_value = str(control.window_text() or "")
+        except Exception:
+            text_value = ""
+        if text_value:
+            values.append(text_value)
+    return values
+
+
+def _open_gateterm_users_view(app: Any) -> Any:
+    users_window = _try_wait_for_gateterm_window(
+        app,
+        _GATETERM_USERS_WINDOW_TITLE,
+        timeout_seconds=_env_float("GATE_GATETERM_UI_USERS_REFOCUS_DELAY_SECONDS", 0.5),
+    )
+    if users_window is not None:
+        try:
+            if users_window.is_enabled():
+                users_window.set_focus()
+                return users_window
+        except Exception:
+            pass
+
+    main_window = _find_gateterm_main_window(app)
+    if main_window is None:
+        raise RuntimeError(f"GATE main window is not open; open windows: {_list_gateterm_windows(app)!r}")
+    main_window.set_focus()
+    try:
+        main_window.menu_select(_GATETERM_USERS_MENU_PATH)
+    except Exception:
+        main_window.menu().items()[1].sub_menu().items()[0].click()
+    users_window = _wait_for_enabled_gateterm_window(
+        app,
+        _GATETERM_USERS_WINDOW_TITLE,
+        timeout_seconds=_env_float("GATE_GATETERM_UI_USERS_OPEN_DELAY_SECONDS", 1.5),
+    )
+    users_window.set_focus()
+    return users_window
+
+
+def _open_gateterm_user_search_window(app: Any, users_window: Any) -> Any:
+    dialog_delay_seconds = _env_float("GATE_GATETERM_UI_USER_SEARCH_DIALOG_DELAY_SECONDS", 0.5)
+    attempts: list[str] = []
+
+    users_window.set_focus()
+    try:
+        users_window.menu().items()[4].sub_menu().items()[0].click()
+        attempts.append("menu")
+    except Exception as exc:
+        attempts.append(f"menu_error={exc}")
+    search_window = _try_wait_for_gateterm_window(
+        app,
+        _GATETERM_USER_SEARCH_WINDOW_TITLE,
+        timeout_seconds=dialog_delay_seconds,
+    )
+    if search_window is not None:
+        return search_window
+
+    users_window.set_focus()
+    try:
+        users_window.type_keys("^f")
+        attempts.append("hotkey")
+    except Exception as exc:
+        attempts.append(f"hotkey_error={exc}")
+    search_window = _try_wait_for_gateterm_window(
+        app,
+        _GATETERM_USER_SEARCH_WINDOW_TITLE,
+        timeout_seconds=dialog_delay_seconds,
+    )
+    if search_window is not None:
+        return search_window
+
+    raise RuntimeError(
+        "GateTerm user-search window did not open; "
+        f"attempts={attempts!r}; open windows={_list_gateterm_windows(app)!r}"
+    )
+
+
+def _search_gateterm_user_by_key_number(app: Any, users_window: Any, normalized_key_value: str) -> None:
+    search_window = _open_gateterm_user_search_window(app, users_window)
+
+    combo = _visible_gateterm_control_by_id(search_window, 4, "ThunderRT6ComboBox", "ComboBox")
+    edit = _visible_gateterm_control_by_id(search_window, 3, "ThunderRT6TextBox", "Edit")
+    try:
+        combo.select(_GATETERM_USER_SEARCH_FIELD_KEY_NUMBER_INDEX)
+    except Exception:
+        combo.select(_GATETERM_USER_SEARCH_FIELD_KEY_NUMBER)
+
+    try:
+        edit.set_focus()
+        if hasattr(edit, "set_edit_text"):
+            edit.set_edit_text(normalized_key_value)
+        else:
+            edit.type_keys("^a{BACKSPACE}")
+            edit.type_keys(normalized_key_value, with_spaces=True, set_foreground=True)
+    except Exception as exc:
+        raise RuntimeError(f"GateTerm user search input failed: {exc}") from exc
+
+    time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SEARCH_APPLY_DELAY_SECONDS", 0.35))
+
+    try:
+        _click_gateterm_control(search_window, 5, "ThunderRT6CommandButton", "Button")
+    except Exception:
+        search_window.type_keys("{ESC}")
+    _wait_for_gateterm_window_to_close(
+        app,
+        _GATETERM_USER_SEARCH_WINDOW_TITLE,
+        timeout_seconds=_env_float("GATE_GATETERM_UI_USER_SEARCH_CLOSE_DELAY_SECONDS", 0.8),
+    )
+
+
+def _open_gateterm_user_edit_window(app: Any, users_window: Any) -> Any:
+    dialog_delay_seconds = _env_float("GATE_GATETERM_UI_USER_EDIT_OPEN_DELAY_SECONDS", 0.9)
+    attempts: list[str] = []
+
+    users_window.set_focus()
+    try:
+        users_window.menu().items()[0].sub_menu().items()[1].click()
+        attempts.append("menu")
+    except Exception as exc:
+        attempts.append(f"menu_error={exc}")
+    edit_window = _try_wait_for_gateterm_window(
+        app,
+        _GATETERM_USER_EDIT_WINDOW_TITLE,
+        timeout_seconds=dialog_delay_seconds,
+    )
+    if edit_window is not None:
+        return edit_window
+
+    users_window.set_focus()
+    try:
+        users_window.type_keys("^e")
+        attempts.append("hotkey")
+    except Exception as exc:
+        attempts.append(f"hotkey_error={exc}")
+    edit_window = _try_wait_for_gateterm_window(
+        app,
+        _GATETERM_USER_EDIT_WINDOW_TITLE,
+        timeout_seconds=dialog_delay_seconds,
+    )
+    if edit_window is not None:
+        return edit_window
+
+    raise RuntimeError(
+        "GateTerm user-edit window did not open; "
+        f"attempts={attempts!r}; open windows={_list_gateterm_windows(app)!r}"
+    )
+
+
+def _verify_vehicle_identity_persisted(user_ptr: int, normalized_key_value: str, expected_number_u: str | None) -> None:
+    with _readonly_cursor() as (_, cursor):
+        row = cursor.execute(
+            """
+            SELECT TOP 1 Number, NumberU
+            FROM Users
+            WHERE UserPtr = ?
+            """,
+            (int(user_ptr),),
+        ).fetchone()
+
+    if row is None:
+        raise RuntimeError(f"Gate vehicle key {user_ptr} disappeared after GateTerm post-sync")
+
+    normalized_number = _normalize_optional_text(getattr(row, "Number", None))
+    actual_number_u_raw = getattr(row, "NumberU", None)
+    normalized_number_u = _normalize_optional_text(actual_number_u_raw)
+    expected_number_u_normalized = _normalize_optional_text(expected_number_u)
+    if normalized_number == normalized_key_value and (
+        (
+            expected_number_u_normalized
+            and str(actual_number_u_raw or "").strip() == str(expected_number_u or "").strip()
+        )
+        or (not expected_number_u_normalized and bool(normalized_number_u))
+    ):
+        return
+
+    restored_number_u = expected_number_u
+    with _transaction_cursor() as (_, cursor):
+        if restored_number_u is None:
+            restored_number_u = _resolve_vehicle_number_u(
+                cursor,
+                normalized_key_value=normalized_key_value,
+            )
+        cursor.execute(
+            "UPDATE Users SET [Number] = ?, [NumberU] = ? WHERE UserPtr = ?",
+            (
+                normalized_key_value,
+                restored_number_u,
+                int(user_ptr),
+            ),
+        )
+
+    raise RuntimeError(
+        "GateTerm vehicle post-sync changed Users.Number/NumberU unexpectedly; "
+        f"restored Number={normalized_key_value!r}, NumberU={restored_number_u!r} for UserPtr={user_ptr}"
+    )
+
+
+def _post_sync_vehicle_key_via_gateterm_ui(
+    *,
+    user_ptr: int,
+    normalized_key_value: str,
+    expected_number_u: str | None,
+) -> dict[str, Any]:
+    try:
+        from pywinauto import Application
+    except ImportError as exc:
+        raise RuntimeError(f"pywinauto is required for GateTerm vehicle post-sync: {exc}") from exc
+
+    gate_term_exe = _env("GATE_GATETERM_EXE", default=r"C:\GATE\Terminal\GateTerm.exe")
+    if not gate_term_exe:
+        raise RuntimeError("GATE_GATETERM_EXE is not configured")
+
+    try:
+        app = Application(backend="win32").connect(path=gate_term_exe)
+        _close_gateterm_message_boxes_if_open(app)
+        _close_gateterm_search_window_if_open(app)
+        _close_gateterm_user_edit_window_if_open(app)
+        _close_gateterm_message_boxes_if_open(app)
+        _close_gateterm_search_window_if_open(app)
+        users_window = _open_gateterm_users_view(app)
+        _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
+        edit_window = _open_gateterm_user_edit_window(app, users_window)
+
+        editor_values = _collect_gateterm_window_values(edit_window)
+        if not _window_contains_vehicle_key(editor_values, normalized_key_value):
+            raise RuntimeError(
+                "GateTerm edit dialog did not open the expected vehicle key: "
+                f"expected {normalized_key_value!r}, got {editor_values!r}"
+            )
+
+        _click_gateterm_control(edit_window, 1, "ThunderRT6CommandButton", "Button")
+        time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_DELAY_SECONDS", 0.75))
+        _verify_vehicle_identity_persisted(user_ptr, normalized_key_value, expected_number_u)
+    except Exception as exc:
+        raise RuntimeError(f"GateTerm vehicle post-sync failed: {exc}") from exc
+
+    return {
+        "transport": "gateterm_ui",
+        "user_ptr": int(user_ptr),
+        "key_value": normalized_key_value,
+    }
 
 
 def _gateterm_ui_row_override() -> dict[int, int]:

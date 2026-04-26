@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
@@ -234,6 +235,117 @@ class _TemplateSamplingCursor:
         raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
 
 
+class _VehicleRepairCursor:
+    def __init__(self, rows) -> None:
+        self._rows = list(rows)
+        self.commands: list[tuple[str, tuple | None]] = []
+        self._last_sql = ""
+
+    def execute(self, sql: str, params=None):
+        self._last_sql = sql
+        self.commands.append((sql, tuple(params) if params is not None else None))
+        return self
+
+    def fetchall(self):
+        if "SELECT UserPtr, KeyType, Number, NumberU, Deleted" in self._last_sql:
+            return list(self._rows)
+        raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
+
+
+class _FakeMenuItem:
+    def __init__(self, *, on_click=None, children=None) -> None:
+        self._on_click = on_click
+        self._children = list(children or [])
+
+    def click(self):
+        if self._on_click is not None:
+            return self._on_click()
+        return None
+
+    def sub_menu(self):
+        return self
+
+    def items(self):
+        return list(self._children)
+
+
+class _FakeUsersWindow:
+    def __init__(self, call_log) -> None:
+        self.call_log = call_log
+        search_item = _FakeMenuItem(on_click=lambda: self.call_log.append("search_menu_click"))
+        edit_item = _FakeMenuItem(on_click=lambda: self.call_log.append("edit_menu_click"))
+        self._menu_items = [
+            _FakeMenuItem(children=[_FakeMenuItem(), edit_item]),
+            _FakeMenuItem(),
+            _FakeMenuItem(),
+            _FakeMenuItem(),
+            _FakeMenuItem(children=[search_item]),
+        ]
+
+    def set_focus(self):
+        self.call_log.append("users_focus")
+
+    def type_keys(self, value: str):
+        self.call_log.append(("users_hotkey", value))
+
+    def menu(self):
+        return _FakeMenuItem(children=self._menu_items)
+
+
+class _FakeGateUiWindow:
+    def __init__(
+        self,
+        *,
+        title: str,
+        class_name: str,
+        handle: int,
+        menu_items=None,
+        call_log=None,
+        menu_select_error: Exception | None = None,
+        enabled: bool = True,
+    ) -> None:
+        self._title = title
+        self._class_name = class_name
+        self.handle = handle
+        self._menu_items = list(menu_items or [])
+        self._call_log = call_log
+        self._menu_select_error = menu_select_error
+        self._enabled = enabled
+
+    def window_text(self):
+        return self._title
+
+    def class_name(self):
+        return self._class_name
+
+    def menu(self):
+        return _FakeMenuItem(children=self._menu_items) if self._menu_items else None
+
+    def menu_select(self, path: str):
+        if self._menu_select_error is not None:
+            raise self._menu_select_error
+        if self._call_log is not None:
+            self._call_log.append(("menu_select", path))
+
+    def set_focus(self):
+        if self._call_log is not None:
+            self._call_log.append(("focus", self.handle))
+
+    def is_enabled(self):
+        return self._enabled
+
+
+class _FakeGateUiApp:
+    def __init__(self, windows) -> None:
+        self._windows = {window.handle: window for window in windows}
+
+    def windows(self):
+        return list(self._windows.values())
+
+    def window(self, *, handle):
+        return self._windows[handle]
+
+
 @contextmanager
 def _fake_transaction_cursor(cursor):
     yield None, cursor
@@ -252,12 +364,205 @@ def test_build_identity_for_phone_populates_required_number(monkeypatch):
 
 
 def test_build_identity_for_vehicle_uses_vehicle_number_for_number_u(monkeypatch):
-    monkeypatch.setattr(gate_runtime, "_generate_unique_number_u", lambda cursor: "ABC123NUMBER")
+    monkeypatch.setenv("GATE_VEHICLE_NUMBER_U_MODE", "plate")
     identity = gate_runtime._build_identity(object(), "VehicleNumber", "A123AA77")
 
     assert identity.number == "A123AA77"
     assert identity.phone is None
+    assert identity.number_u == "A123AA77"
+
+
+def test_build_identity_for_vehicle_uses_random_number_u_in_random_mode(monkeypatch):
+    monkeypatch.setenv("GATE_VEHICLE_NUMBER_U_MODE", "random")
+    monkeypatch.setattr(gate_runtime, "_generate_unique_number_u", lambda cursor: "ABC123NUMBER")
+
+    identity = gate_runtime._build_identity(object(), "VehicleNumber", "A123AA77")
+
     assert identity.number_u == "ABC123NUMBER"
+
+
+def test_insert_real_vehicle_user_stores_vehicle_number_in_number_u(monkeypatch):
+    cursor = _FakeCursor()
+
+    monkeypatch.setenv("GATE_VEHICLE_NUMBER_U_MODE", "plate")
+    monkeypatch.setattr(gate_runtime, "_sample_user_defaults", lambda *args, **kwargs: {})
+    monkeypatch.setattr(gate_runtime, "_resolve_inserted_user_ptr", lambda *args, **kwargs: 55)
+
+    user_ptr = gate_runtime._insert_real_user(
+        cursor,
+        key_type_value=3,
+        key_type="VehicleNumber",
+        normalized_key_value="A123AA77",
+        phone_number="+79991234567",
+        resident_name="Vehicle User",
+        plot_number=None,
+        is_visitor=False,
+        expires_at=None,
+    )
+
+    assert user_ptr == 55
+    assert any(
+        sql.startswith("INSERT INTO Users")
+        and params.count("A123AA77") >= 2
+        for sql, params in cursor.commands
+    )
+
+
+def test_window_contains_vehicle_key_rejects_empty_or_wrong_values():
+    assert gate_runtime._window_contains_vehicle_key([], "A123AA77") is False
+    assert gate_runtime._window_contains_vehicle_key(["Изменение пользователя", ""], "A123AA77") is False
+    assert gate_runtime._window_contains_vehicle_key(["Изменение пользователя", "A123AA77"], "A123AA77") is True
+
+
+def test_open_gateterm_user_search_window_falls_back_to_hotkey(monkeypatch):
+    call_log: list[object] = []
+    users_window = _FakeUsersWindow(call_log)
+    search_window = object()
+    search_results = iter([None, search_window])
+
+    monkeypatch.setattr(
+        gate_runtime,
+        "_try_wait_for_gateterm_window",
+        lambda *args, **kwargs: next(search_results),
+    )
+
+    result = gate_runtime._open_gateterm_user_search_window(object(), users_window)
+
+    assert result is search_window
+    assert call_log == ["users_focus", "search_menu_click", "users_focus", ("users_hotkey", "^f")]
+
+
+def test_find_gateterm_main_window_prefers_visible_form_with_menu():
+    hidden_main = _FakeGateUiWindow(title="GateTerm", class_name="ThunderRT6Main", handle=1)
+    visible_main = _FakeGateUiWindow(
+        title="GATE Terminal.  Версия 1.22.99",
+        class_name="ThunderRT6FormDC",
+        handle=2,
+        menu_items=[_FakeMenuItem()],
+    )
+    app = _FakeGateUiApp([hidden_main, visible_main])
+
+    result = gate_runtime._find_gateterm_main_window(app)
+
+    assert result is visible_main
+
+
+def test_open_gateterm_users_view_falls_back_to_menu_click(monkeypatch):
+    call_log: list[object] = []
+    open_users_item = _FakeMenuItem(on_click=lambda: call_log.append("users_menu_click"))
+    main_window = _FakeGateUiWindow(
+        title="GATE Terminal.  Версия 1.22.99",
+        class_name="ThunderRT6FormDC",
+        handle=10,
+        menu_items=[
+            _FakeMenuItem(),
+            _FakeMenuItem(children=[open_users_item]),
+        ],
+        call_log=call_log,
+        menu_select_error=RuntimeError("There is no menu."),
+    )
+    users_window = _FakeGateUiWindow(
+        title="Список пользователей",
+        class_name="ThunderRT6FormDC",
+        handle=11,
+        call_log=call_log,
+    )
+
+    monkeypatch.setattr(gate_runtime, "_try_wait_for_gateterm_window", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_find_gateterm_main_window", lambda app: main_window)
+    monkeypatch.setattr(gate_runtime, "_wait_for_enabled_gateterm_window", lambda *args, **kwargs: users_window)
+
+    result = gate_runtime._open_gateterm_users_view(object())
+
+    assert result is users_window
+    assert call_log == [
+        ("focus", 10),
+        "users_menu_click",
+        ("focus", 11),
+    ]
+
+
+def test_post_sync_vehicle_key_via_gateterm_ui_uses_clean_search_then_edit_flow(monkeypatch):
+    calls: list[object] = []
+    fake_app = object()
+    fake_users_window = object()
+    fake_edit_window = object()
+
+    class _FakeApplication:
+        def __init__(self, *args, **kwargs) -> None:
+            calls.append(("application_init", kwargs))
+
+        def connect(self, *, path):
+            calls.append(("connect", path))
+            return fake_app
+
+    monkeypatch.setitem(sys.modules, "pywinauto", SimpleNamespace(Application=_FakeApplication))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_env",
+        lambda name, *aliases, default=None, allow_empty=False: (
+            r"C:\GATE\Terminal\GateTerm.exe" if name == "GATE_GATETERM_EXE" else default
+        ),
+    )
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_message_boxes_if_open", lambda app: calls.append("close_messages"))
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_search_window_if_open", lambda app: calls.append("close_search"))
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_user_edit_window_if_open", lambda app: calls.append("close_edit"))
+    monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: calls.append("open_users") or fake_users_window)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_search_gateterm_user_by_key_number",
+        lambda app, users_window, normalized_key_value: calls.append(("search", users_window, normalized_key_value)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_open_gateterm_user_edit_window",
+        lambda app, users_window: calls.append(("open_edit", users_window)) or fake_edit_window,
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_collect_gateterm_window_values",
+        lambda window: calls.append(("collect", window)) or ["A132FG777"],
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_click_gateterm_control",
+        lambda window, control_id, *class_names: calls.append(("click", window, control_id, class_names)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_verify_vehicle_identity_persisted",
+        lambda user_ptr, normalized_key_value, expected_number_u: calls.append(
+            ("verify", user_ptr, normalized_key_value, expected_number_u)
+        ),
+    )
+
+    result = gate_runtime._post_sync_vehicle_key_via_gateterm_ui(
+        user_ptr=42,
+        normalized_key_value="A132FG777",
+        expected_number_u="A132FG777",
+    )
+
+    assert result == {
+        "transport": "gateterm_ui",
+        "user_ptr": 42,
+        "key_value": "A132FG777",
+    }
+    assert calls == [
+        ("application_init", {"backend": "win32"}),
+        ("connect", r"C:\GATE\Terminal\GateTerm.exe"),
+        "close_messages",
+        "close_search",
+        "close_edit",
+        "close_messages",
+        "close_search",
+        "open_users",
+        ("search", fake_users_window, "A132FG777"),
+        ("open_edit", fake_users_window),
+        ("collect", fake_edit_window),
+        ("click", fake_edit_window, 1, ("ThunderRT6CommandButton", "Button")),
+        ("verify", 42, "A132FG777", "A132FG777"),
+    ]
 
 
 def test_split_access_expiry_separates_date_and_time():
@@ -581,10 +886,10 @@ def test_upsert_existing_phone_user_verifies_final_state(monkeypatch):
 def test_upsert_existing_vehicle_user_heals_number_u_field(monkeypatch):
     cursor = _FakeCursor()
 
+    monkeypatch.setenv("GATE_VEHICLE_NUMBER_U_MODE", "plate")
     monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 3)
     monkeypatch.setattr(gate_runtime, "_find_existing_user_ptr", lambda *args, **kwargs: 42)
     monkeypatch.setattr(gate_runtime, "_find_reusable_deleted_user_ptr", lambda *args, **kwargs: None)
-    monkeypatch.setattr(gate_runtime, "_resolve_vehicle_number_u", lambda *args, **kwargs: "ABC123NUMBER")
     monkeypatch.setattr(gate_runtime, "_ensure_access_permissions", lambda *_args, **_kwargs: None)
 
     user_ptr = gate_runtime._upsert_real_user(
@@ -602,7 +907,31 @@ def test_upsert_existing_vehicle_user_heals_number_u_field(monkeypatch):
     assert user_ptr == 42
     assert any(
         sql == "UPDATE Users SET [Number] = ?, [NumberU] = ? WHERE UserPtr = ?"
-        and params == ("A123AA77", "ABC123NUMBER", 42)
+        and params == ("A123AA77", "A123AA77", 42)
+        for sql, params in cursor.commands
+    )
+
+
+def test_repair_vehicle_number_u_heals_existing_vehicle_rows(monkeypatch):
+    cursor = _VehicleRepairCursor(
+        [
+            SimpleNamespace(UserPtr=7745, KeyType=3, Number="O463OX198", NumberU="CD3005AC6563", Deleted=False),
+            SimpleNamespace(UserPtr=7744, KeyType=3, Number="T581OX797", NumberU="T581OX797", Deleted=False),
+            SimpleNamespace(UserPtr=7743, KeyType=6, Number="009111253128", NumberU="009111253128", Deleted=False),
+            SimpleNamespace(UserPtr=7742, KeyType=3, Number="A456CD178", NumberU="5388914B2052", Deleted=True),
+        ]
+    )
+
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 3)
+    monkeypatch.setenv("GATE_VEHICLE_NUMBER_U_MODE", "plate")
+    monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(cursor))
+
+    result = gate_runtime.repair_vehicle_number_u()
+
+    assert result == {"scanned": 2, "updated": 1, "user_ptrs": [7745]}
+    assert any(
+        sql == "UPDATE Users SET [NumberU] = ? WHERE UserPtr = ?"
+        and params == ("O463OX198", 7745)
         for sql, params in cursor.commands
     )
 

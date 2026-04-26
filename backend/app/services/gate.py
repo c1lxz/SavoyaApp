@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import random
 import subprocess
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from typing import Any
 from ..config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _GATE_BRIDGE_SCRIPT = _PROJECT_ROOT / "backend" / "app" / "scripts" / "gate_bridge.py"
 
@@ -30,6 +32,31 @@ class GateClient:
     def _next_fallback_key_id(self) -> int:
         self._fallback_counter += 1
         return self._fallback_counter
+
+    def _post_sync_vehicle_key_if_needed(self, *, key_type: str, key_id: int) -> None:
+        if key_type != "VehicleNumber":
+            return
+        self._run_bridge("post_sync_vehicle_key", {"key_id": key_id})
+
+    def _add_real_key(self, action: str, payload: dict[str, Any], *, key_type: str) -> int:
+        result = self._run_bridge(action, payload)
+        key_id = int(result)
+        try:
+            self._post_sync_vehicle_key_if_needed(key_type=key_type, key_id=key_id)
+        except Exception:
+            if settings.gate_vehicle_post_sync_required:
+                try:
+                    self._run_bridge("remove_key", {"key_id": key_id})
+                except Exception:
+                    pass
+                raise
+            logger.warning(
+                "Gate vehicle post-sync failed for key_id=%s; keeping created key because "
+                "GATE_VEHICLE_POST_SYNC_REQUIRED is false",
+                key_id,
+                exc_info=True,
+            )
+        return key_id
 
     def _run_bridge(self, action: str, payload: dict[str, Any] | None = None) -> Any:
         command = [settings.gate_python_launcher]
@@ -71,7 +98,7 @@ class GateClient:
         plot_number: str | None = None,
     ) -> int:
         if settings.gate_real_integration_enabled:
-            result = self._run_bridge(
+            return self._add_real_key(
                 "add_temporary_key",
                 {
                     "key_type": key_type,
@@ -82,8 +109,8 @@ class GateClient:
                     "resident_name": resident_name,
                     "plot_number": plot_number,
                 },
+                key_type=key_type,
             )
-            return int(result)
         return self._next_fallback_key_id()
 
     def add_permanent_key(
@@ -96,7 +123,7 @@ class GateClient:
         plot_number: str | None = None,
     ) -> int:
         if settings.gate_real_integration_enabled:
-            result = self._run_bridge(
+            return self._add_real_key(
                 "add_permanent_key",
                 {
                     "key_type": key_type,
@@ -106,8 +133,8 @@ class GateClient:
                     "resident_name": resident_name,
                     "plot_number": plot_number,
                 },
+                key_type=key_type,
             )
-            return int(result)
         return self._next_fallback_key_id()
 
     def remove_key(self, key_id: int) -> bool:

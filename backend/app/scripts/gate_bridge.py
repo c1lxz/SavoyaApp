@@ -52,6 +52,8 @@ def _call(action: str, payload: dict) -> object:
         return gate_runtime.get_key_permissions(str(payload["external_key_id"]))
     if action == "get_wiegand_credentials":
         return gate_runtime.get_wiegand_credentials(str(payload["external_key_id"]))
+    if action == "post_sync_vehicle_key":
+        return gate_runtime.post_sync_vehicle_key(int(payload["key_id"]))
     if action == "open_access_point":
         return gate_runtime.open_access_point(
             access_point_id=int(payload["access_point_id"]),

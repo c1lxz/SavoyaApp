@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     gate_python_launcher: str = "py"
     gate_python_version: str = "-3.12-32"
     gate_bridge_timeout_seconds: int = 20
+    gate_vehicle_post_sync_required: bool = False
     gate_action_map_json: str = Field(
         default='{"entry": 1, "exit": 2, "wicket_north": 3, "wicket_lake": 4, "wicket_admin": 5, "wicket_forest": 6}'
     )
