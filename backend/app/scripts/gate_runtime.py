@@ -2275,6 +2275,34 @@ def _click_gateterm_control(window: Any, control_id: int, *class_names: str) -> 
         control.click_input()
 
 
+def _is_invalid_window_handle_error(exc: Exception) -> bool:
+    message = str(exc or "").lower()
+    exc_type = type(exc).__name__.lower()
+    return (
+        "invalidwindowhandle" in exc_type
+        or "invalid window handle" in message
+        or "not a vaild window handle" in message
+        or "winerror 1400" in message
+        or "недопустимый дескриптор окна" in message
+    )
+
+
+def _window_still_open(app: Any, title_fragment: str) -> bool:
+    return _find_gateterm_window(app, title_fragment) is not None
+
+
+def _dismiss_gateterm_window_via_escape(app: Any, title_fragment: str) -> None:
+    window = _find_gateterm_window(app, title_fragment)
+    if window is None:
+        return
+    try:
+        window.type_keys("{ESC}")
+    except Exception as exc:
+        if _is_invalid_window_handle_error(exc) and not _window_still_open(app, title_fragment):
+            return
+        raise
+
+
 def _close_gateterm_search_window_if_open(app: Any) -> None:
     search_window = _find_gateterm_window(app, _GATETERM_USER_SEARCH_WINDOW_TITLE)
     if search_window is None:
@@ -2282,7 +2310,10 @@ def _close_gateterm_search_window_if_open(app: Any) -> None:
     try:
         _click_gateterm_control(search_window, 5, "ThunderRT6CommandButton", "Button")
     except Exception:
-        search_window.type_keys("{ESC}")
+        if _window_still_open(app, _GATETERM_USER_SEARCH_WINDOW_TITLE):
+            _dismiss_gateterm_window_via_escape(app, _GATETERM_USER_SEARCH_WINDOW_TITLE)
+    if not _window_still_open(app, _GATETERM_USER_SEARCH_WINDOW_TITLE):
+        return
     _wait_for_gateterm_window_to_close(
         app,
         _GATETERM_USER_SEARCH_WINDOW_TITLE,
@@ -2297,8 +2328,11 @@ def _close_gateterm_user_edit_window_if_open(app: Any) -> None:
     try:
         _click_gateterm_control(edit_window, 2, "ThunderRT6CommandButton", "Button")
     except Exception:
-        edit_window.type_keys("{ESC}")
+        if _window_still_open(app, _GATETERM_USER_EDIT_WINDOW_TITLE):
+            _dismiss_gateterm_window_via_escape(app, _GATETERM_USER_EDIT_WINDOW_TITLE)
     _close_gateterm_message_boxes_if_open(app)
+    if not _window_still_open(app, _GATETERM_USER_EDIT_WINDOW_TITLE):
+        return
     _wait_for_gateterm_window_to_close(
         app,
         _GATETERM_USER_EDIT_WINDOW_TITLE,
@@ -2445,7 +2479,10 @@ def _search_gateterm_user_by_key_number(app: Any, users_window: Any, normalized_
     try:
         _click_gateterm_control(search_window, 5, "ThunderRT6CommandButton", "Button")
     except Exception:
-        search_window.type_keys("{ESC}")
+        if _window_still_open(app, _GATETERM_USER_SEARCH_WINDOW_TITLE):
+            _dismiss_gateterm_window_via_escape(app, _GATETERM_USER_SEARCH_WINDOW_TITLE)
+    if not _window_still_open(app, _GATETERM_USER_SEARCH_WINDOW_TITLE):
+        return
     _wait_for_gateterm_window_to_close(
         app,
         _GATETERM_USER_SEARCH_WINDOW_TITLE,
@@ -2555,29 +2592,47 @@ def _post_sync_vehicle_key_via_gateterm_ui(
     if not gate_term_exe:
         raise RuntimeError("GATE_GATETERM_EXE is not configured")
 
-    try:
-        app = Application(backend="win32").connect(path=gate_term_exe)
-        _close_gateterm_message_boxes_if_open(app)
-        _close_gateterm_search_window_if_open(app)
-        _close_gateterm_user_edit_window_if_open(app)
-        _close_gateterm_message_boxes_if_open(app)
-        _close_gateterm_search_window_if_open(app)
-        users_window = _open_gateterm_users_view(app)
-        _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
-        edit_window = _open_gateterm_user_edit_window(app, users_window)
+    attempts = max(1, _env_int("GATE_GATETERM_UI_POST_SYNC_ATTEMPTS", 3))
+    last_error: Exception | None = None
+    for attempt_index in range(attempts):
+        try:
+            app = Application(backend="win32").connect(path=gate_term_exe)
+            _close_gateterm_message_boxes_if_open(app)
+            _close_gateterm_search_window_if_open(app)
+            _close_gateterm_user_edit_window_if_open(app)
+            _close_gateterm_message_boxes_if_open(app)
+            _close_gateterm_search_window_if_open(app)
+            users_window = _open_gateterm_users_view(app)
+            _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
+            edit_window = _open_gateterm_user_edit_window(app, users_window)
 
-        editor_values = _collect_gateterm_window_values(edit_window)
-        if not _window_contains_vehicle_key(editor_values, normalized_key_value):
-            raise RuntimeError(
-                "GateTerm edit dialog did not open the expected vehicle key: "
-                f"expected {normalized_key_value!r}, got {editor_values!r}"
-            )
+            editor_values = _collect_gateterm_window_values(edit_window)
+            if not _window_contains_vehicle_key(editor_values, normalized_key_value):
+                raise RuntimeError(
+                    "GateTerm edit dialog did not open the expected vehicle key: "
+                    f"expected {normalized_key_value!r}, got {editor_values!r}"
+                )
 
-        _click_gateterm_control(edit_window, 1, "ThunderRT6CommandButton", "Button")
-        time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_DELAY_SECONDS", 0.75))
-        _verify_vehicle_identity_persisted(user_ptr, normalized_key_value, expected_number_u)
-    except Exception as exc:
-        raise RuntimeError(f"GateTerm vehicle post-sync failed: {exc}") from exc
+            _click_gateterm_control(edit_window, 1, "ThunderRT6CommandButton", "Button")
+            time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_DELAY_SECONDS", 0.75))
+            _verify_vehicle_identity_persisted(user_ptr, normalized_key_value, expected_number_u)
+            break
+        except Exception as exc:
+            last_error = exc
+            try:
+                app = Application(backend="win32").connect(path=gate_term_exe)
+                _close_gateterm_message_boxes_if_open(app)
+                _close_gateterm_search_window_if_open(app)
+                _close_gateterm_user_edit_window_if_open(app)
+                _close_gateterm_message_boxes_if_open(app)
+            except Exception:
+                pass
+            if attempt_index + 1 >= attempts:
+                raise RuntimeError(f"GateTerm vehicle post-sync failed: {exc}") from exc
+            time_module.sleep(_env_float("GATE_GATETERM_UI_RETRY_DELAY_SECONDS", 0.35))
+
+    if last_error is not None and attempts < 1:
+        raise RuntimeError(f"GateTerm vehicle post-sync failed: {last_error}") from last_error
 
     return {
         "transport": "gateterm_ui",

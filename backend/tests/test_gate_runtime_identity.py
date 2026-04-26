@@ -565,6 +565,117 @@ def test_post_sync_vehicle_key_via_gateterm_ui_uses_clean_search_then_edit_flow(
     ]
 
 
+def test_search_gateterm_user_by_key_number_tolerates_window_closing_after_apply(monkeypatch):
+    combo_calls: list[object] = []
+    edit_calls: list[object] = []
+    fake_search_window = object()
+
+    class _FakeCombo:
+        def select(self, value):
+            combo_calls.append(("select", value))
+
+    class _FakeEdit:
+        def set_focus(self):
+            edit_calls.append("focus")
+
+        def set_edit_text(self, value: str):
+            edit_calls.append(("set_edit_text", value))
+
+    monkeypatch.setattr(gate_runtime, "_open_gateterm_user_search_window", lambda app, users_window: fake_search_window)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_visible_gateterm_control_by_id",
+        lambda window, control_id, *class_names: _FakeCombo() if control_id == 4 else _FakeEdit(),
+    )
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_click_gateterm_control",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Handle 6227196 is not a vaild window handle")),
+    )
+    monkeypatch.setattr(gate_runtime, "_find_gateterm_window", lambda app, title_fragment: None)
+
+    gate_runtime._search_gateterm_user_by_key_number(object(), object(), "X901YY799")
+
+    assert combo_calls == [("select", gate_runtime._GATETERM_USER_SEARCH_FIELD_KEY_NUMBER_INDEX)]
+    assert edit_calls == ["focus", ("set_edit_text", "X901YY799")]
+
+
+def test_post_sync_vehicle_key_via_gateterm_ui_retries_transient_failures(monkeypatch):
+    calls: list[object] = []
+    fake_app = object()
+    fake_users_window = object()
+    fake_edit_window = object()
+    state = {"search_attempts": 0}
+
+    class _FakeApplication:
+        def __init__(self, *args, **kwargs) -> None:
+            calls.append(("application_init", kwargs))
+
+        def connect(self, *, path):
+            calls.append(("connect", path))
+            return fake_app
+
+    def _fake_search(app, users_window, normalized_key_value):
+        state["search_attempts"] += 1
+        calls.append(("search", state["search_attempts"], users_window, normalized_key_value))
+        if state["search_attempts"] == 1:
+            raise RuntimeError("transient search failure")
+
+    monkeypatch.setitem(sys.modules, "pywinauto", SimpleNamespace(Application=_FakeApplication))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_env",
+        lambda name, *aliases, default=None, allow_empty=False: (
+            "2"
+            if name == "GATE_GATETERM_UI_POST_SYNC_ATTEMPTS"
+            else (r"C:\GATE\Terminal\GateTerm.exe" if name == "GATE_GATETERM_EXE" else default)
+        ),
+    )
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_message_boxes_if_open", lambda app: calls.append("close_messages"))
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_search_window_if_open", lambda app: calls.append("close_search"))
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_user_edit_window_if_open", lambda app: calls.append("close_edit"))
+    monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: calls.append("open_users") or fake_users_window)
+    monkeypatch.setattr(gate_runtime, "_search_gateterm_user_by_key_number", _fake_search)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_open_gateterm_user_edit_window",
+        lambda app, users_window: calls.append(("open_edit", users_window)) or fake_edit_window,
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_collect_gateterm_window_values",
+        lambda window: calls.append(("collect", window)) or ["X901YY799"],
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_click_gateterm_control",
+        lambda window, control_id, *class_names: calls.append(("click", window, control_id, class_names)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_verify_vehicle_identity_persisted",
+        lambda user_ptr, normalized_key_value, expected_number_u: calls.append(
+            ("verify", user_ptr, normalized_key_value, expected_number_u)
+        ),
+    )
+
+    result = gate_runtime._post_sync_vehicle_key_via_gateterm_ui(
+        user_ptr=42,
+        normalized_key_value="X901YY799",
+        expected_number_u="X901YY799",
+    )
+
+    assert result == {
+        "transport": "gateterm_ui",
+        "user_ptr": 42,
+        "key_value": "X901YY799",
+    }
+    assert state["search_attempts"] == 2
+    assert ("verify", 42, "X901YY799", "X901YY799") in calls
+
+
 def test_split_access_expiry_separates_date_and_time():
     local_expiry = datetime(2026, 4, 13, 7, 43, 29, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
     expiry_date, expiry_time = gate_runtime._split_access_expiry(
