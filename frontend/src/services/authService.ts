@@ -5,7 +5,7 @@ import { USE_REAL_API } from '@/services/api/config';
 export interface AuthService {
   login(login: string, password: string): Promise<AuthResult>;
   logout(): Promise<void>;
-  getCurrentUser(): Promise<User | null>;
+  getCurrentUser(forceRefresh?: boolean): Promise<User | null>;
   updateProfile(fullName: string, plotNumber?: string): Promise<User>;
   changePassword(payload: ChangePasswordPayload): Promise<User>;
 }
@@ -78,9 +78,9 @@ export const mockAuthService: AuthService = {
     currentUser = null;
   },
 
-  async getCurrentUser() {
+  async getCurrentUser(forceRefresh = false) {
     if (USE_REAL_API) {
-      return apiAuthService.getCurrentUser();
+      return apiAuthService.getCurrentUser(forceRefresh);
     }
     return currentUser;
   },

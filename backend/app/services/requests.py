@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -119,7 +120,8 @@ async def ensure_admin_permanent_request(session: AsyncSession) -> Request | Non
     if existing is not None and existing.resident_id != admin.id:
         return None
 
-    gate_key_id = gate_client.add_permanent_key(
+    gate_key_id = await asyncio.to_thread(
+        gate_client.add_permanent_key,
         key_type="Phone",
         key_value=key_value,
         phone_number=key_value,

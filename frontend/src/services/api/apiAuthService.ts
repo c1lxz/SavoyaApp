@@ -133,14 +133,15 @@ export const apiAuthService = {
     currentUser = null;
   },
 
-  async getCurrentUser(): Promise<User | null> {
-    if (currentUser) {
-      return currentUser;
-    }
-
+  async getCurrentUser(forceRefresh = false): Promise<User | null> {
     await restoreAccessToken();
     if (!getAccessToken()) {
+      currentUser = null;
       return null;
+    }
+
+    if (currentUser && !forceRefresh) {
+      return currentUser;
     }
 
     try {
@@ -148,10 +149,13 @@ export const apiAuthService = {
       const mappedUser = mapApiUser(actual);
       currentUser = mappedUser;
       return mappedUser;
-    } catch {
-      await setAccessToken(null);
+    } catch (error) {
+      if (!getAccessToken()) {
+        currentUser = null;
+        return null;
+      }
       currentUser = null;
-      return null;
+      throw error;
     }
   },
 

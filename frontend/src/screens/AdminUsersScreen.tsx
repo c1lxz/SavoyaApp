@@ -212,7 +212,7 @@ export const AdminUsersScreen = ({ navigation }: Props) => {
 
   const deferredSearch = useDeferredValue(search.trim());
 
-  const loadUsers = useCallback(async (showLoading = true) => {
+  const loadUsers = useCallback(async (showLoading = true): Promise<boolean> => {
     if (showLoading) {
       setLoadState('loading');
     }
@@ -227,10 +227,12 @@ export const AdminUsersScreen = ({ navigation }: Props) => {
       setTotal(result.total);
       setLastUpdated(new Date().toISOString());
       setLoadState('success');
+      return true;
     } catch (loadError) {
       const message = loadError instanceof Error ? loadError.message : 'Не удалось загрузить пользователей';
       setError(message);
       setLoadState('error');
+      return false;
     }
   }, [deferredSearch]);
 
@@ -296,8 +298,8 @@ export const AdminUsersScreen = ({ navigation }: Props) => {
       setFullName('');
       setPhoneNumber('');
       setPlotNumber('');
-      await loadUsers(false);
-      setActionState('success');
+      const refreshed = await loadUsers(false);
+      setActionState(refreshed ? 'success' : 'error');
     } catch (createError) {
       const message = createError instanceof Error ? createError.message : 'Не удалось создать пользователя';
       setError(message);
@@ -317,8 +319,8 @@ export const AdminUsersScreen = ({ navigation }: Props) => {
         await apiAdminService.unblockUser(item.id);
         setFeedback(`Пользователь ${item.login} разблокирован`);
       }
-      await loadUsers(false);
-      setActionState('success');
+      const refreshed = await loadUsers(false);
+      setActionState(refreshed ? 'success' : 'error');
     } catch (actionError) {
       const message = actionError instanceof Error ? actionError.message : 'Не удалось обновить пользователя';
       setError(message);
@@ -336,8 +338,8 @@ export const AdminUsersScreen = ({ navigation }: Props) => {
         if (lastCreatedUser?.id === item.id) {
           setLastCreatedUser(null);
         }
-        await loadUsers(false);
-        setActionState('success');
+        const refreshed = await loadUsers(false);
+        setActionState(refreshed ? 'success' : 'error');
       } catch (deleteError) {
         const message = deleteError instanceof Error ? deleteError.message : 'Не удалось удалить пользователя';
         setError(message);

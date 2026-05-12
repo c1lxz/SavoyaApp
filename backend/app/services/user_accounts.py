@@ -30,7 +30,12 @@ logger = logging.getLogger(__name__)
 
 _CYRILLIC_NAME_RE = re.compile(r"[^А-Яа-яЁё]+")
 _PASSWORD_SPECIALS = "!@#$%&*+-_"
-_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789" + _PASSWORD_SPECIALS
+_PASSWORD_DIGITS = "0123456789"
+_PASSWORD_RUSSIAN_LOWERCASE = (
+    "\u0430\u0431\u0432\u0433\u0434\u0435\u0436\u0437\u0438\u0439\u043a\u043b\u043c\u043d\u043e\u043f"
+    "\u0440\u0441\u0442\u0443\u0444\u0445\u0446\u0447\u0448\u0449\u044a\u044b\u044c\u044d\u044e\u044f"
+)
+_PASSWORD_RUSSIAN_UPPERCASE = _PASSWORD_RUSSIAN_LOWERCASE.upper()
 
 
 class UserAccountError(Exception):
@@ -76,19 +81,25 @@ def _extract_login_surname(full_name: str) -> str:
     return f"{surname[:1].upper()}{surname[1:].lower()}"[:40]
 
 
-def generate_password(length: int = 12) -> str:
-    if length < 10:
-        length = 10
+def generate_password(length: int = 8) -> str:
+    if length < 8:
+        length = 8
 
-    while True:
-        password = "".join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(length))
-        if (
-            any(ch.islower() for ch in password)
-            and any(ch.isupper() for ch in password)
-            and any(ch.isdigit() for ch in password)
-            and any(ch in _PASSWORD_SPECIALS for ch in password)
-        ):
-            return password
+    letter_count = max(0, length - 3)
+    lowercase_count = max(0, letter_count - 1)
+    password_chars = [
+        *(secrets.choice(_PASSWORD_RUSSIAN_LOWERCASE) for _ in range(lowercase_count)),
+        secrets.choice(_PASSWORD_RUSSIAN_UPPERCASE),
+        secrets.choice(_PASSWORD_DIGITS),
+        secrets.choice(_PASSWORD_DIGITS),
+        secrets.choice(_PASSWORD_SPECIALS),
+    ]
+
+    while len(password_chars) < length:
+        password_chars.append(secrets.choice(_PASSWORD_RUSSIAN_LOWERCASE))
+
+    secrets.SystemRandom().shuffle(password_chars)
+    return "".join(password_chars)
 
 
 async def ensure_users_schema(session: AsyncSession) -> None:
@@ -234,11 +245,17 @@ async def update_user_password(session: AsyncSession, *, user: User, new_passwor
     return user
 
 
-def build_admin_user_payload(user: User) -> dict[str, str | int | bool | None | datetime]:
-    visible_password = decrypt_visible_password(user.password_encrypted) if user.password_change_required else None
+def build_admin_user_payload(
+    user: User,
+    *,
+    visible_password_override: str | None = None,
+) -> dict[str, str | int | bool | None | datetime]:
+    visible_password = visible_password_override
+    if visible_password is None and user.password_change_required:
+        visible_password = decrypt_visible_password(user.password_encrypted)
     return {
         "id": user.id,
-        "login": user.login,
+        "login": str(user.login or ""),
         "password": visible_password,
         "full_name": user.name,
         "phone": user.phone,
@@ -250,7 +267,12 @@ def build_admin_user_payload(user: User) -> dict[str, str | int | bool | None | 
     }
 
 
-async def delete_user_account(session: AsyncSession, *, user: User) -> None:
+async def delete_user_account(
+    session: AsyncSession,
+    *,
+    user: User,
+    strict_gate_cleanup: bool = True,
+) -> None:
     request_rows = await session.execute(select(Request.gate_key_id).where(Request.resident_id == user.id))
     key_rows = await session.execute(select(AccessKey.id, AccessKey.external_id).where(AccessKey.user_id == user.id))
 
@@ -279,7 +301,12 @@ async def delete_user_account(session: AsyncSession, *, user: User) -> None:
     for gate_key_id in sorted(gate_key_ids):
         try:
             gate_client.remove_key(gate_key_id)
-        except Exception:
+        except Exception as exc:
+            if strict_gate_cleanup:
+                raise UserAccountError(
+                    code="gate_cleanup_failed",
+                    message=f"Не удалось удалить пропуск Gate {gate_key_id}: {exc}",
+                ) from exc
             logger.exception("Failed to revoke gate key during user deletion", extra={"user_id": user.id, "gate_key_id": gate_key_id})
 
     access_event_filter = AccessEventLog.user_id == user.id

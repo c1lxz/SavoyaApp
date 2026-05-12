@@ -17,7 +17,8 @@ from .routers import access, admin, auth, compatibility, gate, requests, user
 from .security import LoginRateLimiter
 from .services.auth import ensure_admin_user, ensure_bootstrap_test_users, ensure_demo_user
 from .services.gate_event_worker import courier_gate_event_worker
-from .services.gate_linking import ensure_existing_phone_requests_have_configured_access
+from .services.gate import gate_client
+from .services.gate_linking import ensure_existing_phone_requests_have_configured_access, ensure_users_have_gate_phone_requests
 from .services.requests import (
     cleanup_broken_requests,
     cleanup_duplicate_requests,
@@ -58,6 +59,68 @@ _CACHEABLE_FRONTEND_SUFFIXES = (
     ".woff",
     ".woff2",
 )
+
+
+async def _run_gate_startup_sync() -> None:
+    if not settings.gate_startup_sync_enabled:
+        logging.info("Skipped Gate startup sync because GATE_STARTUP_SYNC_ENABLED is false")
+        return
+
+    async with SessionLocal() as session:
+        try:
+            expanded_phone_count = await ensure_existing_phone_requests_have_configured_access(session)
+            if expanded_phone_count:
+                logging.info("Expanded %s permanent phone requests to configured access points", expanded_phone_count)
+        except Exception:
+            logging.exception("Failed to expand existing Gate phone requests")
+
+        try:
+            admin_request = await ensure_admin_permanent_request(session)
+            if admin_request is not None:
+                logging.info("Ensured admin permanent Gate request id=%s", admin_request.id)
+        except Exception:
+            logging.exception("Failed to ensure admin permanent Gate request")
+
+        try:
+            ensured_phone_request_count = await ensure_users_have_gate_phone_requests(session)
+            if ensured_phone_request_count:
+                logging.info(
+                    "Ensured %s resident accounts have permanent Gate phone requests",
+                    ensured_phone_request_count,
+                )
+        except Exception:
+            logging.exception("Failed to ensure resident Gate phone requests")
+
+    try:
+        phone_repair_result = await asyncio.to_thread(gate_client.repair_phone_identity_rows)
+        if int(phone_repair_result.get("updated") or 0) > 0 or int(phone_repair_result.get("cleaned") or 0) > 0:
+            logging.info(
+                "Repaired %s Gate phone identity rows and cleaned %s conflicting rows",
+                int(phone_repair_result.get("updated") or 0),
+                int(phone_repair_result.get("cleaned") or 0),
+            )
+    except Exception:
+        logging.exception("Failed to repair Gate phone identity rows")
+
+    try:
+        vehicle_number_u_result = await asyncio.to_thread(gate_client.repair_vehicle_number_u)
+        if int(vehicle_number_u_result.get("updated") or 0) > 0:
+            logging.info(
+                "Repaired %s Gate vehicle NumberU values",
+                vehicle_number_u_result["updated"],
+            )
+    except Exception:
+        logging.exception("Failed to repair Gate vehicle NumberU values")
+
+    try:
+        repair_result = await asyncio.to_thread(gate_client.repair_user_display_names)
+        if int(repair_result.get("updated") or 0) > 0:
+            logging.info(
+                "Repaired %s Gate user display names with empty Users.Name",
+                repair_result["updated"],
+            )
+    except Exception:
+        logging.exception("Failed to repair Gate user display names")
 
 
 def _split_host_and_port(raw_host: str | None) -> str:
@@ -218,19 +281,18 @@ async def startup_event() -> None:
         expired_count = await cleanup_expired_requests(session, remove_gate_keys=False)
         if expired_count:
             logging.info("Marked %s expired active requests as expired", expired_count)
-        expanded_phone_count = await ensure_existing_phone_requests_have_configured_access(session)
-        if expanded_phone_count:
-            logging.info("Expanded %s permanent phone requests to configured access points", expanded_phone_count)
         await ensure_active_request_unique_index(session)
         await ensure_demo_user(session)
         await ensure_admin_user(session)
-        try:
-            admin_request = await ensure_admin_permanent_request(session)
-            if admin_request is not None:
-                logging.info("Ensured admin permanent Gate request id=%s", admin_request.id)
-        except Exception:
-            logging.exception("Failed to ensure admin permanent Gate request")
         await ensure_bootstrap_test_users(session)
+
+    if settings.gate_real_integration_enabled:
+        existing_repair_task = getattr(app.state, "gate_startup_sync_task", None)
+        if settings.gate_startup_sync_enabled and (existing_repair_task is None or existing_repair_task.done()):
+            app.state.gate_startup_sync_task = asyncio.create_task(_run_gate_startup_sync())
+            logging.info("Started Gate startup sync worker")
+        elif not settings.gate_startup_sync_enabled:
+            logging.info("Gate startup sync worker is disabled")
 
     if settings.gate_real_integration_enabled and settings.gate_event_poll_enabled:
         existing_task = getattr(app.state, "courier_gate_event_task", None)
@@ -238,9 +300,23 @@ async def startup_event() -> None:
             app.state.courier_gate_event_task = asyncio.create_task(courier_gate_event_worker())
             logging.info("Started Gate entry event courier worker")
 
+    if settings.gate_real_integration_enabled and settings.gate_gateterm_users_guard_enabled:
+        try:
+            gate_client.ensure_gateterm_users_guard_running()
+        except Exception:
+            logging.exception("Failed to start GateTerm users guard")
+
 
 @app.on_event("shutdown")
 async def shutdown_event() -> None:
+    repair_task = getattr(app.state, "gate_startup_sync_task", None)
+    if repair_task is not None and not repair_task.done():
+        repair_task.cancel()
+    try:
+        gate_client.stop_gateterm_users_guard()
+    except Exception:
+        logging.exception("Failed to stop GateTerm users guard")
+
     task = getattr(app.state, "courier_gate_event_task", None)
     if task is None:
         return

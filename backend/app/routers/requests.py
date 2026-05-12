@@ -26,27 +26,46 @@ def _to_response(item) -> RequestResponse:
     )
 
 
+def _direct_request_route_disabled_detail(key_type: str) -> dict[str, str]:
+    if key_type == "Phone":
+        return {
+            "code": "request_route_disabled",
+            "message": "Phone passes are provisioned automatically when an admin creates a resident account",
+        }
+    return {
+        "code": "request_route_disabled",
+        "message": "Vehicle passes must be created through the mobile app /passes flow",
+    }
+
+
 @router.post("/", response_model=RequestResponse)
 async def create_request(
     payload: CreateRequestRequest,
     session: AsyncSession = Depends(get_db_session),
     user: User = Depends(get_current_user),
 ) -> RequestResponse:
-    if not payload.is_permanent and payload.hours is None:
-        payload.hours = 24
-    try:
-        request = await request_service.create_request(session, user, payload)
-    except request_service.RequestConflictError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": exc.code, "message": exc.message},
-        ) from exc
-    except request_service.RequestIntegrationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"code": exc.code, "message": exc.message},
-        ) from exc
-    return _to_response(request)
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=_direct_request_route_disabled_detail(payload.key_type),
+    )
+
+    # Keeping the old generic pass-creation path here for quick rollback if the
+    # restricted routing policy needs to be reverted.
+    # if not payload.is_permanent and payload.hours is None:
+    #     payload.hours = 24
+    # try:
+    #     request = await request_service.create_request(session, user, payload)
+    # except request_service.RequestConflictError as exc:
+    #     raise HTTPException(
+    #         status_code=status.HTTP_409_CONFLICT,
+    #         detail={"code": exc.code, "message": exc.message},
+    #     ) from exc
+    # except request_service.RequestIntegrationError as exc:
+    #     raise HTTPException(
+    #         status_code=status.HTTP_502_BAD_GATEWAY,
+    #         detail={"code": exc.code, "message": exc.message},
+    #     ) from exc
+    # return _to_response(request)
 
 
 @router.get("/", response_model=list[RequestResponse])

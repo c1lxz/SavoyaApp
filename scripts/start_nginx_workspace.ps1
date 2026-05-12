@@ -508,7 +508,7 @@ Wait-ForHttpSuccess -Description "backend health endpoint" -Probe {
         "http://127.0.0.1:$BackendPort/health"
     ) -NoProxyHosts $proxyBypassHosts -AllowFailure
     return $result.ExitCode -eq 0 -and $result.Output -match '"status"\s*:\s*"ok"'
-}
+} -TimeoutSeconds 120
 
 Invoke-ExternalCommand `
     -Executable $resolvedNginxExePath `

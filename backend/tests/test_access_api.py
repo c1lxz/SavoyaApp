@@ -659,6 +659,64 @@ def test_gate_entry_event_schedules_vehicle_only_courier_pass_when_reader_looks_
     asyncio.run(_assert_entry_like_event_schedule())
 
 
+def test_gate_entry_event_continues_when_access_point_sync_temporarily_fails(client, monkeypatch):
+    headers, user_id = _create_user_and_login(client)
+    entry_point_id = get_settings().gate_action_map["entry"]
+    phone_number = f"7934{str(uuid4().int)[:7]}"
+    create_response = client.post(
+        "/passes",
+        headers=headers,
+        json={
+            "carNumber": f"CAM{uuid4().hex[:5]}",
+            "plotNumber": "81",
+            "phoneNumber": phone_number,
+            "expiresAt": (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(),
+            "isPermanent": False,
+            "isCourier": True,
+        },
+    )
+    assert create_response.status_code == 200
+
+    async def _active_courier_row() -> Request:
+        async with SessionLocal() as session:
+            query = await session.execute(
+                select(Request)
+                .where(Request.resident_id == user_id, Request.status == "active", Request.is_courier.is_(True))
+                .order_by(Request.id)
+            )
+            rows = list(query.scalars().all())
+            assert len(rows) == 1
+            return rows[0]
+
+    courier_row = asyncio.run(_active_courier_row())
+
+    async def _broken_sync(_session) -> None:
+        raise RuntimeError("temporary Gate MDB snapshot failure")
+
+    monkeypatch.setattr("backend.app.services.access.sync_access_points", _broken_sync)
+
+    async def _process_gate_event() -> int:
+        async with SessionLocal() as session:
+            return await process_courier_gate_entry_events(
+                session,
+                [
+                    {
+                        "index": 900201,
+                        "event_type": 1,
+                        "event_code": 2,
+                        "access_point_id": entry_point_id,
+                        "unit": "РЎС‡РёС‚С‹РІР°С‚РµР»СЊ РІСЉРµР·Рґ GSM",
+                        "message": "РџСЂРѕС…РѕРґ РїРѕ РєР»СЋС‡Сѓ СЂР°Р·СЂРµС€РµРЅ",
+                        "name": courier_row.key_value,
+                        "user_ptr": courier_row.gate_key_id,
+                    }
+                ],
+            )
+
+    scheduled_count = asyncio.run(_process_gate_event())
+    assert scheduled_count == 1
+
+
 def test_vehicle_only_courier_passes_do_not_create_phone_rows(client):
     headers, user_id = _create_user_and_login(client)
     gsm_entry_point_id = get_settings().gate_action_map["wicket_admin"]

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import get_settings
 from ..database import get_db_session
 from ..dependencies import get_current_admin_user
 from ..models import Request, User
@@ -30,6 +33,8 @@ from ..utils.datetime import ensure_utc_datetime
 from ..utils.vehicle_country import detect_vehicle_country
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 def _to_admin_request_item(item: Request, resident: User) -> AdminRequestItem:
@@ -150,7 +155,7 @@ async def admin_create_user(
     _admin: User = Depends(get_current_admin_user),
 ) -> AdminUserItem:
     try:
-        user, _password = await create_user_account(
+        user, generated_password = await create_user_account(
             session,
             full_name=payload.full_name,
             phone_number=payload.phone,
@@ -163,8 +168,21 @@ async def admin_create_user(
             detail={"code": exc.code, "message": exc.message},
         ) from exc
 
-    await link_existing_gate_passes_by_phone(session, user)
-    return _to_admin_user_item(user)
+    gate_link = await link_existing_gate_passes_by_phone(session, user)
+    if settings.gate_real_integration_enabled and user.phone and not user.is_admin:
+        if gate_link.error or gate_link.linked_count < 1:
+            try:
+                await delete_user_account(session, user=user, strict_gate_cleanup=False)
+            except Exception:
+                logger.exception("Failed to roll back user after Gate phone provisioning failure", extra={"user_id": user.id})
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "code": "gate_phone_access_failed",
+                    "message": gate_link.error or "Gate phone pass was not provisioned for the created user",
+                },
+            )
+    return AdminUserItem(**build_admin_user_payload(user, visible_password_override=generated_password))
 
 
 @router.post("/users/{user_id}/block", response_model=AdminUserItem)
@@ -214,7 +232,13 @@ async def admin_delete_user(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
 
-    await delete_user_account(session, user=user)
+    try:
+        await delete_user_account(session, user=user)
+    except UserAccountError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
     return MessageResponse(message="Пользователь удалён")
 
 

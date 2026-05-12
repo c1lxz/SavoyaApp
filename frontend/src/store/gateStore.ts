@@ -1,6 +1,7 @@
 ﻿import { create } from 'zustand';
 
 import { mockGateService } from '@/services/gateService';
+import { useAuthStore } from '@/store/authStore';
 import { GateAction, GateActionResult, RequestState } from '@/types';
 
 type GateStore = {
@@ -26,6 +27,12 @@ const openByType = async (
   }
 
   set({ gateState: 'loading', result: null, error: null });
+  const sessionIsValid = await useAuthStore.getState().validateSession();
+  if (!sessionIsValid || !useAuthStore.getState().user) {
+    set({ gateState: 'idle', result: null, error: null });
+    return;
+  }
+
   try {
     const result = await mockGateService.openAction(type);
 

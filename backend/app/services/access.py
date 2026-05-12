@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from math import ceil
@@ -17,6 +18,7 @@ from ..utils.datetime import ensure_utc_datetime, utcnow
 from .gate import GateOpenResult, gate_client
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 OPEN_ACTION = "open"
 STATUS_PENDING = "pending"
 STATUS_SUCCESS = "success"
@@ -119,7 +121,7 @@ def _infer_access_point_type(name: str) -> str:
 
 async def sync_access_points(session: AsyncSession) -> None:
     async with _SYNC_ACCESS_POINTS_LOCK:
-        points = gate_client.get_access_points()
+        points = await asyncio.to_thread(gate_client.get_access_points)
         for point in points:
             point_id = int(point["id"])
             point_name = str(point["name"])
@@ -318,8 +320,7 @@ async def _resolve_access_context(
     gate_key_id = user.gate_user_id
     if gate_key_id is None:
         try:
-            gate_key_id = gate_client.add_permanent_key(
-                key_type="Phone",
+            gate_key_id = gate_client.add_account_phone_key(
                 key_value=user.phone,
                 phone_number=user.phone,
                 access_point_ids=account_access_point_ids,
@@ -600,7 +601,14 @@ async def process_courier_gate_entry_events(session: AsyncSession, events: list[
     if not candidate_events:
         return 0
 
-    await sync_access_points(session)
+    try:
+        await sync_access_points(session)
+    except Exception:
+        logger.warning(
+            "Failed to sync access points from Gate before courier event processing; "
+            "continuing with configured/local access point data",
+            exc_info=True,
+        )
     for event in sorted(candidate_events, key=lambda item: _gate_event_int(item, "index") or 0):
         scheduled_request_ids = await process_courier_gate_entry_event(session, event, sync_points=False)
         scheduled_count += len(scheduled_request_ids)
@@ -797,8 +805,7 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
         and (user.phone or "").strip()
     ):
         try:
-            refreshed_gate_key_id = gate_client.add_permanent_key(
-                key_type="Phone",
+            refreshed_gate_key_id = gate_client.add_account_phone_key(
                 key_value=user.phone,
                 phone_number=user.phone,
                 access_point_ids=_account_access_point_ids(),

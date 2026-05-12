@@ -9,7 +9,7 @@ import uuid
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -38,10 +38,18 @@ _GATETERM_ACCESS_WINDOW_TITLE = "Управление точками досту�
 _GATETERM_MAIN_WINDOW_TITLE = "GATE Terminal"
 _GATETERM_USERS_MENU_PATH = "Бюро пропусков->Пользователи"
 _GATETERM_USERS_WINDOW_TITLE = "Список пользователей"
+_GATETERM_NEW_USER_WINDOW_TITLE = "Новый пользователь"
 _GATETERM_USER_SEARCH_WINDOW_TITLE = "Поиск пользователя"
 _GATETERM_USER_EDIT_WINDOW_TITLE = "Изменение пользователя"
 _GATETERM_USER_SEARCH_FIELD_KEY_NUMBER = "Номер ключа"
 _GATETERM_USER_SEARCH_FIELD_KEY_NUMBER_INDEX = 4
+_GATETERM_LOGIN_WINDOW_TITLE = "Регистрация оператора"
+_GATETERM_USER_EDITOR_TAB_OFFSETS = {
+    "key": 40,
+    "access": 145,
+    "info": 260,
+    "photo": 395,
+}
 _PHONE_READER_HINTS = (
     "gsm",
     "gate terminal",
@@ -55,6 +63,8 @@ _PHONE_READER_HINTS = (
     "телефон",
 )
 ACTIVE_USER_STATUS = 0
+_ANONYMOUS_GSM_EVENT_INFERENCE_WINDOW_SECONDS = 30
+_ANONYMOUS_GSM_EVENT_SUCCESS_CODES = frozenset({2, 8, 56, 208})
 
 
 @dataclass
@@ -276,15 +286,26 @@ def _sample_phone_storage_value(cursor: pyodbc.Cursor) -> str | None:
         except Exception:
             rows = []
 
+        phone_key_type_value: Any | None = None
+        inferred_phone_key_types = {
+            getattr(row, "KeyType", None)
+            for row in rows
+            if _looks_like_phone_reader(getattr(row, "Name", None))
+            and _is_phone_identity_row(row)
+            and getattr(row, "KeyType", None) is not None
+        }
+        if len(inferred_phone_key_types) == 1:
+            phone_key_type_value = next(iter(inferred_phone_key_types))
+
         phone_candidates: list[tuple[str, str]] = []
         for row in rows:
             if not _looks_like_phone_reader(getattr(row, "Name", None)):
                 continue
-            if not _is_phone_identity_row(row):
+            if not _is_phone_identity_row(row, phone_key_type_value=phone_key_type_value):
                 continue
             raw_value = str(row.Phone if hasattr(row, "Phone") else row[0])
             normalized = raw_value.strip()
-            if normalized:
+            if normalized and _normalize_optional_phone(raw_value):
                 phone_candidates.append((raw_value, normalized))
 
         if phone_candidates:
@@ -429,6 +450,27 @@ def _split_name(full_name: str) -> tuple[str | None, str | None, str | None]:
     if len(parts) == 2:
         return parts[0], parts[1], None
     return parts[0], parts[1], " ".join(parts[2:])
+
+
+def _compose_gate_user_name(
+    full_name: Any,
+    last_name: Any | None = None,
+    first_name: Any | None = None,
+    father_name: Any | None = None,
+) -> str | None:
+    normalized_full_name = _normalize_gate_detail(full_name)
+    if normalized_full_name is not None:
+        return normalized_full_name
+
+    parts = [
+        _normalize_gate_detail(last_name),
+        _normalize_gate_detail(first_name),
+        _normalize_gate_detail(father_name),
+    ]
+    visible_parts = [part for part in parts if part]
+    if not visible_parts:
+        return None
+    return " ".join(visible_parts)
 
 
 def _generate_unique_number_u(cursor: pyodbc.Cursor) -> str:
@@ -597,6 +639,68 @@ def _apply_user_defaults(
     cursor.execute(f"UPDATE Users SET {', '.join(assignments)} WHERE UserPtr = ?", params)
 
 
+def _default_value_matches(current_value: Any, expected_value: Any) -> bool:
+    if current_value is None or expected_value is None:
+        return current_value is expected_value
+    if isinstance(current_value, bool) or isinstance(expected_value, bool):
+        return bool(current_value) == bool(expected_value)
+    return current_value == expected_value
+
+
+def _sync_user_defaults_if_needed(
+    cursor: pyodbc.Cursor,
+    *,
+    user_ptr: int,
+    key_type: str,
+    row: Any | None = None,
+    exclude_user_ptr: int | None = None,
+) -> bool:
+    if not hasattr(cursor, "execute"):
+        return False
+    defaults = _sample_user_defaults(cursor, key_type, exclude_user_ptr=exclude_user_ptr)
+    if not defaults:
+        return False
+
+    source_row = row
+    if source_row is None:
+        source_row = cursor.execute(
+            """
+            SELECT TOP 1
+                GroupPtr,
+                IdleNotLimited,
+                NoFacility,
+                BgPtr,
+                SendSms,
+                SendMail,
+                UniPassMode
+            FROM Users
+            WHERE UserPtr = ?
+            """,
+            (int(user_ptr),),
+        ).fetchone()
+    if source_row is None:
+        return False
+
+    assignments: list[str] = []
+    params: list[Any] = []
+    for column in ("GroupPtr", "IdleNotLimited", "NoFacility", "BgPtr", "SendSms", "SendMail", "UniPassMode"):
+        if column not in defaults:
+            continue
+        expected_value = defaults[column]
+        current_value = getattr(source_row, column, None)
+        if _default_value_matches(current_value, expected_value):
+            continue
+        assignments.append(f"[{column}] = ?")
+        params.append(expected_value)
+
+    if not assignments:
+        return False
+
+    params.append(int(user_ptr))
+    cursor.execute(f"UPDATE Users SET {', '.join(assignments)} WHERE UserPtr = ?", params)
+    return True
+
+
 def _build_identity(cursor: pyodbc.Cursor, key_type: str, normalized_key_value: str) -> RealGateIdentity:
     if key_type == "Phone":
         storage_phone = _format_phone_for_storage(cursor, normalized_key_value)
@@ -674,6 +778,33 @@ def _normalize_gate_detail(value: str | None) -> str | None:
     return normalized or None
 
 
+def _users_has_display_name_column(cursor: pyodbc.Cursor) -> bool:
+    try:
+        cursor.execute("SELECT TOP 1 [Name] FROM Users")
+    except Exception:
+        return False
+    return True
+
+
+def _set_gate_user_name_fields(cursor: pyodbc.Cursor, *, user_ptr: int, resident_name: str) -> None:
+    display_name = _compose_gate_user_name(resident_name)
+    last_name, first_name, father_name = _split_name(resident_name)
+    assignments = []
+    params: list[Any] = []
+    if _users_has_display_name_column(cursor):
+        assignments.append("[Name] = ?")
+        params.append(display_name)
+    assignments.extend(
+        [
+            "[LastName] = ?",
+            "[FirstName] = ?",
+            "[FatherName] = ?",
+        ]
+    )
+    params.extend([last_name, first_name, father_name, int(user_ptr)])
+    cursor.execute(f"UPDATE Users SET {', '.join(assignments)} WHERE UserPtr = ?", params)
+
+
 def _update_phone_user_details(
     cursor: pyodbc.Cursor,
     *,
@@ -710,46 +841,107 @@ def _looks_like_phone_identity_number(value: Any) -> bool:
     if not raw:
         return False
     digits = "".join(ch for ch in raw if ch.isdigit())
-    if len(digits) < 10:
+    if not digits:
         return False
-    return not any(ch.isalpha() for ch in raw)
+    if raw.startswith("+") and len(digits) == 11 and digits.startswith("79"):
+        return True
+    if len(digits) == 10 and digits.startswith("9"):
+        return True
+    if len(digits) == 11 and digits[0] in {"7", "8"} and digits[1] == "9":
+        return True
+    if len(digits) == 12 and digits.startswith("00") and digits[2] == "9":
+        return True
+    return len(digits) == 13 and digits.startswith("007") and digits[3] == "9"
 
 
-def _phone_identity_values(row: Any) -> set[str]:
+def _phone_identity_values(row: Any, *, phone_key_type_value: Any | None = None) -> set[str]:
     values: set[str] = set()
-    for field_name in ("Phone", "Number", "NumberU"):
-        normalized = _normalize_optional_phone(getattr(row, field_name, None))
+    for field_name in ("Number", "NumberU"):
+        raw_value = getattr(row, field_name, None)
+        if not _looks_like_phone_identity_number(raw_value):
+            continue
+        normalized = _normalize_optional_phone(raw_value)
         if normalized:
             values.add(normalized)
+
+    row_key_type = getattr(row, "KeyType", None)
+    raw_phone = getattr(row, "Phone", None)
+    if phone_key_type_value is not None and row_key_type == phone_key_type_value:
+        normalized_phone = _normalize_optional_phone(raw_phone)
+        if normalized_phone:
+            values.add(normalized_phone)
     return values
 
 
-def _phone_identity_matches(row: Any, normalized_key_value: str) -> bool:
-    return normalized_key_value in _phone_identity_values(row)
+def _phone_identity_matches(
+    row: Any,
+    normalized_key_value: str,
+    *,
+    phone_key_type_value: Any | None = None,
+) -> bool:
+    return normalized_key_value in _phone_identity_values(
+        row,
+        phone_key_type_value=phone_key_type_value,
+    )
+
+
+def _preferred_phone_identity_value(row: Any, *, phone_key_type_value: Any | None = None) -> str:
+    raw_number = getattr(row, "Number", None)
+    if _looks_like_phone_identity_number(raw_number):
+        normalized_number = _normalize_optional_phone(raw_number)
+        if normalized_number:
+            return normalized_number
+
+    raw_number_u = getattr(row, "NumberU", None)
+    if _looks_like_phone_identity_number(raw_number_u):
+        normalized_number_u = _normalize_optional_phone(raw_number_u)
+        if normalized_number_u:
+            return normalized_number_u
+
+    row_key_type = getattr(row, "KeyType", None)
+    raw_phone = getattr(row, "Phone", None)
+    if phone_key_type_value is not None and row_key_type == phone_key_type_value:
+        normalized_phone = _normalize_optional_phone(raw_phone)
+        if normalized_phone:
+            return normalized_phone
+    return ""
 
 
 def _is_phone_identity_row(row: Any, *, phone_key_type_value: Any | None = None) -> bool:
     if bool(getattr(row, "Deleted", False)):
         return False
-    if not _phone_identity_values(row):
-        return False
-
-    row_key_type = getattr(row, "KeyType", None)
-    if phone_key_type_value is not None and row_key_type == phone_key_type_value:
-        return True
-
-    return _looks_like_phone_identity_number(getattr(row, "Number", None))
+    return bool(_phone_identity_values(row, phone_key_type_value=phone_key_type_value))
 
 
 def _is_phone_user_match(row: Any, *, normalized_key_value: str, phone_key_type_value: Any | None) -> bool:
-    if not _phone_identity_matches(row, normalized_key_value):
+    return _phone_identity_matches(
+        row,
+        normalized_key_value,
+        phone_key_type_value=phone_key_type_value,
+    ) and _is_phone_identity_row(
+        row,
+        phone_key_type_value=phone_key_type_value,
+    )
+
+
+def _is_reusable_deleted_phone_user_match(
+    row: Any,
+    *,
+    normalized_key_value: str,
+    phone_key_type_value: Any | None,
+) -> bool:
+    if not _phone_identity_matches(
+        row,
+        normalized_key_value,
+        phone_key_type_value=phone_key_type_value,
+    ):
         return False
 
     row_key_type = getattr(row, "KeyType", None)
     if phone_key_type_value is not None and row_key_type == phone_key_type_value:
         return True
 
-    return _looks_like_phone_identity_number(getattr(row, "Number", None))
+    return bool(_preferred_phone_identity_value(row, phone_key_type_value=phone_key_type_value))
 
 
 def _is_vehicle_identity_row(row: Any, *, vehicle_key_type_value: Any | None = None) -> bool:
@@ -816,7 +1008,11 @@ def _find_reusable_deleted_user_ptr(
         if int(row.UserPtr) <= 0:
             continue
         if key_type == "Phone":
-            if _is_phone_user_match(row, normalized_key_value=normalized_key_value, phone_key_type_value=key_type_value):
+            if _is_reusable_deleted_phone_user_match(
+                row,
+                normalized_key_value=normalized_key_value,
+                phone_key_type_value=key_type_value,
+            ):
                 return int(row.UserPtr)
             continue
         if _normalize_optional_text(row.Number) == normalized_key_value:
@@ -846,39 +1042,80 @@ def _cleanup_conflicting_phone_rows(
         row_user_ptr = int(getattr(row, "UserPtr", 0) or 0)
         if row_user_ptr <= 0 or row_user_ptr == keep_user_ptr:
             continue
-        if not _phone_identity_matches(row, normalized_key_value):
+        if not _phone_identity_matches(
+            row,
+            normalized_key_value,
+            phone_key_type_value=phone_key_type_value,
+        ):
             continue
         if _is_phone_identity_row(row, phone_key_type_value=phone_key_type_value):
-            scrub_token = uuid.uuid4().hex[:10].upper()
-            cursor.execute("DELETE FROM AccessTable WHERE UserPtr = ?", (row_user_ptr,))
-            cursor.execute(
-                """
-                UPDATE Users
-                SET
-                    Deleted = ?,
-                    UseExpiry = ?,
-                    ExpiryDate = ?,
-                    ExpiryTime = ?,
-                    LockDate = ?,
-                    [Phone] = ?,
-                    [Number] = ?,
-                    [NumberU] = ?
-                WHERE UserPtr = ?
-                """,
-                (
-                    True,
-                    False,
-                    None,
-                    None,
-                    None,
-                    None,
-                    f"PURGED-{row_user_ptr}-{scrub_token}",
-                    f"PURGED-{scrub_token}",
-                    row_user_ptr,
-                ),
-            )
+            _purge_gate_user_identity(cursor, user_ptr=row_user_ptr)
+
+
+def _purge_gate_user_identity(cursor: pyodbc.Cursor, *, user_ptr: int) -> None:
+    scrub_token = uuid.uuid4().hex[:10].upper()
+    cursor.execute("DELETE FROM AccessTable WHERE UserPtr = ?", (user_ptr,))
+    cursor.execute(
+        """
+        UPDATE Users
+        SET
+            Deleted = ?,
+            UseExpiry = ?,
+            ExpiryDate = ?,
+            ExpiryTime = ?,
+            LockDate = ?,
+            [Phone] = ?,
+            [Number] = ?,
+            [NumberU] = ?
+        WHERE UserPtr = ?
+        """,
+        (
+            True,
+            False,
+            None,
+            None,
+            None,
+            None,
+            f"PURGED-{user_ptr}-{scrub_token}",
+            f"PURGED-{scrub_token}",
+            user_ptr,
+        ),
+    )
+
+
+def _purge_deleted_phone_identity_rows(
+    cursor: pyodbc.Cursor,
+    *,
+    normalized_key_value: str,
+    phone_key_type_value: Any | None,
+) -> None:
+    if not hasattr(cursor, "execute") or not hasattr(cursor, "fetchall"):
+        return
+    rows = cursor.execute(
+        """
+        SELECT UserPtr, Phone, Number, NumberU, KeyType, Deleted
+        FROM Users
+        ORDER BY UserPtr DESC
+        """
+    ).fetchall()
+    for row in rows:
+        if not bool(getattr(row, "Deleted", False)):
             continue
-        cursor.execute("UPDATE Users SET Phone = ? WHERE UserPtr = ?", (None, row_user_ptr))
+        row_user_ptr = int(getattr(row, "UserPtr", 0) or 0)
+        if row_user_ptr <= 0:
+            continue
+        if not _phone_identity_matches(
+            row,
+            normalized_key_value,
+            phone_key_type_value=phone_key_type_value,
+        ):
+            continue
+        if _is_reusable_deleted_phone_user_match(
+            row,
+            normalized_key_value=normalized_key_value,
+            phone_key_type_value=phone_key_type_value,
+        ):
+            _purge_gate_user_identity(cursor, user_ptr=row_user_ptr)
 
 
 def _resolve_inserted_user_ptr(cursor: pyodbc.Cursor, *, number_u: str) -> int:
@@ -962,6 +1199,7 @@ def _insert_real_user(
     expires_at: datetime | None,
 ) -> int:
     defaults = _sample_user_defaults(cursor, key_type)
+    display_name = _compose_gate_user_name(resident_name)
     last_name, first_name, father_name = _split_name(resident_name)
     identity = _build_identity(cursor, key_type, normalized_key_value)
     expiry_date, expiry_time = _split_access_expiry(expires_at, key_type=key_type)
@@ -979,6 +1217,8 @@ def _insert_real_user(
     add("Number", identity.number)
     add("NumberU", identity.number_u)
     add("NumberMifare", identity.number_mifare)
+    if _users_has_display_name_column(cursor):
+        add("Name", display_name)
     if key_type == "Phone":
         add("Phone", identity.phone)
     else:
@@ -1025,7 +1265,6 @@ def _reactivate_real_user(
 ) -> int:
     expiry_date, expiry_time = _split_access_expiry(expires_at, key_type=key_type)
     lock_date = _access_lock_date(expires_at)
-    last_name, first_name, father_name = _split_name(resident_name)
     vehicle_number_u: str | None = None
     if key_type != "Phone":
         vehicle_number_u = _resolve_vehicle_number_u(
@@ -1071,18 +1310,10 @@ def _reactivate_real_user(
         if phone_number is not None:
             assignments.append("[Phone] = ?")
             params.append(_normalize_contact_phone(phone_number))
-    if last_name is not None:
-        assignments.append("[LastName] = ?")
-        params.append(last_name)
-    if first_name is not None:
-        assignments.append("[FirstName] = ?")
-        params.append(first_name)
-    if father_name is not None:
-        assignments.append("[FatherName] = ?")
-        params.append(father_name)
 
     params.append(user_ptr)
     cursor.execute(f"UPDATE Users SET {', '.join(assignments)} WHERE UserPtr = ?", params)
+    _set_gate_user_name_fields(cursor, user_ptr=user_ptr, resident_name=resident_name)
     if key_type == "Phone":
         _update_phone_user_details(
             cursor,
@@ -1512,7 +1743,6 @@ def _upsert_real_user(
     if existing_user_ptr is not None:
         expiry_date, expiry_time = _split_access_expiry(expires_at, key_type=key_type)
         lock_date = _access_lock_date(expires_at)
-        last_name, first_name, father_name = _split_name(resident_name)
         vehicle_number_u: str | None = None
         if key_type != "Phone":
             vehicle_number_u = _resolve_vehicle_number_u(
@@ -1558,10 +1788,7 @@ def _upsert_real_user(
             )
         if phone_number is not None and key_type != "Phone":
             cursor.execute("UPDATE Users SET Phone = ? WHERE UserPtr = ?", (_normalize_contact_phone(phone_number), existing_user_ptr))
-        cursor.execute(
-            "UPDATE Users SET [LastName] = ?, [FirstName] = ?, [FatherName] = ? WHERE UserPtr = ?",
-            (last_name, first_name, father_name, existing_user_ptr),
-        )
+        _set_gate_user_name_fields(cursor, user_ptr=existing_user_ptr, resident_name=resident_name)
         _apply_user_defaults(
             cursor,
             user_ptr=existing_user_ptr,
@@ -1593,7 +1820,13 @@ def _upsert_real_user(
         normalized_key_value,
         key_type_value=key_type_value,
     )
-    if reusable_user_ptr is not None:
+    if reusable_user_ptr is not None and key_type == "Phone":
+        _purge_deleted_phone_identity_rows(
+            cursor,
+            normalized_key_value=normalized_key_value,
+            phone_key_type_value=key_type_value,
+        )
+    elif reusable_user_ptr is not None:
         user_ptr = _reactivate_real_user(
             cursor,
             user_ptr=reusable_user_ptr,
@@ -1681,6 +1914,109 @@ def add_permanent_key(
         )
 
 
+def add_phone_permanent_key_via_gateterm_ui(
+    key_value: str,
+    phone_number: str | None,
+    access_point_ids: list[int],
+    resident_name: str = "Resident",
+    plot_number: str | None = None,
+) -> int:
+    del phone_number
+
+    normalized_key_value = _normalize_phone(key_value)
+    validated_points = _validate_access_point_ids(access_point_ids)
+    attempts = max(1, _env_int("GATE_GATETERM_UI_CREATE_ATTEMPTS", 3))
+    last_error: Exception | None = None
+
+    for attempt_index in range(attempts):
+        context = _load_phone_ui_provisioning_context(
+            normalized_key_value=normalized_key_value,
+            access_point_ids=validated_points,
+        )
+        app: Any | None = None
+        try:
+            app = _connect_or_start_gateterm_application()
+            _prepare_gateterm_users_workspace(app)
+            users_window = _open_gateterm_users_view(app)
+
+            created_via_new_dialog = context["existing_user_ptr"] is None
+            if created_via_new_dialog:
+                editor_window = _open_gateterm_new_user_window(app, users_window)
+                finalize_save = _finalize_gateterm_new_user_save
+            else:
+                _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
+                editor_window = _open_gateterm_user_edit_window(app, users_window)
+                finalize_save = _finalize_gateterm_user_edit_save
+
+            _populate_gateterm_phone_pass_editor(
+                editor_window,
+                normalized_key_value=normalized_key_value,
+                phone_storage_value=str(context["phone_storage_value"] or ""),
+                resident_name=resident_name,
+                plot_number=plot_number,
+                desired_access_labels=set(context["desired_access_labels"]),
+                current_access_labels=set(context.get("current_access_labels") or set()),
+            )
+            _click_gateterm_control(editor_window, 1, "ThunderRT6CommandButton", "Button")
+            time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_DELAY_SECONDS", 0.75))
+            finalize_save(app)
+
+            user_ptr = _wait_for_phone_user_ptr(
+                normalized_key_value=normalized_key_value,
+                phone_key_type_value=context["phone_key_type_value"],
+                timeout_seconds=_env_float("GATE_GATETERM_UI_CREATE_VERIFY_TIMEOUT_SECONDS", 12.0),
+            )
+            if created_via_new_dialog:
+                refreshed_context = _load_phone_ui_provisioning_context(
+                    normalized_key_value=normalized_key_value,
+                    access_point_ids=validated_points,
+                )
+                desired_access_labels = set(refreshed_context["desired_access_labels"])
+                current_access_labels = set(refreshed_context.get("current_access_labels") or set())
+                if current_access_labels != desired_access_labels:
+                    _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
+                    editor_window = _open_gateterm_user_edit_window(app, users_window)
+                    _populate_gateterm_phone_pass_editor(
+                        editor_window,
+                        normalized_key_value=normalized_key_value,
+                        phone_storage_value=str(refreshed_context["phone_storage_value"] or ""),
+                        resident_name=resident_name,
+                        plot_number=plot_number,
+                        desired_access_labels=desired_access_labels,
+                        current_access_labels=current_access_labels,
+                    )
+                    _click_gateterm_control(editor_window, 1, "ThunderRT6CommandButton", "Button")
+                    time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_DELAY_SECONDS", 0.75))
+                    _finalize_gateterm_user_edit_save(app)
+            _verify_phone_identity_persisted(
+                user_ptr,
+                normalized_key_value,
+                context["phone_key_type_value"],
+                validated_points,
+            )
+            try:
+                _close_gateterm_users_window_if_open(app)
+            except Exception:
+                pass
+            return user_ptr
+        except Exception as exc:
+            last_error = exc
+            try:
+                if app is None:
+                    app = _connect_or_start_gateterm_application()
+                _prepare_gateterm_users_workspace(app)
+                _close_gateterm_users_window_if_open(app)
+            except Exception:
+                pass
+            if attempt_index + 1 >= attempts:
+                raise RuntimeError(f"GateTerm phone provisioning failed: {exc}") from exc
+            time_module.sleep(_env_float("GATE_GATETERM_UI_RETRY_DELAY_SECONDS", 0.35))
+
+    if last_error is not None and attempts < 1:
+        raise RuntimeError(f"GateTerm phone provisioning failed: {last_error}") from last_error
+    raise RuntimeError("GateTerm phone provisioning failed unexpectedly")
+
+
 def add_temporary_key(
     key_type: str,
     key_value: str,
@@ -1715,12 +2051,36 @@ def remove_key(key_id: int) -> bool:
     if not isinstance(key_id, int) or key_id <= 0:
         raise ValueError("key_id must be a positive integer")
 
+    with _readonly_cursor() as (_, cursor):
+        cursor.execute(
+            """
+            SELECT TOP 1 UserPtr, KeyType, Number, NumberU, Phone, Deleted
+            FROM Users
+            WHERE UserPtr = ?
+            """,
+            (key_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return False
+        if bool(getattr(row, "Deleted", False)):
+            return _mark_gate_user_deleted(key_id)
+        search_key = _resolve_gateterm_user_search_key(cursor, row)
+
+    return _remove_key_via_gateterm_ui(key_id=key_id, normalized_key_value=search_key)
+
+
+def resolve_key_id(external_key_id: str | None) -> int | None:
+    with _readonly_cursor() as (_, cursor):
+        return _resolve_user_ptr(cursor, external_key_id)
+
+
+def _mark_gate_user_deleted(key_id: int) -> bool:
     with _transaction_cursor() as (_, cursor):
         cursor.execute("SELECT TOP 1 UserPtr FROM Users WHERE UserPtr = ?", (key_id,))
         row = cursor.fetchone()
         if row is None:
             return False
-
         cursor.execute("DELETE FROM AccessTable WHERE UserPtr = ?", (key_id,))
         cursor.execute(
             """
@@ -1731,6 +2091,33 @@ def remove_key(key_id: int) -> bool:
             (True, False, None, None, key_id),
         )
         return True
+
+
+def _resolve_gateterm_user_search_key(cursor: pyodbc.Cursor, row: Any) -> str:
+    phone_key_type_value = _sample_key_type(cursor, "Phone")
+    vehicle_key_type_value = _sample_key_type(cursor, "VehicleNumber")
+    if _is_phone_identity_row(row, phone_key_type_value=phone_key_type_value):
+        return _normalize_phone(
+            str(
+                getattr(row, "Number", None)
+                or getattr(row, "NumberU", None)
+                or getattr(row, "Phone", None)
+                or ""
+            )
+        )
+    if _is_vehicle_identity_row(row, vehicle_key_type_value=vehicle_key_type_value):
+        return _normalize_vehicle(str(getattr(row, "Number", None) or getattr(row, "NumberU", None) or ""))
+
+    normalized_number = _normalize_optional_text(getattr(row, "Number", None))
+    if normalized_number:
+        return normalized_number
+    normalized_number_u = _normalize_optional_text(getattr(row, "NumberU", None))
+    if normalized_number_u:
+        return normalized_number_u
+    normalized_phone = _normalize_optional_phone(getattr(row, "Phone", None))
+    if normalized_phone:
+        return _normalize_phone(normalized_phone)
+    raise RuntimeError(f"Gate key {int(getattr(row, 'UserPtr', 0) or 0)} has no searchable key number")
 
 
 def _combine_expiry(expiry_date: Any, expiry_time: Any) -> datetime | None:
@@ -1827,12 +2214,246 @@ def repair_vehicle_number_u(*, include_deleted: bool = False) -> dict[str, Any]:
                 current_number_u=getattr(row, "NumberU", None),
             )
             if normalized_number_u == _normalize_optional_text(resolved_number_u):
+                defaults_updated = _sync_user_defaults_if_needed(
+                    cursor,
+                    user_ptr=user_ptr,
+                    key_type="VehicleNumber",
+                    row=row,
+                    exclude_user_ptr=user_ptr,
+                )
+                if defaults_updated:
+                    repaired_user_ptrs.append(user_ptr)
                 continue
 
             cursor.execute(
                 "UPDATE Users SET [NumberU] = ? WHERE UserPtr = ?",
                 (resolved_number_u, user_ptr),
             )
+            _sync_user_defaults_if_needed(
+                cursor,
+                user_ptr=user_ptr,
+                key_type="VehicleNumber",
+                row=row,
+                exclude_user_ptr=user_ptr,
+            )
+            repaired_user_ptrs.append(user_ptr)
+
+    return {
+        "scanned": scanned,
+        "updated": len(repaired_user_ptrs),
+        "user_ptrs": repaired_user_ptrs,
+    }
+
+
+def repair_phone_identity_rows(*, include_deleted: bool = False) -> dict[str, Any]:
+    repaired_user_ptrs: list[int] = []
+    cleaned_user_ptrs: set[int] = set()
+    scanned = 0
+
+    with _transaction_cursor() as (_, cursor):
+        phone_key_type_value = _sample_key_type(cursor, "Phone")
+        rows = cursor.execute(
+            """
+            SELECT
+                UserPtr,
+                KeyType,
+                Phone,
+                Number,
+                NumberU,
+                Deleted,
+                LastUsed,
+                LastUsedRdrName,
+                GroupPtr
+            FROM Users
+            ORDER BY UserPtr DESC
+            """
+        ).fetchall()
+
+        rows_by_user_ptr: dict[int, Any] = {}
+        phone_groups: dict[str, list[int]] = {}
+        for row in rows:
+            user_ptr = int(getattr(row, "UserPtr", 0) or 0)
+            if user_ptr <= 0:
+                continue
+            if not include_deleted and bool(getattr(row, "Deleted", False)):
+                continue
+
+            rows_by_user_ptr[user_ptr] = row
+            normalized_phone = _preferred_phone_identity_value(
+                row,
+                phone_key_type_value=phone_key_type_value,
+            )
+            if not normalized_phone:
+                continue
+            phone_groups.setdefault(normalized_phone, []).append(user_ptr)
+
+        for normalized_phone, user_ptrs in phone_groups.items():
+            candidate_rows = [rows_by_user_ptr[user_ptr] for user_ptr in user_ptrs if user_ptr in rows_by_user_ptr]
+            if not candidate_rows:
+                continue
+
+            scanned += 1
+            candidate_rows.sort(
+                key=lambda item: (
+                    0 if getattr(item, "KeyType", None) == phone_key_type_value else 1,
+                    0 if _is_phone_identity_row(item, phone_key_type_value=phone_key_type_value) else 1,
+                    -int(getattr(item, "UserPtr", 0) or 0),
+                )
+            )
+            keep_row = candidate_rows[0]
+            keep_user_ptr = int(getattr(keep_row, "UserPtr", 0) or 0)
+            if keep_user_ptr <= 0:
+                continue
+
+            before_cleanup = {
+                user_ptr
+                for user_ptr in user_ptrs
+                if user_ptr != keep_user_ptr and user_ptr in rows_by_user_ptr
+            }
+            _cleanup_conflicting_phone_rows(
+                cursor,
+                normalized_key_value=normalized_phone,
+                keep_user_ptr=keep_user_ptr,
+                phone_key_type_value=phone_key_type_value,
+            )
+            cleaned_user_ptrs.update(before_cleanup)
+
+            expected_number = normalized_phone
+            actual_number = _normalize_optional_phone(getattr(keep_row, "Number", None))
+            actual_number_u = _normalize_optional_phone(getattr(keep_row, "NumberU", None))
+            assignments: list[str] = []
+            params: list[Any] = []
+            current_key_type = getattr(keep_row, "KeyType", None)
+            if phone_key_type_value is not None and current_key_type != phone_key_type_value:
+                assignments.append("[KeyType] = ?")
+                params.append(phone_key_type_value)
+            if actual_number != expected_number:
+                assignments.append("[Number] = ?")
+                params.append(expected_number)
+            if actual_number_u != expected_number:
+                assignments.append("[NumberU] = ?")
+                params.append(expected_number)
+
+            current_phone = _normalize_optional_phone(getattr(keep_row, "Phone", None))
+            if current_phone != expected_number:
+                assignments.append("[Phone] = ?")
+                params.append(_format_phone_for_storage(cursor, expected_number))
+
+            defaults_updated = _sync_user_defaults_if_needed(
+                cursor,
+                user_ptr=keep_user_ptr,
+                key_type="Phone",
+                row=keep_row,
+                exclude_user_ptr=keep_user_ptr,
+            )
+
+            if assignments:
+                params.append(keep_user_ptr)
+                cursor.execute(f"UPDATE Users SET {', '.join(assignments)} WHERE UserPtr = ?", params)
+                if keep_user_ptr not in repaired_user_ptrs:
+                    repaired_user_ptrs.append(keep_user_ptr)
+            elif defaults_updated and keep_user_ptr not in repaired_user_ptrs:
+                repaired_user_ptrs.append(keep_user_ptr)
+
+    return {
+        "scanned": scanned,
+        "updated": len(repaired_user_ptrs),
+        "user_ptrs": repaired_user_ptrs,
+        "cleaned": len(cleaned_user_ptrs),
+        "cleaned_user_ptrs": sorted(cleaned_user_ptrs),
+    }
+
+
+def repair_vehicle_visual_numbers(*, include_deleted: bool = False, limit: int = 50) -> dict[str, Any]:
+    safe_limit = max(0, min(int(limit), 5000))
+    if safe_limit == 0:
+        return {"scanned": 0, "updated": 0, "failed": 0, "user_ptrs": [], "failures": []}
+
+    candidates: list[int] = []
+    with _readonly_cursor() as (_, cursor):
+        vehicle_key_type_value = _sample_key_type(cursor, "VehicleNumber")
+        rows = cursor.execute(
+            """
+            SELECT UserPtr, KeyType, Number, NumberU, Deleted
+            FROM Users
+            ORDER BY UserPtr DESC
+            """
+        ).fetchall()
+        for row in rows:
+            user_ptr = int(getattr(row, "UserPtr", 0) or 0)
+            if user_ptr <= 0:
+                continue
+            if not include_deleted and bool(getattr(row, "Deleted", False)):
+                continue
+            if not _is_vehicle_identity_row(row, vehicle_key_type_value=vehicle_key_type_value):
+                continue
+
+            normalized_number = _normalize_optional_text(getattr(row, "Number", None))
+            normalized_number_u = _normalize_optional_text(getattr(row, "NumberU", None))
+            if not normalized_number or normalized_number_u != normalized_number:
+                continue
+
+            candidates.append(user_ptr)
+            if len(candidates) >= safe_limit:
+                break
+
+    repaired_user_ptrs: list[int] = []
+    failures: list[dict[str, Any]] = []
+    for user_ptr in candidates:
+        try:
+            post_sync_vehicle_key(user_ptr)
+            repaired_user_ptrs.append(user_ptr)
+        except Exception as exc:
+            failures.append({"user_ptr": user_ptr, "error": str(exc)})
+
+    return {
+        "scanned": len(candidates),
+        "updated": len(repaired_user_ptrs),
+        "failed": len(failures),
+        "user_ptrs": repaired_user_ptrs,
+        "failures": failures,
+    }
+
+
+def repair_user_display_names(*, include_deleted: bool = False) -> dict[str, Any]:
+    repaired_user_ptrs: list[int] = []
+    scanned = 0
+
+    with _transaction_cursor() as (_, cursor):
+        if not _users_has_display_name_column(cursor):
+            return {
+                "scanned": 0,
+                "updated": 0,
+                "user_ptrs": repaired_user_ptrs,
+            }
+        rows = cursor.execute(
+            """
+            SELECT UserPtr, [Name] AS DisplayName, LastName, FirstName, FatherName, Deleted
+            FROM Users
+            ORDER BY UserPtr DESC
+            """
+        ).fetchall()
+        for row in rows:
+            user_ptr = int(getattr(row, "UserPtr", 0) or 0)
+            if user_ptr <= 0:
+                continue
+            if not include_deleted and bool(getattr(row, "Deleted", False)):
+                continue
+
+            scanned += 1
+            if _compose_gate_user_name(getattr(row, "DisplayName", getattr(row, "Name", None))) is not None:
+                continue
+
+            rebuilt_name = _compose_gate_user_name(
+                None,
+                getattr(row, "LastName", None),
+                getattr(row, "FirstName", None),
+                getattr(row, "FatherName", None),
+            )
+            if rebuilt_name is None:
+                continue
+
+            cursor.execute("UPDATE Users SET [Name] = ? WHERE UserPtr = ?", (rebuilt_name, user_ptr))
             repaired_user_ptrs.append(user_ptr)
 
     return {
@@ -1901,10 +2522,10 @@ def _resolve_user_ptr(cursor: pyodbc.Cursor, external_key_id: str | None) -> int
             continue
         if int(row.UserPtr) <= 0:
             continue
-        if normalized_phone and (
-            _normalize_optional_phone(row.Phone) == normalized_phone
-            or _normalize_optional_phone(row.Number) == normalized_phone
-            or _normalize_optional_phone(getattr(row, "NumberU", None)) == normalized_phone
+        if normalized_phone and _is_phone_user_match(
+            row,
+            normalized_key_value=normalized_phone,
+            phone_key_type_value=None,
         ):
             return int(row.UserPtr)
         if normalized_text and (
@@ -1949,6 +2570,369 @@ def _has_user_permission(cursor: pyodbc.Cursor, user_ptr: int, access_point_id: 
         (user_ptr, access_point_id),
     )
     return cursor.fetchone() is not None
+
+
+def _load_gate_user_event_identities(user_ptrs: Iterable[int]) -> dict[int, dict[str, str | None]]:
+    normalized_user_ptrs = sorted({int(user_ptr) for user_ptr in user_ptrs if int(user_ptr) > 0})
+    if not normalized_user_ptrs:
+        return {}
+
+    placeholders = ", ".join("?" for _ in normalized_user_ptrs)
+    with _readonly_cursor() as (_, cursor):
+        display_name_column = "[Name] AS DisplayName," if _users_has_display_name_column(cursor) else ""
+        rows = cursor.execute(
+            f"""
+            SELECT UserPtr, {display_name_column} LastName, FirstName, FatherName, [Number], NumberU, Phone
+            FROM Users
+            WHERE UserPtr IN ({placeholders})
+            """,
+            tuple(normalized_user_ptrs),
+        ).fetchall()
+
+    identities: dict[int, dict[str, str | None]] = {}
+    for row in rows:
+        user_ptr = int(getattr(row, "UserPtr", 0) or 0)
+        if user_ptr <= 0:
+            continue
+
+        raw_number = getattr(row, "Number", None)
+        raw_number_u = getattr(row, "NumberU", None)
+        raw_phone = getattr(row, "Phone", None)
+        normalized_number = _normalize_optional_text(raw_number)
+        normalized_number_u = _normalize_optional_text(raw_number_u)
+        normalized_phone = _normalize_optional_phone(raw_phone) or None
+        normalized_phone_key = _preferred_phone_identity_value(row) or None
+
+        key_type: str | None = None
+        key_value: str | None = None
+        if normalized_phone_key:
+            key_type = "Phone"
+            key_value = normalized_phone_key
+        elif normalized_number:
+            key_type = "VehicleNumber"
+            key_value = normalized_number
+        elif normalized_number_u and _vehicle_number_u_mode() != "random":
+            key_type = "VehicleNumber"
+            key_value = normalized_number_u
+        elif normalized_phone:
+            key_type = "Phone"
+            key_value = normalized_phone
+
+        identities[user_ptr] = {
+            "full_name": _compose_gate_user_name(
+                getattr(row, "DisplayName", getattr(row, "Name", None)),
+                getattr(row, "LastName", None),
+                getattr(row, "FirstName", None),
+                getattr(row, "FatherName", None),
+            ),
+            "key_type": key_type,
+            "key_value": key_value,
+        }
+
+    return identities
+
+
+def _normalize_gate_reader_label(value: Any) -> str | None:
+    normalized_value = _normalize_gate_detail(value)
+    if normalized_value is None:
+        return None
+    return " ".join(normalized_value.casefold().split())
+
+
+def _phone_reader_names_by_id(cursor: pyodbc.Cursor) -> dict[int, str]:
+    rows = cursor.execute(
+        """
+        SELECT RdrPtr, Name
+        FROM Readers
+        """
+    ).fetchall()
+
+    reader_names: dict[int, str] = {}
+    for row in rows:
+        try:
+            access_point_id = int(getattr(row, "RdrPtr", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if access_point_id <= 0:
+            continue
+        reader_name = str(getattr(row, "Name", "") or "")
+        if _looks_like_phone_reader(reader_name):
+            reader_names[access_point_id] = reader_name
+    return reader_names
+
+
+def _event_int_value(event: dict[str, Any], key: str) -> int | None:
+    value = event.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _event_supports_phone_identity_inference(
+    event: dict[str, Any],
+    *,
+    phone_reader_access_point_ids: set[int],
+) -> bool:
+    user_ptr = _event_int_value(event, "user_ptr")
+    if user_ptr is not None and user_ptr > 0:
+        return False
+    if _normalize_gate_detail(event.get("name")) is not None:
+        return False
+    if _normalize_gate_detail(event.get("full_name")) is not None:
+        return False
+    if _normalize_gate_detail(event.get("key_value")) is not None:
+        return False
+
+    event_code = _event_int_value(event, "event_code")
+    if event_code not in _ANONYMOUS_GSM_EVENT_SUCCESS_CODES:
+        return False
+
+    access_point_id = _event_int_value(event, "access_point_id")
+    if access_point_id is not None and access_point_id in phone_reader_access_point_ids:
+        return True
+    if _looks_like_phone_reader(event.get("unit")):
+        return True
+    return _looks_like_phone_reader(event.get("message"))
+
+
+def _load_recent_phone_last_used_candidates(
+    cursor: pyodbc.Cursor,
+    *,
+    window_start: datetime,
+    window_end: datetime,
+) -> list[dict[str, Any]]:
+    phone_key_type_value = _sample_key_type(cursor, "Phone")
+    display_name_column = "[Name] AS DisplayName," if _users_has_display_name_column(cursor) else ""
+    rows = cursor.execute(
+        f"""
+        SELECT TOP 500
+            UserPtr,
+            {display_name_column}
+            LastName,
+            FirstName,
+            FatherName,
+            [Number],
+            NumberU,
+            Phone,
+            KeyType,
+            Deleted,
+            Status,
+            LastUsed,
+            LastUsedRdrName
+        FROM Users
+        WHERE LastUsed IS NOT NULL
+        ORDER BY LastUsed DESC, UserPtr DESC
+        """
+    ).fetchall()
+
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        user_ptr = int(getattr(row, "UserPtr", 0) or 0)
+        if user_ptr <= 0:
+            continue
+        if not _is_phone_identity_row(row, phone_key_type_value=phone_key_type_value):
+            continue
+        if not _is_active_user_status(getattr(row, "Status", None)):
+            continue
+
+        last_used = getattr(row, "LastUsed", None)
+        if not isinstance(last_used, datetime):
+            continue
+        if last_used < window_start or last_used > window_end:
+            continue
+
+        last_used_reader_ptr = getattr(row, "LastUsedRdrPtr", None)
+        try:
+            normalized_last_used_reader_ptr = int(last_used_reader_ptr or 0)
+        except (TypeError, ValueError):
+            normalized_last_used_reader_ptr = 0
+        last_used_event = _normalize_gate_detail(getattr(row, "LastUsedEvent", None))
+        last_used_reader_label = _normalize_gate_reader_label(getattr(row, "LastUsedRdrName", None))
+        if normalized_last_used_reader_ptr <= 0 and last_used_event is None and last_used_reader_label is None:
+            continue
+
+        key_value = _preferred_phone_identity_value(row, phone_key_type_value=phone_key_type_value) or None
+        if key_value is None:
+            continue
+
+        candidates.append(
+            {
+                "user_ptr": user_ptr,
+                "full_name": _compose_gate_user_name(
+                    getattr(row, "DisplayName", getattr(row, "Name", None)),
+                    getattr(row, "LastName", None),
+                    getattr(row, "FirstName", None),
+                    getattr(row, "FatherName", None),
+                ),
+                "key_type": "Phone",
+                "key_value": key_value,
+                "last_used": last_used,
+                "last_used_reader_label": last_used_reader_label,
+            }
+        )
+
+    return candidates
+
+
+def _match_inferred_phone_identity_for_event(
+    event: dict[str, Any],
+    *,
+    candidates: list[dict[str, Any]],
+    phone_reader_names_by_id: dict[int, str],
+) -> dict[str, Any] | None:
+    raw_event_time = event.get("time")
+    if isinstance(raw_event_time, datetime):
+        event_time = raw_event_time
+    else:
+        try:
+            event_time = datetime.fromisoformat(str(raw_event_time))
+        except ValueError:
+            return None
+
+    access_point_id = _event_int_value(event, "access_point_id")
+    event_reader_labels: set[str] = set()
+    if access_point_id is not None:
+        reader_name = phone_reader_names_by_id.get(access_point_id)
+        normalized_reader_name = _normalize_gate_reader_label(reader_name)
+        if normalized_reader_name is not None:
+            event_reader_labels.add(normalized_reader_name)
+    normalized_unit = _normalize_gate_reader_label(event.get("unit"))
+    if normalized_unit is not None:
+        event_reader_labels.add(normalized_unit)
+
+    grouped_matches: dict[tuple[str | None, str | None, str | None], dict[str, Any]] = {}
+    for candidate in candidates:
+        last_used = candidate.get("last_used")
+        if not isinstance(last_used, datetime):
+            continue
+        distance_seconds = abs((event_time - last_used).total_seconds())
+        if distance_seconds > _ANONYMOUS_GSM_EVENT_INFERENCE_WINDOW_SECONDS:
+            continue
+
+        candidate_reader_label = candidate.get("last_used_reader_label")
+        if candidate_reader_label is not None and event_reader_labels and candidate_reader_label not in event_reader_labels:
+            continue
+
+        reader_match = bool(candidate_reader_label is not None and candidate_reader_label in event_reader_labels)
+        identity_key = (
+            candidate.get("full_name"),
+            candidate.get("key_type"),
+            candidate.get("key_value"),
+        )
+        ranked_candidate = {
+            **candidate,
+            "distance_seconds": distance_seconds,
+            "reader_match": reader_match,
+        }
+        current_best = grouped_matches.get(identity_key)
+        current_rank = (
+            0 if reader_match else 1,
+            distance_seconds,
+        )
+        if current_best is None:
+            grouped_matches[identity_key] = ranked_candidate
+            continue
+        best_rank = (
+            0 if bool(current_best.get("reader_match")) else 1,
+            float(current_best.get("distance_seconds", 0.0) or 0.0),
+        )
+        if current_rank < best_rank:
+            grouped_matches[identity_key] = ranked_candidate
+
+    if not grouped_matches:
+        return None
+
+    ranked_matches = sorted(
+        grouped_matches.values(),
+        key=lambda item: (
+            0 if bool(item.get("reader_match")) else 1,
+            float(item.get("distance_seconds", 0.0) or 0.0),
+        ),
+    )
+    if len(ranked_matches) == 1:
+        return ranked_matches[0]
+
+    best_match = ranked_matches[0]
+    second_match = ranked_matches[1]
+    if bool(best_match.get("reader_match")) and not bool(second_match.get("reader_match")):
+        return best_match
+    return None
+
+
+def _infer_anonymous_gate_event_identities(events: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    candidate_events = [
+        event
+        for event in events
+        if (_event_int_value(event, "user_ptr") or 0) <= 0
+        and _normalize_gate_detail(event.get("name")) is None
+        and _normalize_gate_detail(event.get("full_name")) is None
+        and _normalize_gate_detail(event.get("key_value")) is None
+        and _event_int_value(event, "event_code") in _ANONYMOUS_GSM_EVENT_SUCCESS_CODES
+    ]
+    if not candidate_events:
+        return {}
+
+    valid_event_times: list[datetime] = []
+    for event in candidate_events:
+        raw_event_time = event.get("time")
+        if isinstance(raw_event_time, datetime):
+            valid_event_times.append(raw_event_time)
+            continue
+        try:
+            valid_event_times.append(datetime.fromisoformat(str(raw_event_time)))
+        except ValueError:
+            continue
+    if not valid_event_times:
+        return {}
+
+    window = timedelta(seconds=_ANONYMOUS_GSM_EVENT_INFERENCE_WINDOW_SECONDS)
+    window_start = min(valid_event_times) - window
+    window_end = max(valid_event_times) + window
+
+    with _readonly_cursor() as (_, cursor):
+        phone_reader_names = _phone_reader_names_by_id(cursor)
+        phone_reader_access_point_ids = set(phone_reader_names)
+        filtered_events = [
+            event
+            for event in candidate_events
+            if _event_supports_phone_identity_inference(
+                event,
+                phone_reader_access_point_ids=phone_reader_access_point_ids,
+            )
+        ]
+        if not filtered_events:
+            return {}
+
+        candidates = _load_recent_phone_last_used_candidates(
+            cursor,
+            window_start=window_start,
+            window_end=window_end,
+        )
+
+    inferred_by_index: dict[int, dict[str, Any]] = {}
+    for event in filtered_events:
+        index = _event_int_value(event, "index")
+        if index is None:
+            continue
+        matched_identity = _match_inferred_phone_identity_for_event(
+            event,
+            candidates=candidates,
+            phone_reader_names_by_id=phone_reader_names,
+        )
+        if matched_identity is None:
+            continue
+        inferred_by_index[index] = {
+            "full_name": matched_identity.get("full_name"),
+            "key_type": matched_identity.get("key_type"),
+            "key_value": matched_identity.get("key_value"),
+            "user_ptr": matched_identity.get("user_ptr"),
+            "source": "last_used",
+        }
+
+    return inferred_by_index
 
 
 def get_key_permissions(external_key_id: str) -> list[dict[str, Any]]:
@@ -2030,6 +3014,58 @@ def get_wiegand_credentials(external_key_id: str) -> list[dict[str, Any]]:
         return [_build_synthetic_wiegand_credential(user_ptr=user_ptr, access_point_id=int(row.RdrPtr)) for row in rows]
 
 
+def post_sync_phone_key(key_id: int) -> dict[str, Any]:
+    if not isinstance(key_id, int) or key_id <= 0:
+        raise ValueError("key_id must be a positive integer")
+
+    with _readonly_cursor() as (_, cursor):
+        row = cursor.execute(
+            """
+            SELECT TOP 1 UserPtr, KeyType, Number, NumberU, Phone, Deleted
+            FROM Users
+            WHERE UserPtr = ?
+            """,
+            (key_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(f"Gate phone key {key_id} was not found after MDB write")
+
+        phone_key_type_value = _sample_key_type(cursor, "Phone")
+        if not _is_phone_identity_row(row, phone_key_type_value=phone_key_type_value):
+            raise RuntimeError(f"Gate key {key_id} is not a live phone pass")
+
+        normalized_key_value = _normalize_phone(
+            str(
+                getattr(row, "Number", None)
+                or getattr(row, "NumberU", None)
+                or getattr(row, "Phone", None)
+                or ""
+            )
+        )
+        access_rows = cursor.execute(
+            """
+            SELECT RdrPtr
+            FROM AccessTable
+            WHERE UserPtr = ?
+            ORDER BY RdrPtr
+            """,
+            (key_id,),
+        ).fetchall()
+        access_point_ids: list[int] = []
+        for item in access_rows:
+            raw_reader_ptr = getattr(item, "RdrPtr", None)
+            if raw_reader_ptr is None:
+                raw_reader_ptr = item[0]
+            access_point_ids.append(int(raw_reader_ptr))
+
+    return _post_sync_phone_key_via_gateterm_ui(
+        user_ptr=key_id,
+        normalized_key_value=normalized_key_value,
+        phone_key_type_value=phone_key_type_value,
+        access_point_ids=access_point_ids,
+    )
+
+
 def post_sync_vehicle_key(key_id: int) -> dict[str, Any]:
     if not isinstance(key_id, int) or key_id <= 0:
         raise ValueError("key_id must be a positive integer")
@@ -2053,13 +3089,69 @@ def post_sync_vehicle_key(key_id: int) -> dict[str, Any]:
         normalized_key_value = _normalize_vehicle(
             str(getattr(row, "Number", None) or getattr(row, "NumberU", None) or "")
         )
-        expected_number_u = str(getattr(row, "NumberU", None) or "").strip() or None
+        # GateTerm materializes the visual vehicle key number only after the
+        # edit dialog is opened and saved. During that save it may rewrite
+        # Users.NumberU from the plate text to an internal hex identifier even
+        # when the row was originally inserted in plate mode, so post-sync must
+        # always allow GateTerm to choose the final internal NumberU value.
+        expected_number_u = None
 
     return _post_sync_vehicle_key_via_gateterm_ui(
         user_ptr=key_id,
         normalized_key_value=normalized_key_value,
         expected_number_u=expected_number_u,
     )
+
+
+def _remove_key_via_gateterm_ui(*, key_id: int, normalized_key_value: str) -> bool:
+    attempts = max(1, _env_int("GATE_GATETERM_UI_DELETE_ATTEMPTS", 3))
+    last_error: Exception | None = None
+
+    for attempt_index in range(attempts):
+        app: Any | None = None
+        try:
+            app = _connect_or_start_gateterm_application()
+            _prepare_gateterm_users_workspace(app)
+            users_window = _open_gateterm_users_view(app)
+            _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
+            _verify_gateterm_selected_user_key_number(app, users_window, normalized_key_value)
+            _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
+            users_window.set_focus()
+            try:
+                users_window.menu().items()[0].sub_menu().items()[2].click()
+            except Exception:
+                users_window.type_keys("^d")
+            time_module.sleep(_env_float("GATE_GATETERM_UI_DELETE_CONFIRM_DELAY_SECONDS", 0.5))
+            _confirm_gateterm_message_boxes_if_open(app)
+            time_module.sleep(_env_float("GATE_GATETERM_UI_DELETE_APPLY_DELAY_SECONDS", 0.8))
+            _confirm_gateterm_message_boxes_if_open(app)
+
+            with _readonly_cursor() as (_, cursor):
+                row = cursor.execute("SELECT TOP 1 UserPtr FROM Users WHERE UserPtr = ?", (int(key_id),)).fetchone()
+            if row is not None:
+                raise RuntimeError(f"GateTerm did not delete key {key_id}")
+
+            try:
+                _close_gateterm_users_window_if_open(app)
+            except Exception:
+                pass
+            return True
+        except Exception as exc:
+            last_error = exc
+            try:
+                if app is None:
+                    app = _connect_or_start_gateterm_application()
+                _prepare_gateterm_users_workspace(app)
+                _close_gateterm_users_window_if_open(app)
+            except Exception:
+                pass
+            if attempt_index + 1 >= attempts:
+                raise RuntimeError(f"GateTerm key deletion failed: {exc}") from exc
+            time_module.sleep(_env_float("GATE_GATETERM_UI_RETRY_DELAY_SECONDS", 0.35))
+
+    if last_error is not None and attempts < 1:
+        raise RuntimeError(f"GateTerm key deletion failed: {last_error}") from last_error
+    raise RuntimeError("GateTerm key deletion failed unexpectedly")
 
 
 def _send_wiegand26(access_point_id: int, credential: dict[str, Any], external_key_id: str | None = None) -> GateOpenResponse:
@@ -2237,6 +3329,68 @@ def _find_gateterm_users_window(app: Any) -> Any | None:
     return _find_gateterm_window(app, _GATETERM_USERS_WINDOW_TITLE)
 
 
+def _connect_or_start_gateterm_application() -> Any:
+    try:
+        from pywinauto import Application
+    except ImportError as exc:
+        raise RuntimeError(f"pywinauto is required for GateTerm UI automation: {exc}") from exc
+
+    gate_term_exe = _env("GATE_GATETERM_EXE", default=r"C:\GATE\Terminal\GateTerm.exe")
+    if not gate_term_exe:
+        raise RuntimeError("GATE_GATETERM_EXE is not configured")
+
+    last_error: Exception | None = None
+    for mode in ("connect", "start"):
+        try:
+            app_factory = Application(backend="win32")
+            if mode == "connect":
+                app = app_factory.connect(path=gate_term_exe)
+            else:
+                app = app_factory.start(f'"{gate_term_exe}"')
+                time_module.sleep(_env_float("GATE_GATETERM_UI_START_DELAY_SECONDS", 1.5))
+            _complete_gateterm_operator_login_if_needed(app)
+            if _find_gateterm_main_window(app) is not None:
+                return app
+        except Exception as exc:
+            last_error = exc
+    raise RuntimeError(f"Failed to connect to GateTerm UI: {last_error}") from last_error
+
+
+def _complete_gateterm_operator_login_if_needed(app: Any) -> None:
+    login_window = _try_wait_for_gateterm_window(
+        app,
+        _GATETERM_LOGIN_WINDOW_TITLE,
+        timeout_seconds=_env_float("GATE_GATETERM_UI_LOGIN_WAIT_SECONDS", 1.0),
+    )
+    if login_window is None:
+        return
+
+    operator_login = str(_env("GATE_GATETERM_OPERATOR_LOGIN", default="admin") or "admin")
+    operator_password = _env("GATE_GATETERM_OPERATOR_PASSWORD", default="", allow_empty=True) or ""
+    _set_gateterm_text_input(
+        _visible_gateterm_control_by_id(login_window, 4, "ThunderRT6TextBox", "Edit"),
+        operator_login,
+        field_name="GateTerm operator login",
+    )
+    _set_gateterm_text_input(
+        _visible_gateterm_control_by_id(login_window, 5, "ThunderRT6TextBox", "Edit"),
+        operator_password,
+        field_name="GateTerm operator password",
+    )
+    _click_gateterm_control(login_window, 2, "ThunderRT6CommandButton", "Button")
+    _confirm_gateterm_message_boxes_if_open(app)
+    _wait_for_gateterm_window_to_close(
+        app,
+        _GATETERM_LOGIN_WINDOW_TITLE,
+        timeout_seconds=_env_float("GATE_GATETERM_UI_LOGIN_CLOSE_DELAY_SECONDS", 3.0),
+    )
+    _wait_for_enabled_gateterm_window(
+        app,
+        _GATETERM_MAIN_WINDOW_TITLE,
+        timeout_seconds=_env_float("GATE_GATETERM_UI_MAIN_OPEN_DELAY_SECONDS", 3.0),
+    )
+
+
 def _visible_gateterm_control_by_id(window: Any, control_id: int, *class_names: str) -> Any:
     for class_name in class_names or ("",):
         lookup: dict[str, Any] = {"control_id": control_id}
@@ -2340,20 +3494,155 @@ def _close_gateterm_user_edit_window_if_open(app: Any) -> None:
     )
 
 
-def _close_gateterm_message_boxes_if_open(app: Any) -> None:
+def _close_gateterm_new_user_window_if_open(app: Any) -> None:
+    _close_gateterm_window_if_open(
+        app,
+        _GATETERM_NEW_USER_WINDOW_TITLE,
+        timeout_seconds=_env_float("GATE_GATETERM_UI_NEW_USER_CLOSE_DELAY_SECONDS", 1.2),
+    )
+
+
+def _close_gateterm_window_if_open(app: Any, title_fragment: str, *, timeout_seconds: float) -> None:
+    window = _find_gateterm_window(app, title_fragment)
+    if window is None:
+        return
+    try:
+        window.set_focus()
+    except Exception:
+        pass
+    try:
+        window.close()
+    except Exception:
+        try:
+            window.type_keys("%{F4}")
+        except Exception:
+            if _window_still_open(app, title_fragment):
+                _dismiss_gateterm_window_via_escape(app, title_fragment)
+    if not _window_still_open(app, title_fragment):
+        return
+    _wait_for_gateterm_window_to_close(
+        app,
+        title_fragment,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _close_gateterm_users_window_if_open(app: Any) -> None:
+    _close_gateterm_window_if_open(
+        app,
+        _GATETERM_USERS_WINDOW_TITLE,
+        timeout_seconds=_env_float("GATE_GATETERM_UI_USERS_CLOSE_DELAY_SECONDS", 0.8),
+    )
+
+
+def _close_gateterm_access_window_if_open(app: Any) -> None:
+    _close_gateterm_window_if_open(
+        app,
+        _GATETERM_ACCESS_WINDOW_TITLE,
+        timeout_seconds=_env_float("GATE_GATETERM_UI_ACCESS_CLOSE_DELAY_SECONDS", 0.8),
+    )
+
+
+def _gateterm_dialog_windows(app: Any) -> list[Any]:
+    dialogs: list[Any] = []
     for window in app.windows():
         try:
             window_title = str(window.window_text() or "").strip()
-            if window_title != "GateTerm" or str(window.class_name() or "") == "ThunderRT6Main":
+            class_name = str(window.class_name() or "").strip()
+            if class_name == "ThunderRT6Main":
                 continue
-            dialog = app.window(handle=window.handle)
-            try:
-                _click_gateterm_control(dialog, 2, "Button", "ThunderRT6CommandButton")
-            except Exception:
-                dialog.type_keys("{ENTER}")
+            if class_name == "#32770" or (window_title == "GateTerm" and class_name != "ThunderRT6FormDC"):
+                dialogs.append(app.window(handle=window.handle))
         except Exception:
             continue
-    time_module.sleep(_env_float("GATE_GATETERM_UI_MESSAGE_BOX_CLOSE_DELAY_SECONDS", 0.15))
+    return dialogs
+
+
+def _click_gateterm_dialog_button(dialog: Any, *control_ids: int) -> bool:
+    for control_id in control_ids:
+        try:
+            _click_gateterm_control(dialog, control_id, "Button", "ThunderRT6CommandButton")
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _close_gateterm_message_boxes_if_open(app: Any) -> None:
+    for _ in range(4):
+        dialogs = _gateterm_dialog_windows(app)
+        if not dialogs:
+            return
+        for dialog in dialogs:
+            try:
+                # Cleanup should discard stale unsaved changes, not cancel the dialog.
+                if _click_gateterm_dialog_button(dialog, 7, 2, 1):
+                    continue
+                dialog.type_keys("%N")
+            except Exception:
+                try:
+                    dialog.type_keys("{ESC}")
+                except Exception:
+                    continue
+        time_module.sleep(_env_float("GATE_GATETERM_UI_MESSAGE_BOX_CLOSE_DELAY_SECONDS", 0.15))
+
+
+def _confirm_gateterm_message_boxes_if_open(app: Any) -> None:
+    for _ in range(4):
+        dialogs = _gateterm_dialog_windows(app)
+        if not dialogs:
+            return
+        for dialog in dialogs:
+            try:
+                if _click_gateterm_dialog_button(dialog, 6, 1):
+                    continue
+                dialog.type_keys("%Y")
+            except Exception:
+                try:
+                    dialog.type_keys("{ENTER}")
+                except Exception:
+                    continue
+        time_module.sleep(_env_float("GATE_GATETERM_UI_MESSAGE_BOX_CLOSE_DELAY_SECONDS", 0.15))
+
+
+def _finalize_gateterm_user_edit_save(app: Any) -> None:
+    _confirm_gateterm_message_boxes_if_open(app)
+    time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_CONFIRM_DELAY_SECONDS", 0.35))
+    if _window_still_open(app, _GATETERM_USER_EDIT_WINDOW_TITLE):
+        try:
+            _wait_for_gateterm_window_to_close(
+                app,
+                _GATETERM_USER_EDIT_WINDOW_TITLE,
+                timeout_seconds=_env_float("GATE_GATETERM_UI_USER_SAVE_CLOSE_DELAY_SECONDS", 0.8),
+            )
+        except Exception:
+            _close_gateterm_user_edit_window_if_open(app)
+
+
+def _finalize_gateterm_new_user_save(app: Any) -> None:
+    _confirm_gateterm_message_boxes_if_open(app)
+    time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_CONFIRM_DELAY_SECONDS", 0.35))
+    if _window_still_open(app, _GATETERM_NEW_USER_WINDOW_TITLE):
+        try:
+            _wait_for_gateterm_window_to_close(
+                app,
+                _GATETERM_NEW_USER_WINDOW_TITLE,
+                timeout_seconds=_env_float("GATE_GATETERM_UI_USER_SAVE_CLOSE_DELAY_SECONDS", 0.8),
+            )
+        except Exception:
+            _close_gateterm_new_user_window_if_open(app)
+
+
+def _prepare_gateterm_users_workspace(app: Any) -> None:
+    _close_gateterm_message_boxes_if_open(app)
+    _close_gateterm_search_window_if_open(app)
+    _close_gateterm_message_boxes_if_open(app)
+    _close_gateterm_new_user_window_if_open(app)
+    _close_gateterm_message_boxes_if_open(app)
+    _close_gateterm_user_edit_window_if_open(app)
+    _close_gateterm_message_boxes_if_open(app)
+    _close_gateterm_users_window_if_open(app)
+    _close_gateterm_message_boxes_if_open(app)
 
 
 def _window_contains_vehicle_key(values: Iterable[Any], normalized_key_value: str) -> bool:
@@ -2386,18 +3675,22 @@ def _collect_gateterm_window_values(window: Any) -> list[str]:
 
 
 def _open_gateterm_users_view(app: Any) -> Any:
-    users_window = _try_wait_for_gateterm_window(
-        app,
-        _GATETERM_USERS_WINDOW_TITLE,
-        timeout_seconds=_env_float("GATE_GATETERM_UI_USERS_REFOCUS_DELAY_SECONDS", 0.5),
-    )
-    if users_window is not None:
+    refocus_deadline = time_module.time() + _env_float("GATE_GATETERM_UI_USERS_REFOCUS_DELAY_SECONDS", 0.5)
+    while time_module.time() < refocus_deadline:
+        users_window = _try_wait_for_gateterm_window(
+            app,
+            _GATETERM_USERS_WINDOW_TITLE,
+            timeout_seconds=0.1,
+        )
+        if users_window is None:
+            break
         try:
             if users_window.is_enabled():
                 users_window.set_focus()
                 return users_window
         except Exception:
             pass
+        time_module.sleep(0.1)
 
     main_window = _find_gateterm_main_window(app)
     if main_window is None:
@@ -2405,8 +3698,27 @@ def _open_gateterm_users_view(app: Any) -> Any:
     main_window.set_focus()
     try:
         main_window.menu_select(_GATETERM_USERS_MENU_PATH)
-    except Exception:
-        main_window.menu().items()[1].sub_menu().items()[0].click()
+    except Exception as menu_select_exc:
+        try:
+            menu = main_window.menu()
+            if menu is None:
+                raise RuntimeError("There is no menu.")
+            items = menu.items()
+            if len(items) < 2:
+                raise RuntimeError(f"Unexpected menu structure: {len(items)} top-level items")
+            submenu = items[1].sub_menu()
+            if submenu is None:
+                raise RuntimeError("Users menu submenu is missing.")
+            subitems = submenu.items()
+            if not subitems:
+                raise RuntimeError("Users menu submenu has no items.")
+            subitems[0].click()
+        except Exception as menu_fallback_exc:
+            raise RuntimeError(
+                "GateTerm users view did not open via main menu; "
+                f"menu_select_error={menu_select_exc}; menu_fallback_error={menu_fallback_exc}; "
+                f"open windows={_list_gateterm_windows(app)!r}"
+            ) from menu_fallback_exc
     users_window = _wait_for_enabled_gateterm_window(
         app,
         _GATETERM_USERS_WINDOW_TITLE,
@@ -2414,6 +3726,44 @@ def _open_gateterm_users_view(app: Any) -> Any:
     )
     users_window.set_focus()
     return users_window
+
+
+def _open_gateterm_new_user_window(app: Any, users_window: Any) -> Any:
+    dialog_delay_seconds = _env_float("GATE_GATETERM_UI_USER_EDIT_OPEN_DELAY_SECONDS", 0.9)
+    attempts: list[str] = []
+
+    users_window.set_focus()
+    try:
+        users_window.menu().items()[0].sub_menu().items()[0].click()
+        attempts.append("menu")
+    except Exception as exc:
+        attempts.append(f"menu_error={exc}")
+    new_user_window = _try_wait_for_gateterm_window(
+        app,
+        _GATETERM_NEW_USER_WINDOW_TITLE,
+        timeout_seconds=dialog_delay_seconds,
+    )
+    if new_user_window is not None:
+        return new_user_window
+
+    users_window.set_focus()
+    try:
+        users_window.type_keys("^n")
+        attempts.append("hotkey")
+    except Exception as exc:
+        attempts.append(f"hotkey_error={exc}")
+    new_user_window = _try_wait_for_gateterm_window(
+        app,
+        _GATETERM_NEW_USER_WINDOW_TITLE,
+        timeout_seconds=dialog_delay_seconds,
+    )
+    if new_user_window is not None:
+        return new_user_window
+
+    raise RuntimeError(
+        "GateTerm new-user window did not open; "
+        f"attempts={attempts!r}; open windows={_list_gateterm_windows(app)!r}"
+    )
 
 
 def _open_gateterm_user_search_window(app: Any, users_window: Any) -> Any:
@@ -2490,6 +3840,385 @@ def _search_gateterm_user_by_key_number(app: Any, users_window: Any, normalized_
     )
 
 
+def _set_gateterm_text_input(control: Any, value: str, *, field_name: str) -> None:
+    try:
+        control.set_focus()
+        if hasattr(control, "set_edit_text"):
+            control.set_edit_text(value)
+        else:
+            control.type_keys("^a{BACKSPACE}")
+            control.type_keys(value, with_spaces=True, set_foreground=True)
+        # GateTerm commits the key-number edit only after the field loses focus.
+        if hasattr(control, "type_keys"):
+            control.type_keys("{TAB}")
+    except Exception as exc:
+        raise RuntimeError(f"GateTerm {field_name} input failed: {exc}") from exc
+
+
+def _set_gateterm_combo_value(control: Any, value: str, *, field_name: str) -> None:
+    try:
+        control.select(value)
+    except Exception as exc:
+        raise RuntimeError(f"GateTerm {field_name} selection failed: {exc}") from exc
+    time_module.sleep(_env_float("GATE_GATETERM_UI_COMBO_COMMIT_DELAY_SECONDS", 0.2))
+
+
+def _set_gateterm_checkbox_state(control: Any, desired_state: bool, *, field_name: str) -> None:
+    try:
+        current_state = bool(control.get_check_state())
+    except Exception as exc:
+        raise RuntimeError(f"GateTerm {field_name} state read failed: {exc}") from exc
+    if current_state == bool(desired_state):
+        return
+    try:
+        control.click()
+    except Exception:
+        control.click_input()
+    time_module.sleep(_env_float("GATE_GATETERM_UI_CHECKBOX_TOGGLE_DELAY_SECONDS", 0.15))
+    try:
+        updated_state = bool(control.get_check_state())
+    except Exception as exc:
+        raise RuntimeError(f"GateTerm {field_name} state verify failed: {exc}") from exc
+    if updated_state != bool(desired_state):
+        raise RuntimeError(
+            f"GateTerm {field_name} did not reach the requested state {bool(desired_state)!r}"
+        )
+
+
+def _set_gateterm_user_key_number(edit_window: Any, normalized_key_value: str) -> None:
+    # Live GateTerm user dialog keeps the visible editable key-number textbox
+    # on a stable control id even when the label text is not exposed to pywinauto.
+    commit_delay_seconds = _env_float("GATE_GATETERM_UI_KEY_NUMBER_COMMIT_DELAY_SECONDS", 1.0)
+    try:
+        direct_edit = _visible_gateterm_control_by_id(edit_window, 88, "ThunderRT6TextBox", "Edit")
+    except Exception:
+        direct_edit = None
+    if direct_edit is not None:
+        _set_gateterm_text_input(
+            direct_edit,
+            normalized_key_value,
+            field_name=f"user key number {_GATETERM_USER_SEARCH_FIELD_KEY_NUMBER!r}",
+        )
+        time_module.sleep(commit_delay_seconds)
+        return
+
+    try:
+        descendants = edit_window.descendants()
+    except Exception as exc:
+        raise RuntimeError(f"GateTerm key-number field lookup failed: {exc}") from exc
+
+    visible_controls: list[Any] = []
+    for control in descendants:
+        try:
+            wrapper = control.wrapper_object()
+        except Exception:
+            wrapper = control
+        try:
+            if not wrapper.is_visible():
+                continue
+        except Exception:
+            pass
+        visible_controls.append(wrapper)
+
+    normalized_label = str(_GATETERM_USER_SEARCH_FIELD_KEY_NUMBER or "").strip().casefold()
+    edit_classes = {"ThunderRT6TextBox", "Edit"}
+    labeled_edit: Any | None = None
+
+    for index, control in enumerate(visible_controls):
+        try:
+            control_text = str(control.window_text() or "").strip().casefold()
+        except Exception:
+            control_text = ""
+        if control_text != normalized_label:
+            continue
+        for candidate in visible_controls[index + 1 :]:
+            try:
+                class_name = str(candidate.class_name() or "")
+            except Exception:
+                class_name = ""
+            if class_name in edit_classes:
+                labeled_edit = candidate
+                break
+        if labeled_edit is not None:
+            break
+
+    if labeled_edit is None:
+        edits: list[Any] = []
+        for control in visible_controls:
+            try:
+                class_name = str(control.class_name() or "")
+            except Exception:
+                class_name = ""
+            if class_name in edit_classes:
+                edits.append(control)
+        if len(edits) == 1:
+            labeled_edit = edits[0]
+
+    if labeled_edit is None:
+        raise RuntimeError(
+            f"GateTerm key-number field {_GATETERM_USER_SEARCH_FIELD_KEY_NUMBER!r} was not found in the user edit dialog"
+        )
+
+    _set_gateterm_text_input(
+        labeled_edit,
+        normalized_key_value,
+        field_name=f"user key number {_GATETERM_USER_SEARCH_FIELD_KEY_NUMBER!r}",
+    )
+    time_module.sleep(commit_delay_seconds)
+
+
+def _read_gateterm_user_key_number(edit_window: Any) -> str:
+    _select_gateterm_user_editor_tab(edit_window, "key")
+    control = _visible_gateterm_control_by_id(edit_window, 88, "ThunderRT6TextBox", "Edit")
+    value = str(control.window_text() or "").strip()
+    if value:
+        return value
+    texts = [str(item or "").strip() for item in control.texts()]
+    for text_value in texts:
+        if text_value:
+            return text_value
+    raise RuntimeError("GateTerm user key number is empty in the edit dialog")
+
+
+def _first_visible_gateterm_tab_control(window: Any) -> Any:
+    for control in window.descendants():
+        try:
+            if str(control.class_name() or "") != "SSTabCtlWndClass":
+                continue
+            rect = control.rectangle()
+            if rect.left <= 0:
+                continue
+            return control
+        except Exception:
+            continue
+    raise RuntimeError(f"GateTerm tab control was not found in {window.window_text()!r}")
+
+
+def _select_gateterm_user_editor_tab(window: Any, tab_name: str) -> None:
+    offset_x = _GATETERM_USER_EDITOR_TAB_OFFSETS.get(tab_name)
+    if offset_x is None:
+        raise RuntimeError(f"Unsupported GateTerm editor tab: {tab_name}")
+    tab_control = _first_visible_gateterm_tab_control(window)
+    rect = tab_control.rectangle()
+    height = max(1, rect.bottom - rect.top)
+    tab_control.click_input(coords=(offset_x, max(1, height - 10)))
+    time_module.sleep(_env_float("GATE_GATETERM_UI_TAB_SWITCH_DELAY_SECONDS", 0.35))
+
+
+def _canonical_gateterm_access_label(value: Any) -> str:
+    normalized = " ".join(str(value or "").strip().casefold().split())
+    if not normalized:
+        return ""
+    if "север" in normalized:
+        return "северная калитка"
+    if "калитка 1" in normalized:
+        return "калитка 1"
+    if "озер" in normalized:
+        return "калитка озеро"
+    if "лес" in normalized:
+        return "калитка лес"
+    if "камера" in normalized and "въезд" in normalized:
+        return "камера въезда"
+    if "камера" in normalized and "выезд" in normalized:
+        return "камера выезда"
+    if "gsm" in normalized and "въезд" in normalized:
+        return "считыватель въезд gsm"
+    if "gsm" in normalized and "выезд" in normalized:
+        return "считыватель выезд gsm"
+    if "транспондер" in normalized and "въезд" in normalized:
+        return "транспондер въезд"
+    if "транспондер" in normalized and "выезд" in normalized:
+        return "транспондер выезд"
+    if normalized.startswith("считыватель "):
+        normalized = normalized[len("считыватель ") :]
+    if normalized.startswith("вход "):
+        normalized = normalized[len("вход ") :]
+    return normalized
+
+
+def _resolve_gateterm_access_labels(
+    cursor: pyodbc.Cursor,
+    access_point_ids: Iterable[int],
+) -> set[str]:
+    desired_labels: set[str] = set()
+    for point_id in access_point_ids:
+        row = cursor.execute(
+            """
+            SELECT TOP 1 Name
+            FROM Readers
+            WHERE RdrPtr = ?
+            """,
+            (int(point_id),),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(f"Gate reader {int(point_id)} is not found for GateTerm access mapping")
+        label = _canonical_gateterm_access_label(getattr(row, "Name", None))
+        if not label:
+            raise RuntimeError(f"Gate reader {int(point_id)} has no usable name for GateTerm access mapping")
+        desired_labels.add(label)
+    return desired_labels
+
+
+def _load_phone_ui_provisioning_context(
+    *,
+    normalized_key_value: str,
+    access_point_ids: Iterable[int],
+) -> dict[str, Any]:
+    with _readonly_cursor() as (_, cursor):
+        phone_key_type_value = _sample_key_type(cursor, "Phone", access_point_ids)
+        existing_user_ptr = _find_existing_user_ptr(
+            cursor,
+            "Phone",
+            normalized_key_value,
+            key_type_value=phone_key_type_value,
+        )
+        phone_storage_value = _format_phone_for_storage(cursor, normalized_key_value)
+        desired_access_labels = _resolve_gateterm_access_labels(cursor, access_point_ids)
+        current_access_labels: set[str] = set()
+        if existing_user_ptr is not None:
+            access_rows = cursor.execute(
+                """
+                SELECT RdrPtr
+                FROM AccessTable
+                WHERE UserPtr = ?
+                ORDER BY RdrPtr
+                """,
+                (int(existing_user_ptr),),
+            ).fetchall()
+            current_access_labels = _resolve_gateterm_access_labels(
+                cursor,
+                [
+                    int(getattr(item, "RdrPtr", item[0]))
+                    for item in access_rows
+                ],
+            )
+    return {
+        "existing_user_ptr": existing_user_ptr,
+        "phone_key_type_value": phone_key_type_value,
+        "phone_storage_value": phone_storage_value,
+        "desired_access_labels": desired_access_labels,
+        "current_access_labels": current_access_labels,
+    }
+
+
+def _configure_gateterm_phone_access_permissions(
+    window: Any,
+    *,
+    desired_access_labels: set[str],
+    current_access_labels: set[str],
+) -> None:
+    _select_gateterm_user_editor_tab(window, "access")
+    listbox = _visible_gateterm_control_by_id(window, 39, "ThunderRT6ListBox", "ListBox")
+
+    try:
+        item_texts = [str(item or "") for item in listbox.item_texts()]
+    except Exception as exc:
+        raise RuntimeError(f"GateTerm access list lookup failed: {exc}") from exc
+    if not item_texts:
+        raise RuntimeError("GateTerm access list is empty")
+
+    available_labels = {_canonical_gateterm_access_label(item) for item in item_texts}
+    missing_labels = sorted(label for label in desired_access_labels if label not in available_labels)
+    if missing_labels:
+        raise RuntimeError(
+            "GateTerm access list is missing expected readers: "
+            f"{missing_labels!r}; available={sorted(available_labels)!r}"
+        )
+
+    checkbox_offset_x = _env_int("GATE_GATETERM_UI_ACCESS_CHECKBOX_X", 8)
+    toggle_labels = desired_access_labels.symmetric_difference(current_access_labels)
+    if not toggle_labels:
+        return
+
+    for index, item_text in enumerate(item_texts):
+        current_label = _canonical_gateterm_access_label(item_text)
+        if current_label not in toggle_labels:
+            continue
+        item_rect = listbox.item_rect(index)
+        click_y = int(item_rect.top + max(4, (item_rect.bottom - item_rect.top) // 2))
+        listbox.click_input(coords=(checkbox_offset_x, click_y))
+        time_module.sleep(_env_float("GATE_GATETERM_UI_ACCESS_TOGGLE_DELAY_SECONDS", 0.2))
+
+
+def _populate_gateterm_phone_pass_editor(
+    window: Any,
+    *,
+    normalized_key_value: str,
+    phone_storage_value: str,
+    resident_name: str,
+    plot_number: str | None,
+    desired_access_labels: set[str],
+    current_access_labels: set[str],
+) -> None:
+    last_name, first_name, father_name = _split_name(resident_name)
+    _set_gateterm_text_input(
+        _visible_gateterm_control_by_id(window, 8, "ThunderRT6TextBox", "Edit"),
+        str(last_name or ""),
+        field_name="resident last name",
+    )
+    _set_gateterm_text_input(
+        _visible_gateterm_control_by_id(window, 7, "ThunderRT6TextBox", "Edit"),
+        str(first_name or ""),
+        field_name="resident first name",
+    )
+    _set_gateterm_text_input(
+        _visible_gateterm_control_by_id(window, 6, "ThunderRT6TextBox", "Edit"),
+        str(father_name or ""),
+        field_name="resident father name",
+    )
+    _set_gateterm_combo_value(
+        _visible_gateterm_control_by_id(window, 10, "ThunderRT6ComboBox", "ComboBox"),
+        "GSM",
+        field_name="resident group",
+    )
+    _set_gateterm_checkbox_state(
+        _visible_gateterm_control_by_id(window, 4, "ThunderRT6CheckBox", "Button"),
+        False,
+        field_name="resident visitor flag",
+    )
+
+    _select_gateterm_user_editor_tab(window, "key")
+    _set_gateterm_combo_value(
+        _visible_gateterm_control_by_id(window, 83, "ThunderRT6ComboBox", "ComboBox"),
+        "Wiegand-48",
+        field_name="phone key type",
+    )
+    _set_gateterm_checkbox_state(
+        _visible_gateterm_control_by_id(window, 81, "ThunderRT6CheckBox", "Button"),
+        False,
+        field_name="phone key facility embedding",
+    )
+    _set_gateterm_user_key_number(window, normalized_key_value)
+
+    _select_gateterm_user_editor_tab(window, "info")
+    _set_gateterm_text_input(
+        _visible_gateterm_control_by_id(window, 68, "ThunderRT6TextBox", "Edit"),
+        str(_normalize_gate_detail(plot_number) or ""),
+        field_name="resident plot number",
+    )
+    _set_gateterm_text_input(
+        _visible_gateterm_control_by_id(window, 66, "ThunderRT6TextBox", "Edit"),
+        phone_storage_value,
+        field_name="resident phone",
+    )
+    _set_gateterm_checkbox_state(
+        _visible_gateterm_control_by_id(window, 67, "ThunderRT6CheckBox", "Button"),
+        False,
+        field_name="SMS notifications",
+    )
+    _set_gateterm_checkbox_state(
+        _visible_gateterm_control_by_id(window, 64, "ThunderRT6CheckBox", "Button"),
+        False,
+        field_name="E-Mail notifications",
+    )
+
+    _configure_gateterm_phone_access_permissions(
+        window,
+        desired_access_labels=desired_access_labels,
+        current_access_labels=current_access_labels,
+    )
+
+
 def _open_gateterm_user_edit_window(app: Any, users_window: Any) -> Any:
     dialog_delay_seconds = _env_float("GATE_GATETERM_UI_USER_EDIT_OPEN_DELAY_SECONDS", 0.9)
     attempts: list[str] = []
@@ -2528,6 +4257,19 @@ def _open_gateterm_user_edit_window(app: Any, users_window: Any) -> Any:
     )
 
 
+def _verify_gateterm_selected_user_key_number(app: Any, users_window: Any, normalized_key_value: str) -> None:
+    edit_window = _open_gateterm_user_edit_window(app, users_window)
+    try:
+        actual_key_number = _read_gateterm_user_key_number(edit_window)
+    finally:
+        _close_gateterm_user_edit_window_if_open(app)
+    if actual_key_number != normalized_key_value:
+        raise RuntimeError(
+            "GateTerm search selected an unexpected user; "
+            f"expected key number {normalized_key_value!r}, got {actual_key_number!r}"
+        )
+
+
 def _verify_vehicle_identity_persisted(user_ptr: int, normalized_key_value: str, expected_number_u: str | None) -> None:
     with _readonly_cursor() as (_, cursor):
         row = cursor.execute(
@@ -2545,36 +4287,130 @@ def _verify_vehicle_identity_persisted(user_ptr: int, normalized_key_value: str,
     normalized_number = _normalize_optional_text(getattr(row, "Number", None))
     actual_number_u_raw = getattr(row, "NumberU", None)
     normalized_number_u = _normalize_optional_text(actual_number_u_raw)
+    actual_number_u = str(actual_number_u_raw or "").strip()
     expected_number_u_normalized = _normalize_optional_text(expected_number_u)
-    if normalized_number == normalized_key_value and (
-        (
-            expected_number_u_normalized
-            and str(actual_number_u_raw or "").strip() == str(expected_number_u or "").strip()
+    if normalized_number != normalized_key_value:
+        raise RuntimeError(
+            "GateTerm vehicle post-sync changed Users.Number unexpectedly; "
+            f"expected={normalized_key_value!r}, actual={getattr(row, 'Number', None)!r}, UserPtr={user_ptr}"
         )
-        or (not expected_number_u_normalized and bool(normalized_number_u))
-    ):
+    if not normalized_number_u:
+        raise RuntimeError(
+            "GateTerm vehicle post-sync left Users.NumberU empty; "
+            f"Number={normalized_key_value!r}, UserPtr={user_ptr}"
+        )
+    if expected_number_u_normalized:
+        if actual_number_u == str(expected_number_u or "").strip():
+            return
+        raise RuntimeError(
+            "GateTerm vehicle post-sync changed Users.NumberU unexpectedly; "
+            f"expected={expected_number_u!r}, actual={actual_number_u_raw!r}, UserPtr={user_ptr}"
+        )
+    if actual_number_u != normalized_key_value:
         return
+    raise RuntimeError(
+        "GateTerm vehicle post-sync did not materialize an internal Users.NumberU value; "
+        f"NumberU stayed equal to the vehicle number {normalized_key_value!r} for UserPtr={user_ptr}"
+    )
 
-    restored_number_u = expected_number_u
-    with _transaction_cursor() as (_, cursor):
-        if restored_number_u is None:
-            restored_number_u = _resolve_vehicle_number_u(
-                cursor,
-                normalized_key_value=normalized_key_value,
-            )
-        cursor.execute(
-            "UPDATE Users SET [Number] = ?, [NumberU] = ? WHERE UserPtr = ?",
-            (
-                normalized_key_value,
-                restored_number_u,
-                int(user_ptr),
-            ),
+
+def _verify_phone_identity_persisted(
+    user_ptr: int,
+    normalized_key_value: str,
+    phone_key_type_value: Any | None,
+    access_point_ids: Iterable[int],
+) -> None:
+    with _readonly_cursor() as (_, cursor):
+        _verify_phone_user_state(
+            cursor,
+            user_ptr=int(user_ptr),
+            normalized_key_value=normalized_key_value,
+            phone_key_type_value=phone_key_type_value,
+            access_point_ids=access_point_ids,
         )
 
-    raise RuntimeError(
-        "GateTerm vehicle post-sync changed Users.Number/NumberU unexpectedly; "
-        f"restored Number={normalized_key_value!r}, NumberU={restored_number_u!r} for UserPtr={user_ptr}"
-    )
+
+def _wait_for_phone_user_ptr(
+    *,
+    normalized_key_value: str,
+    phone_key_type_value: Any | None,
+    timeout_seconds: float,
+) -> int:
+    deadline = time_module.monotonic() + max(timeout_seconds, 0.0)
+    while True:
+        with _readonly_cursor() as (_, cursor):
+            user_ptr = _find_existing_user_ptr(
+                cursor,
+                "Phone",
+                normalized_key_value,
+                key_type_value=phone_key_type_value,
+            )
+        if user_ptr is not None:
+            return int(user_ptr)
+        if time_module.monotonic() >= deadline:
+            raise RuntimeError(f"GateTerm did not materialize phone key {normalized_key_value!r} in time")
+        time_module.sleep(_env_float("GATE_GATETERM_UI_CREATE_VERIFY_POLL_SECONDS", 0.5))
+
+
+def _post_sync_phone_key_via_gateterm_ui(
+    *,
+    user_ptr: int,
+    normalized_key_value: str,
+    phone_key_type_value: Any | None,
+    access_point_ids: Iterable[int],
+) -> dict[str, Any]:
+    try:
+        from pywinauto import Application
+    except ImportError as exc:
+        raise RuntimeError(f"pywinauto is required for GateTerm phone post-sync: {exc}") from exc
+
+    gate_term_exe = _env("GATE_GATETERM_EXE", default=r"C:\GATE\Terminal\GateTerm.exe")
+    if not gate_term_exe:
+        raise RuntimeError("GATE_GATETERM_EXE is not configured")
+
+    attempts = max(1, _env_int("GATE_GATETERM_UI_POST_SYNC_ATTEMPTS", 3))
+    last_error: Exception | None = None
+    for attempt_index in range(attempts):
+        try:
+            app = Application(backend="win32").connect(path=gate_term_exe)
+            _prepare_gateterm_users_workspace(app)
+            users_window = _open_gateterm_users_view(app)
+            _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
+            edit_window = _open_gateterm_user_edit_window(app, users_window)
+
+            editor_values = _collect_gateterm_window_values(edit_window)
+            if not _window_contains_vehicle_key(editor_values, normalized_key_value):
+                raise RuntimeError(
+                    "GateTerm edit dialog did not open the expected phone key: "
+                    f"expected {normalized_key_value!r}, got {editor_values!r}"
+                )
+
+            _set_gateterm_user_key_number(edit_window, normalized_key_value)
+            _click_gateterm_control(edit_window, 1, "ThunderRT6CommandButton", "Button")
+            time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_DELAY_SECONDS", 0.75))
+            _finalize_gateterm_user_edit_save(app)
+            _verify_phone_identity_persisted(user_ptr, normalized_key_value, phone_key_type_value, access_point_ids)
+            _close_gateterm_users_window_if_open(app)
+            break
+        except Exception as exc:
+            last_error = exc
+            try:
+                app = Application(backend="win32").connect(path=gate_term_exe)
+                _prepare_gateterm_users_workspace(app)
+            except Exception:
+                pass
+            if attempt_index + 1 >= attempts:
+                raise RuntimeError(f"GateTerm phone post-sync failed: {exc}") from exc
+            time_module.sleep(_env_float("GATE_GATETERM_UI_RETRY_DELAY_SECONDS", 0.35))
+
+    if last_error is not None and attempts < 1:
+        raise RuntimeError(f"GateTerm phone post-sync failed: {last_error}") from last_error
+
+    return {
+        "transport": "gateterm_ui",
+        "user_ptr": int(user_ptr),
+        "key_value": normalized_key_value,
+    }
 
 
 def _post_sync_vehicle_key_via_gateterm_ui(
@@ -2597,11 +4433,7 @@ def _post_sync_vehicle_key_via_gateterm_ui(
     for attempt_index in range(attempts):
         try:
             app = Application(backend="win32").connect(path=gate_term_exe)
-            _close_gateterm_message_boxes_if_open(app)
-            _close_gateterm_search_window_if_open(app)
-            _close_gateterm_user_edit_window_if_open(app)
-            _close_gateterm_message_boxes_if_open(app)
-            _close_gateterm_search_window_if_open(app)
+            _prepare_gateterm_users_workspace(app)
             users_window = _open_gateterm_users_view(app)
             _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
             edit_window = _open_gateterm_user_edit_window(app, users_window)
@@ -2613,18 +4445,18 @@ def _post_sync_vehicle_key_via_gateterm_ui(
                     f"expected {normalized_key_value!r}, got {editor_values!r}"
                 )
 
+            _set_gateterm_user_key_number(edit_window, normalized_key_value)
             _click_gateterm_control(edit_window, 1, "ThunderRT6CommandButton", "Button")
             time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_DELAY_SECONDS", 0.75))
+            _finalize_gateterm_user_edit_save(app)
             _verify_vehicle_identity_persisted(user_ptr, normalized_key_value, expected_number_u)
+            _close_gateterm_users_window_if_open(app)
             break
         except Exception as exc:
             last_error = exc
             try:
                 app = Application(backend="win32").connect(path=gate_term_exe)
-                _close_gateterm_message_boxes_if_open(app)
-                _close_gateterm_search_window_if_open(app)
-                _close_gateterm_user_edit_window_if_open(app)
-                _close_gateterm_message_boxes_if_open(app)
+                _prepare_gateterm_users_workspace(app)
             except Exception:
                 pass
             if attempt_index + 1 >= attempts:
@@ -2815,9 +4647,13 @@ def get_recent_events(limit: int = 100) -> list[dict[str, Any]]:
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+    event_user_ptrs = [int(row[10]) for row in rows if row[10] is not None]
+    user_identities = _load_gate_user_event_identities(event_user_ptrs)
     events: list[dict[str, Any]] = []
     for row in rows:
         event_time = row[1]
+        user_ptr = int(row[10]) if row[10] is not None else None
+        gate_identity = user_identities.get(user_ptr or 0, {})
         events.append(
             {
                 "index": int(row[0]),
@@ -2830,9 +4666,26 @@ def get_recent_events(limit: int = 100) -> list[dict[str, Any]]:
                 "unit": str(row[7] or ""),
                 "message": str(row[8] or ""),
                 "name": str(row[9] or ""),
-                "user_ptr": int(row[10]) if row[10] is not None else None,
+                "user_ptr": user_ptr,
+                "full_name": gate_identity.get("full_name"),
+                "key_type": gate_identity.get("key_type"),
+                "key_value": gate_identity.get("key_value"),
             }
         )
+
+    inferred_identities = _infer_anonymous_gate_event_identities(events)
+    for event in events:
+        event_index = _event_int_value(event, "index")
+        if event_index is None:
+            continue
+        inferred_identity = inferred_identities.get(event_index)
+        if inferred_identity is None:
+            continue
+        event["inferred_full_name"] = inferred_identity.get("full_name")
+        event["inferred_key_type"] = inferred_identity.get("key_type")
+        event["inferred_key_value"] = inferred_identity.get("key_value")
+        event["inferred_user_ptr"] = inferred_identity.get("user_ptr")
+        event["identity_source"] = str(inferred_identity.get("source") or "last_used")
     return events
 
 
@@ -3085,6 +4938,7 @@ def _open_access_point_via_gateterm_ui(cursor: pyodbc.Cursor, access_point_id: i
     previous_event = _latest_gate_open_event(access_point_id)
     previous_index = int(previous_event["index"]) if previous_event is not None else None
 
+    app: Any | None = None
     try:
         app = Application(backend="win32").connect(path=gate_term_exe)
         window = _open_gateterm_access_window(app)
@@ -3106,6 +4960,31 @@ def _open_access_point_via_gateterm_ui(cursor: pyodbc.Cursor, access_point_id: i
 
         grid.click_input(coords=(x_offset, y_offset))
         button.click_input()
+
+        timeout_seconds = _env_float("GATE_GATETERM_UI_VERIFY_TIMEOUT_SECONDS", 6.0)
+        observed_event = _wait_for_gate_open_event(access_point_id, previous_index, timeout_seconds)
+        details = {
+            "transport": "gateterm_ui",
+            "external_key_id": external_key_id,
+            "access_point_id": access_point_id,
+            "row_index": row_index,
+            "visible_rows": visible_rows,
+            "previous_event": previous_event,
+            "observed_event": observed_event,
+        }
+        if observed_event is None:
+            return GateOpenResponse(
+                success=False,
+                error_code="gateterm_ui_event_not_observed",
+                message="GateTerm UI command was sent, but no matching Gate operator event was observed",
+                details=details,
+            )
+
+        return GateOpenResponse(
+            success=True,
+            message=f"Access point {access_point_id} opened via GateTerm UI",
+            details=details,
+        )
     except Exception as exc:
         return GateOpenResponse(
             success=False,
@@ -3119,31 +4998,12 @@ def _open_access_point_via_gateterm_ui(cursor: pyodbc.Cursor, access_point_id: i
                 "visible_rows": visible_rows,
             },
         )
-
-    timeout_seconds = _env_float("GATE_GATETERM_UI_VERIFY_TIMEOUT_SECONDS", 6.0)
-    observed_event = _wait_for_gate_open_event(access_point_id, previous_index, timeout_seconds)
-    details = {
-        "transport": "gateterm_ui",
-        "external_key_id": external_key_id,
-        "access_point_id": access_point_id,
-        "row_index": int(row_map[access_point_id]),
-        "visible_rows": visible_rows,
-        "previous_event": previous_event,
-        "observed_event": observed_event,
-    }
-    if observed_event is None:
-        return GateOpenResponse(
-            success=False,
-            error_code="gateterm_ui_event_not_observed",
-            message="GateTerm UI command was sent, but no matching Gate operator event was observed",
-            details=details,
-        )
-
-    return GateOpenResponse(
-        success=True,
-        message=f"Access point {access_point_id} opened via GateTerm UI",
-        details=details,
-    )
+    finally:
+        if app is not None:
+            try:
+                _close_gateterm_access_window_if_open(app)
+            except Exception:
+                pass
 
 
 def open_access_point(access_point_id: int, external_key_id: str | None = None) -> dict[str, Any]:

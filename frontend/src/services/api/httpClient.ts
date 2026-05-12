@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 import { API_BASE_URL } from '@/services/api/config';
-import { getAccessToken } from '@/services/api/tokenStore';
+import { getAccessToken, setAccessToken } from '@/services/api/tokenStore';
 
 type RequestOptions = {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -11,6 +11,8 @@ type RequestOptions = {
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 const IS_WEB = Platform.OS === 'web';
 const DEFAULT_REQUEST_TIMEOUT_MS = 45000;
+
+let unauthorizedHandler: (() => void | Promise<void>) | null = null;
 
 const isLoopbackHost = (hostname: string): boolean => LOOPBACK_HOSTS.has(hostname.toLowerCase());
 
@@ -72,6 +74,10 @@ const resolveErrorMessage = (payload: unknown): string | null => {
   return null;
 };
 
+export const setUnauthorizedHandler = (handler: (() => void | Promise<void>) | null) => {
+  unauthorizedHandler = handler;
+};
+
 export const apiRequest = async <T>(path: string, options: RequestOptions = {}): Promise<T> => {
   const token = getAccessToken();
   const requestUrl = resolveRequestUrl(path);
@@ -121,6 +127,10 @@ export const apiRequest = async <T>(path: string, options: RequestOptions = {}):
       message = resolveErrorMessage(errorPayload) ?? message;
     } catch {
       // Use default message.
+    }
+    if (response.status === 401) {
+      await setAccessToken(null);
+      await unauthorizedHandler?.();
     }
     throw new Error(message);
   }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -69,18 +70,69 @@ def _request_access_point_ids(request: Request) -> list[int]:
     return [int(point_id) for point_id in (request.access_point_ids or [])]
 
 
-def _upsert_gate_phone_access(user: User, request: Request, access_point_ids: list[int]) -> int:
-    gate_key_id = gate_client.add_permanent_key(
-        key_type="Phone",
-        key_value=request.key_value,
+async def _recover_gate_phone_key_id(*, phone_key: str, context: str) -> int | None:
+    try:
+        resolved_key_id = await asyncio.to_thread(gate_client.resolve_key_id, phone_key)
+    except Exception as exc:  # pragma: no cover - depends on local Gate bridge/runtime.
+        logger.warning(
+            "Gate phone key recovery failed for %s phone=%s: %s",
+            context,
+            phone_key,
+            exc,
+        )
+        return None
+
+    if resolved_key_id is None or int(resolved_key_id) <= 0:
+        return None
+
+    resolved_key_id = int(resolved_key_id)
+    logger.warning(
+        "Recovered Gate phone key_id=%s for %s phone=%s after UI provisioning error",
+        resolved_key_id,
+        context,
+        phone_key,
+    )
+    return resolved_key_id
+
+
+async def _provision_gate_phone_key(
+    *,
+    phone_key: str,
+    phone_number: str,
+    access_point_ids: list[int],
+    resident_name: str,
+    plot_number: str | None,
+    recovery_context: str,
+) -> int:
+    try:
+        gate_key_id = await asyncio.to_thread(
+            gate_client.add_account_phone_key,
+            key_value=phone_key,
+            phone_number=phone_number,
+            access_point_ids=access_point_ids,
+            resident_name=resident_name,
+            plot_number=plot_number,
+        )
+    except Exception:
+        recovered_key_id = await _recover_gate_phone_key_id(phone_key=phone_key, context=recovery_context)
+        if recovered_key_id is None:
+            raise
+        gate_key_id = recovered_key_id
+
+    if gate_key_id <= 0:
+        raise RuntimeError(f"Gate returned invalid key id: {gate_key_id}")
+    return int(gate_key_id)
+
+
+async def _upsert_gate_phone_access(user: User, request: Request, access_point_ids: list[int]) -> int:
+    return await _provision_gate_phone_key(
+        phone_key=request.key_value,
         phone_number=request.contact_phone or request.key_value,
         access_point_ids=access_point_ids,
         resident_name=user.name or user.login or "Resident",
         plot_number=request.plot_number or user.plot_number or user.apartment,
+        recovery_context=f"request_id={request.id} user_id={user.id}",
     )
-    if gate_key_id <= 0:
-        raise RuntimeError(f"Gate returned invalid key id: {gate_key_id}")
-    return gate_key_id
 
 
 async def ensure_existing_phone_requests_have_configured_access(session: AsyncSession) -> int:
@@ -121,7 +173,7 @@ async def ensure_existing_phone_requests_have_configured_access(session: AsyncSe
             continue
 
         try:
-            gate_key_id = _upsert_gate_phone_access(user, request, desired_ids)
+            gate_key_id = await _upsert_gate_phone_access(user, request, desired_ids)
         except Exception as exc:  # pragma: no cover - depends on local Gate bridge/runtime.
             logger.warning(
                 "Gate phone access expansion failed for request_id=%s user_id=%s: %s",
@@ -144,15 +196,15 @@ async def ensure_existing_phone_requests_have_configured_access(session: AsyncSe
 
 
 async def link_existing_gate_passes_by_phone(session: AsyncSession, user: User) -> GatePhoneLinkResult:
-    """Attach existing Gate access found by the resident phone to a new app account.
+    """Ensure a resident account has a permanent Gate GSM/phone pass.
 
-    The bridge can resolve a Gate user by phone and return its reader permissions.
-    We then create an app-owned permanent phone request so the existing access
-    becomes visible and usable from the application without taking over another
-    app user's active request.
+    If Gate already knows this phone, reuse its existing reader permissions and
+    expand them with the configured default/GSM points. If Gate does not have a
+    phone pass yet, provision a new permanent pass with the configured points so
+    caller-id events in Gate Terminal resolve to the resident account.
     """
 
-    if user.is_admin or not user.phone:
+    if user.is_admin or not user.phone or not settings.gate_real_integration_enabled:
         return GatePhoneLinkResult()
 
     try:
@@ -177,7 +229,7 @@ async def link_existing_gate_passes_by_phone(session: AsyncSession, user: User) 
         )
         if owned.is_permanent and desired_access_point_ids != access_point_ids:
             try:
-                gate_key_id = _upsert_gate_phone_access(user, owned, desired_access_point_ids)
+                gate_key_id = await _upsert_gate_phone_access(user, owned, desired_access_point_ids)
             except Exception as exc:  # pragma: no cover - depends on local Gate bridge/runtime.
                 logger.warning("Gate phone auto-link refresh failed for user_id=%s: %s", user.id, exc)
                 return GatePhoneLinkResult(error=str(exc))
@@ -201,24 +253,28 @@ async def link_existing_gate_passes_by_phone(session: AsyncSession, user: User) 
         return GatePhoneLinkResult()
 
     try:
-        permissions = gate_client.get_key_permissions(phone_key)
+        permissions = await asyncio.to_thread(gate_client.get_key_permissions, phone_key)
     except Exception as exc:  # pragma: no cover - depends on local Gate bridge/runtime.
-        logger.warning("Gate phone auto-link lookup failed for user_id=%s: %s", user.id, exc)
-        return GatePhoneLinkResult(error=str(exc))
+        logger.warning(
+            "Gate phone auto-link lookup failed for user_id=%s; continuing with configured defaults: %s",
+            user.id,
+            exc,
+        )
+        permissions = []
 
     existing_access_point_ids = _permission_access_point_ids(permissions)
-    if not existing_access_point_ids:
-        return GatePhoneLinkResult()
     access_point_ids = _configured_phone_access_point_ids(existing_access_point_ids)
+    if not access_point_ids:
+        return GatePhoneLinkResult()
 
     try:
-        gate_key_id = gate_client.add_permanent_key(
-            key_type="Phone",
-            key_value=phone_key,
+        gate_key_id = await _provision_gate_phone_key(
+            phone_key=phone_key,
             phone_number=phone_key,
             access_point_ids=access_point_ids,
             resident_name=user.name or user.login or "Resident",
             plot_number=user.plot_number or user.apartment,
+            recovery_context=f"user_id={user.id}",
         )
     except Exception as exc:  # pragma: no cover - depends on local Gate bridge/runtime.
         logger.warning("Gate phone auto-link write failed for user_id=%s: %s", user.id, exc)
@@ -258,3 +314,46 @@ async def link_existing_gate_passes_by_phone(session: AsyncSession, user: User) 
         linked_request_ids=[int(request.id)],
         access_point_count=len(access_point_ids),
     )
+
+
+async def ensure_users_have_gate_phone_requests(session: AsyncSession) -> int:
+    """Backfill permanent Gate phone requests for resident accounts missing them."""
+
+    if not settings.gate_real_integration_enabled:
+        return 0
+
+    rows = await session.execute(
+        select(User)
+        .where(
+            User.is_admin.is_(False),
+            User.is_active.is_(True),
+            User.phone.is_not(None),
+        )
+        .order_by(User.created_at.asc(), User.id.asc())
+    )
+
+    ensured = 0
+    for user in rows.scalars().all():
+        existing_query = await session.execute(
+            select(Request.id).where(
+                Request.resident_id == user.id,
+                Request.key_type == "Phone",
+                Request.status == "active",
+            )
+        )
+        if existing_query.scalar_one_or_none() is not None:
+            continue
+
+        result = await link_existing_gate_passes_by_phone(session, user)
+        if result.linked_count > 0:
+            ensured += result.linked_count
+            continue
+        if result.error:
+            logger.warning(
+                "Failed to ensure Gate phone request for user_id=%s phone=%s: %s",
+                user.id,
+                user.phone,
+                result.error,
+            )
+
+    return ensured

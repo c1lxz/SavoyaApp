@@ -58,6 +58,38 @@ def _str_or_none(value: Any) -> str | None:
     return text or None
 
 
+def _compose_identity_label(
+    *,
+    raw_name: Any | None = None,
+    full_name: Any | None = None,
+    key_value: Any | None = None,
+    include_key_value: bool = True,
+) -> str | None:
+    normalized_raw_name = _str_or_none(raw_name)
+    if normalized_raw_name is not None:
+        return normalized_raw_name
+
+    normalized_full_name = _str_or_none(full_name)
+    normalized_key_value = _str_or_none(key_value)
+    if include_key_value and normalized_full_name and normalized_key_value:
+        return f"{normalized_key_value}   {normalized_full_name}"
+    if normalized_full_name:
+        return normalized_full_name
+    return normalized_key_value if include_key_value else None
+
+
+def _anonymous_gate_identity_label(*, unit: Any | None = None, access_point_name: Any | None = None) -> str | None:
+    labels = [unit, access_point_name]
+    for label in labels:
+        text = _str_or_none(label)
+        if text is None:
+            continue
+        normalized = text.casefold()
+        if "gsm" in normalized or "телефон" in normalized or "вызов" in normalized:
+            return "Анонимный GSM"
+    return None
+
+
 def _gate_status(event_code: int | None) -> str:
     return "success" if event_code in {2, 8, 56, 208} else "event"
 
@@ -136,7 +168,12 @@ async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) 
         key_type = _str_or_none(details.get("key_type"))
         key_value = _str_or_none(details.get("key_value"))
         gate_name = _str_or_none((observed or {}).get("name"))
-        actor_name = user.name or _str_or_none(details.get("actor_name"))
+        actor_full_name = user.name or _str_or_none(details.get("actor_name"))
+        actor_name = _compose_identity_label(
+            full_name=actor_full_name,
+            key_value=key_value,
+            include_key_value=False,
+        )
         actor_phone = user.phone or _str_or_none(details.get("actor_phone"))
         actor_login = user.login or _str_or_none(details.get("actor_login"))
         item = AdminMonitorEventItem(
@@ -175,7 +212,7 @@ async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) 
             "request_id": event.request_id,
             "actor_user_id": user.id,
             "actor_login": actor_login,
-            "actor_name": actor_name,
+            "actor_name": actor_full_name,
             "actor_phone": actor_phone,
             "access_point_id": event.access_point_id,
             "access_point_name": item.access_point_name,
@@ -212,6 +249,25 @@ async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) 
                 candidates=app_context_candidates,
             )
         raw_gate_name = _str_or_none(event.get("name"))
+        raw_gate_full_name = _str_or_none(event.get("full_name"))
+        raw_gate_key_type = _str_or_none(event.get("key_type"))
+        raw_gate_key_value = _str_or_none(event.get("key_value"))
+        inferred_gate_full_name = _str_or_none(event.get("inferred_full_name"))
+        inferred_gate_key_type = _str_or_none(event.get("inferred_key_type"))
+        inferred_gate_key_value = _str_or_none(event.get("inferred_key_value"))
+        display_gate_full_name = raw_gate_full_name or inferred_gate_full_name
+        display_gate_key_type = raw_gate_key_type or inferred_gate_key_type
+        display_gate_key_value = raw_gate_key_value or inferred_gate_key_value
+        gate_identity_label = _compose_identity_label(
+            raw_name=raw_gate_name,
+            full_name=display_gate_full_name,
+            key_value=display_gate_key_value,
+        )
+        if gate_identity_label is None:
+            gate_identity_label = _anonymous_gate_identity_label(
+                unit=event.get("unit"),
+                access_point_name=app_context.get("access_point_name") if app_context is not None else None,
+            )
         raw_gate_details = dict(event)
         if app_context is not None:
             matched_app_item_ids.add(str(app_context["item_id"]))
@@ -247,7 +303,15 @@ async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) 
                 ),
                 actor_user_id=_int_or_none(app_context.get("actor_user_id")) if app_context is not None else None,
                 actor_login=_str_or_none(app_context.get("actor_login")) if app_context is not None else None,
-                actor_name=_str_or_none(app_context.get("actor_name")) if app_context is not None else None,
+                actor_name=(
+                    _compose_identity_label(
+                        full_name=app_context.get("actor_name"),
+                        key_value=app_context.get("key_value"),
+                        include_key_value=False,
+                    )
+                    if app_context is not None
+                    else gate_identity_label
+                ),
                 actor_phone=_str_or_none(app_context.get("actor_phone")) if app_context is not None else None,
                 access_point_id=_int_or_none(app_context.get("access_point_id")) if app_context is not None else access_point_id,
                 access_point_name=(
@@ -255,15 +319,15 @@ async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) 
                     if app_context is not None
                     else _str_or_none(event.get("unit"))
                 ),
-                key_type=_str_or_none(app_context.get("key_type")) if app_context is not None else None,
-                key_value=_str_or_none(app_context.get("key_value")) if app_context is not None else None,
+                key_type=_str_or_none(app_context.get("key_type")) if app_context is not None else display_gate_key_type,
+                key_value=_str_or_none(app_context.get("key_value")) if app_context is not None else display_gate_key_value,
                 request_id=_str_or_none(app_context.get("request_id")) if app_context is not None else None,
                 app_request_id=_int_or_none(app_context.get("app_request_id")) if app_context is not None else None,
                 gate_key_id=_int_or_none(app_context.get("gate_key_id")) if app_context is not None else None,
                 gate_event_index=index,
                 gate_event_code=event_code,
                 gate_user_ptr=user_ptr,
-                gate_name=raw_gate_name,
+                gate_name=gate_identity_label,
                 gate_original_name=raw_gate_name,
                 gate_unit=_str_or_none(event.get("unit")),
                 details=raw_gate_details,

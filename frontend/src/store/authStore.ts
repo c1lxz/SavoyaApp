@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import { mockAuthService } from '@/services/authService';
+import { setUnauthorizedHandler } from '@/services/api/httpClient';
 import { usePassesStore } from '@/store/passesStore';
 import { ChangePasswordPayload, RequestState, User } from '@/types';
 
@@ -20,6 +21,7 @@ type AuthStore = {
   dismissPasswordChangePrompt: () => void;
   logout: () => Promise<void>;
   restoreSession: () => Promise<void>;
+  validateSession: () => Promise<boolean>;
 };
 
 const BLOCKED_ACCOUNT_MESSAGE =
@@ -36,7 +38,7 @@ const normalizeAuthError = (message: string | null | undefined): string => {
 const resolvePasswordChangePrompt = (user: User | null) =>
   Boolean(user && !user.isAdmin && (user.passwordChangePromptRequired ?? user.passwordChangeRequired));
 
-export const useAuthStore = create<AuthStore>((set) => ({
+export const useAuthStore = create<AuthStore>((set, get) => ({
   user: null,
   requiresProfileCompletion: false,
   shouldPromptPasswordChange: false,
@@ -118,12 +120,9 @@ export const useAuthStore = create<AuthStore>((set) => ({
     set({ logoutState: 'loading', error: null });
     try {
       await mockAuthService.logout();
-      usePassesStore.getState().resetPasses(null);
+      clearSessionState();
       set({
-        user: null,
         logoutState: 'success',
-        requiresProfileCompletion: false,
-        shouldPromptPasswordChange: false,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Ошибка сети';
@@ -147,4 +146,46 @@ export const useAuthStore = create<AuthStore>((set) => ({
       set({ restoreState: 'error', error: message, user: null, shouldPromptPasswordChange: false });
     }
   },
+
+  async validateSession() {
+    if (!get().user) {
+      return false;
+    }
+
+    try {
+      const user = await mockAuthService.getCurrentUser(true);
+      if (!user) {
+        clearSessionState();
+        return false;
+      }
+
+      set({
+        user,
+        requiresProfileCompletion: !user.isAdmin && !Boolean(user.fullName.trim()),
+        shouldPromptPasswordChange: resolvePasswordChangePrompt(user),
+      });
+      return true;
+    } catch {
+      // Keep the current session on transient network failures.
+      return Boolean(get().user);
+    }
+  },
 }));
+
+function clearSessionState(): void {
+  usePassesStore.getState().resetPasses(null);
+  useAuthStore.setState({
+    user: null,
+    requiresProfileCompletion: false,
+    shouldPromptPasswordChange: false,
+    loginState: 'idle',
+    logoutState: 'idle',
+    profileState: 'idle',
+    passwordChangeState: 'idle',
+    error: null,
+  });
+}
+
+setUnauthorizedHandler(() => {
+  clearSessionState();
+});

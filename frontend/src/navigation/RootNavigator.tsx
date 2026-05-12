@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Platform, StyleSheet } from 'react-native';
+import { AppState, Platform, StyleSheet } from 'react-native';
 import { DefaultTheme, NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -22,6 +22,7 @@ import { theme } from '@/theme';
 import { RootStackParamList } from './types';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+const SESSION_VALIDATION_INTERVAL_MS = 5000;
 
 const navigationTheme = {
   ...DefaultTheme,
@@ -60,12 +61,72 @@ export const RootNavigator = () => {
   const requiresProfileCompletion = useAuthStore((state) => state.requiresProfileCompletion);
   const restoreSession = useAuthStore((state) => state.restoreSession);
   const restoreState = useAuthStore((state) => state.restoreState);
+  const validateSession = useAuthStore((state) => state.validateSession);
 
   useEffect(() => {
     if (restoreState === 'idle') {
       void restoreSession();
     }
   }, [restoreSession, restoreState]);
+
+  useEffect(() => {
+    if (!user) {
+      return undefined;
+    }
+
+    void validateSession();
+    const intervalId = setInterval(() => {
+      void validateSession();
+    }, SESSION_VALIDATION_INTERVAL_MS);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [user, validateSession]);
+
+  useEffect(() => {
+    if (!user) {
+      return undefined;
+    }
+
+    const triggerValidation = () => {
+      void validateSession();
+    };
+
+    if (Platform.OS === 'web') {
+      const handleVisibilityChange = () => {
+        if (typeof document !== 'undefined' && !document.hidden) {
+          triggerValidation();
+        }
+      };
+
+      if (typeof window !== 'undefined') {
+        window.addEventListener('focus', triggerValidation);
+      }
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+      }
+
+      return () => {
+        if (typeof window !== 'undefined') {
+          window.removeEventListener('focus', triggerValidation);
+        }
+        if (typeof document !== 'undefined') {
+          document.removeEventListener('visibilitychange', handleVisibilityChange);
+        }
+      };
+    }
+
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        triggerValidation();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [user, validateSession]);
 
   if (restoreState === 'idle' || restoreState === 'loading') {
     return (

@@ -143,6 +143,16 @@ Stop-SavoyaProcess -Description "Savoya frontend helper" -Predicate {
     return $CommandLine -match "serve_frontend_prod\.py"
 }
 
+Stop-SavoyaProcess -Description "Savoya GateTerm users guard" -Predicate {
+    param([string]$CommandLine)
+    return $CommandLine -match "gateterm_users_guard\.py"
+}
+
+Stop-SavoyaProcess -Description "Savoya Gate bridge worker" -Predicate {
+    param([string]$CommandLine)
+    return $CommandLine -match "gate_bridge\.py"
+}
+
 & $startScript `
     -RepoRoot $resolvedRepoRoot `
     -NginxExePath $nginxPaths.Exe `

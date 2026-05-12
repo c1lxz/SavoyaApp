@@ -42,16 +42,36 @@ def _call(action: str, payload: dict) -> object:
             resident_name=str(payload.get("resident_name") or "Resident"),
             plot_number=str(payload["plot_number"]) if payload.get("plot_number") is not None else None,
         )
+    if action == "add_phone_permanent_key_via_ui":
+        return gate_runtime.add_phone_permanent_key_via_gateterm_ui(
+            key_value=str(payload["key_value"]),
+            phone_number=str(payload["phone_number"]) if payload.get("phone_number") is not None else None,
+            access_point_ids=[int(item) for item in payload["access_point_ids"]],
+            resident_name=str(payload.get("resident_name") or "Resident"),
+            plot_number=str(payload["plot_number"]) if payload.get("plot_number") is not None else None,
+        )
     if action == "remove_key":
         return gate_runtime.remove_key(int(payload["key_id"]))
+    if action == "resolve_key_id":
+        return gate_runtime.resolve_key_id(str(payload["external_key_id"]))
     if action == "get_access_points":
         return gate_runtime.get_access_points()
     if action == "get_recent_events":
         return gate_runtime.get_recent_events(limit=int(payload.get("limit") or 100))
+    if action == "repair_user_display_names":
+        return gate_runtime.repair_user_display_names()
+    if action == "repair_phone_identity_rows":
+        return gate_runtime.repair_phone_identity_rows()
+    if action == "repair_vehicle_number_u":
+        return gate_runtime.repair_vehicle_number_u()
+    if action == "repair_vehicle_visual_numbers":
+        return gate_runtime.repair_vehicle_visual_numbers(limit=int(payload.get("limit") or 50))
     if action == "get_key_permissions":
         return gate_runtime.get_key_permissions(str(payload["external_key_id"]))
     if action == "get_wiegand_credentials":
         return gate_runtime.get_wiegand_credentials(str(payload["external_key_id"]))
+    if action == "post_sync_phone_key":
+        return gate_runtime.post_sync_phone_key(int(payload["key_id"]))
     if action == "post_sync_vehicle_key":
         return gate_runtime.post_sync_vehicle_key(int(payload["key_id"]))
     if action == "open_access_point":
@@ -68,7 +88,8 @@ def main() -> int:
         return 2
 
     action = sys.argv[1]
-    payload = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
+    raw_payload = sys.argv[2] if len(sys.argv) > 2 else sys.stdin.read()
+    payload = json.loads(raw_payload) if str(raw_payload or "").strip() else {}
 
     try:
         result = _call(action, payload)

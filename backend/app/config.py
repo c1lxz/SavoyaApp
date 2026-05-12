@@ -56,7 +56,13 @@ class Settings(BaseSettings):
     gate_python_launcher: str = "py"
     gate_python_version: str = "-3.12-32"
     gate_bridge_timeout_seconds: int = 20
+    gate_bridge_maintenance_timeout_seconds: int = 300
+    gate_bridge_vehicle_post_sync_timeout_seconds: int = 60
+    gate_bridge_retry_attempts: int = 3
+    gate_bridge_retry_delay_seconds: float = 0.75
+    gate_gateterm_users_guard_enabled: bool = False
     gate_vehicle_post_sync_required: bool = True
+    gate_startup_sync_enabled: bool = False
     gate_action_map_json: str = Field(
         default='{"entry": 1, "exit": 2, "wicket_north": 3, "wicket_lake": 4, "wicket_admin": 5, "wicket_forest": 6}'
     )
@@ -68,6 +74,8 @@ class Settings(BaseSettings):
     gate_event_poll_enabled: bool = True
     gate_event_poll_interval_seconds: float = 10.0
     gate_event_poll_limit: int = 200
+    gate_background_maintenance_enabled: bool = False
+    gate_maintenance_interval_seconds: float = 300.0
     login_rate_limit_attempts: int = 5
     login_rate_limit_window_seconds: int = 300
     login_ip_rate_limit_attempts: int = 20

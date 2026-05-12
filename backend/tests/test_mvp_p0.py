@@ -9,10 +9,11 @@ from sqlalchemy import select
 from backend.app.database import SessionLocal
 from backend.app.messages import BLOCKED_ACCOUNT_MESSAGE
 from backend.app.models import Request, User
-from backend.app.services.auth import hash_password
-from backend.app.services.requests import cleanup_broken_requests, cleanup_expired_requests
+from backend.app.schemas import CreateRequestRequest
 from backend.app.services import requests as request_service
+from backend.app.services.auth import hash_password
 from backend.app.services.gate import gate_client
+from backend.app.services.requests import cleanup_broken_requests, cleanup_expired_requests
 
 
 async def _ensure_user(login: str, password: str, is_active: bool = True) -> int:
@@ -51,6 +52,14 @@ def _create_user_and_login(client) -> tuple[dict[str, str], int]:
     return {"Authorization": f"Bearer {data['access_token']}"}, user_id
 
 
+async def _create_request_direct(user_id: int, **payload_kwargs) -> Request:
+    async with SessionLocal() as session:
+        user = await session.get(User, user_id)
+        assert user is not None
+        payload = CreateRequestRequest(**payload_kwargs)
+        return await request_service.create_request(session, user, payload)
+
+
 async def _insert_permanent_request(user_id: int, key_value: str, gate_key_id: int) -> int:
     async with SessionLocal() as session:
         row = Request(
@@ -86,6 +95,41 @@ def test_create_request_with_empty_access_points_returns_422(client):
     assert response.status_code == 422
 
 
+def test_direct_vehicle_request_route_is_disabled(client):
+    headers, _ = _create_user_and_login(client)
+    response = client.post(
+        "/api/requests/",
+        headers=headers,
+        json={
+            "key_type": "VehicleNumber",
+            "key_value": f"A{uuid4().hex[:6]}",
+            "access_point_ids": [1],
+            "is_permanent": True,
+        },
+    )
+    assert response.status_code == 410
+    assert response.json()["detail"]["code"] == "request_route_disabled"
+
+
+def test_direct_phone_request_route_is_disabled(client):
+    headers, _ = _create_user_and_login(client)
+    phone_number = f"+7999{str(uuid4().int)[:7]}"
+    response = client.post(
+        "/api/requests/",
+        headers=headers,
+        json={
+            "key_type": "Phone",
+            "key_value": phone_number,
+            "phone_number": phone_number,
+            "access_point_ids": [1],
+            "is_permanent": False,
+            "hours": 2,
+        },
+    )
+    assert response.status_code == 410
+    assert response.json()["detail"]["code"] == "request_route_disabled"
+
+
 def test_login_inactive_user_returns_403(client):
     login = f"inactive_{uuid4().hex[:8]}"
     password = "demo123"
@@ -114,76 +158,72 @@ def test_cancel_permanent_request_deactivates_gate_key(client):
 
 def test_courier_request_forces_ttl_mode(client):
     headers, _ = _create_user_and_login(client)
+    expires_at = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat().replace("+00:00", "Z")
     response = client.post(
-        "/api/requests/",
+        "/passes",
         headers=headers,
         json={
-            "key_type": "VehicleNumber",
-            "key_value": f"C{uuid4().hex[:6]}",
-            "access_point_ids": [1, 2],
-            "is_permanent": True,
-            "is_courier": True,
-            "hours": 3,
-            "plot_number": "25",
+            "carNumber": f"C{uuid4().hex[:6]}",
+            "plotNumber": "25",
+            "isPermanent": True,
+            "isCourier": True,
+            "expiresAt": expires_at,
         },
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["is_permanent"] is False
-    assert body["expires_at"] is not None
+    assert body["isPermanent"] is False
+    assert body["expiresAt"] is not None
 
 
 def test_create_request_rejects_duplicate_active_vehicle_number(client):
-    headers, _ = _create_user_and_login(client)
+    _, user_id = _create_user_and_login(client)
     key_value = f"D{uuid4().hex[:6]}"
 
-    first = client.post(
-        "/api/requests/",
-        headers=headers,
-        json={
-            "key_type": "VehicleNumber",
-            "key_value": key_value,
-            "access_point_ids": [1],
-            "is_permanent": True,
-        },
+    asyncio.run(
+        _create_request_direct(
+            user_id,
+            key_type="VehicleNumber",
+            key_value=key_value,
+            access_point_ids=[1],
+            is_permanent=True,
+        )
     )
-    assert first.status_code == 200
 
-    second = client.post(
-        "/api/requests/",
-        headers=headers,
-        json={
-            "key_type": "VehicleNumber",
-            "key_value": key_value,
-            "access_point_ids": [1, 2],
-            "is_permanent": False,
-            "hours": 2,
-        },
-    )
-    assert second.status_code == 409
-    assert second.json()["detail"]["code"] == "duplicate_request"
+    try:
+        asyncio.run(
+            _create_request_direct(
+                user_id,
+                key_type="VehicleNumber",
+                key_value=key_value,
+                access_point_ids=[1, 2],
+                is_permanent=False,
+                hours=2,
+            )
+        )
+    except request_service.RequestConflictError as exc:
+        assert exc.code == "duplicate_request"
+    else:
+        raise AssertionError("Expected duplicate request conflict")
 
 
 def test_create_request_persists_contact_phone(client):
-    headers, _ = _create_user_and_login(client)
-    response = client.post(
-        "/api/requests/",
-        headers=headers,
-        json={
-            "key_type": "VehicleNumber",
-            "key_value": f"P{uuid4().hex[:6]}",
-            "phone_number": "+79991234567",
-            "access_point_ids": [1],
-            "is_permanent": True,
-        },
+    _, user_id = _create_user_and_login(client)
+    created = asyncio.run(
+        _create_request_direct(
+            user_id,
+            key_type="VehicleNumber",
+            key_value=f"P{uuid4().hex[:6]}",
+            phone_number="+79991234567",
+            access_point_ids=[1],
+            is_permanent=True,
+        )
     )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["phone_number"] == "+79991234567"
+    assert created.contact_phone == "+79991234567"
 
 
 def test_create_temporary_phone_request_passes_resident_name_to_gate(client):
-    headers, _ = _create_user_and_login(client)
+    _, user_id = _create_user_and_login(client)
     captured: list[dict] = []
     phone_number = f"+7999{str(uuid4().int)[:7]}"
     original_add_temporary_key = gate_client.add_temporary_key
@@ -194,31 +234,30 @@ def test_create_temporary_phone_request_passes_resident_name_to_gate(client):
 
     gate_client.add_temporary_key = _capture_gate_call
     try:
-        response = client.post(
-            "/api/requests/",
-            headers=headers,
-            json={
-                "key_type": "Phone",
-                "key_value": phone_number,
-                "phone_number": phone_number,
-                "access_point_ids": [1],
-                "is_permanent": False,
-                "hours": 2,
-            },
+        asyncio.run(
+            _create_request_direct(
+                user_id,
+                key_type="Phone",
+                key_value=phone_number,
+                phone_number=phone_number,
+                access_point_ids=[1],
+                is_permanent=False,
+                hours=2,
+            )
         )
     finally:
         gate_client.add_temporary_key = original_add_temporary_key
 
-    assert response.status_code == 200
     assert captured
     assert captured[0]["resident_name"].startswith("User ")
 
 
 def test_create_temporary_phone_request_uses_explicit_resident_name(client):
-    headers, _ = _create_user_and_login(client)
+    _, user_id = _create_user_and_login(client)
     captured: list[dict] = []
     phone_number = f"+7999{str(uuid4().int)[:7]}"
     original_add_temporary_key = gate_client.add_temporary_key
+    resident_name = "\u0418\u0432\u0430\u043d\u043e\u0432 \u0418\u0432\u0430\u043d"
 
     def _capture_gate_call(**kwargs):
         captured.append(dict(kwargs))
@@ -226,29 +265,27 @@ def test_create_temporary_phone_request_uses_explicit_resident_name(client):
 
     gate_client.add_temporary_key = _capture_gate_call
     try:
-        response = client.post(
-            "/api/requests/",
-            headers=headers,
-            json={
-                "key_type": "Phone",
-                "key_value": phone_number,
-                "phone_number": phone_number,
-                "resident_name": "Иванов Иван",
-                "access_point_ids": [1],
-                "is_permanent": False,
-                "hours": 2,
-            },
+        asyncio.run(
+            _create_request_direct(
+                user_id,
+                key_type="Phone",
+                key_value=phone_number,
+                phone_number=phone_number,
+                resident_name=resident_name,
+                access_point_ids=[1],
+                is_permanent=False,
+                hours=2,
+            )
         )
     finally:
         gate_client.add_temporary_key = original_add_temporary_key
 
-    assert response.status_code == 200
     assert captured
-    assert captured[0]["resident_name"] == "Иванов Иван"
+    assert captured[0]["resident_name"] == resident_name
 
 
 def test_create_temporary_phone_request_adds_gsm_access_points(client):
-    headers, _ = _create_user_and_login(client)
+    _, user_id = _create_user_and_login(client)
     captured: list[dict] = []
     phone_number = f"+7999{str(uuid4().int)[:7]}"
     original_add_temporary_key = gate_client.add_temporary_key
@@ -261,23 +298,21 @@ def test_create_temporary_phone_request_adds_gsm_access_points(client):
     request_service.settings.gsm_access_point_ids_json = "[5, 6]"
     gate_client.add_temporary_key = _capture_gate_call
     try:
-        response = client.post(
-            "/api/requests/",
-            headers=headers,
-            json={
-                "key_type": "Phone",
-                "key_value": phone_number,
-                "phone_number": phone_number,
-                "access_point_ids": [1, 7, 19],
-                "is_permanent": False,
-                "hours": 2,
-            },
+        asyncio.run(
+            _create_request_direct(
+                user_id,
+                key_type="Phone",
+                key_value=phone_number,
+                phone_number=phone_number,
+                access_point_ids=[1, 7, 19],
+                is_permanent=False,
+                hours=2,
+            )
         )
     finally:
         gate_client.add_temporary_key = original_add_temporary_key
         request_service.settings.gsm_access_point_ids_json = original_gsm_json
 
-    assert response.status_code == 200
     assert captured
     assert captured[0]["access_point_ids"] == [1, 7, 19, 5, 6]
 
@@ -352,30 +387,31 @@ def test_cleanup_expired_requests_can_skip_gate_key_removal():
     assert removed_key_ids == []
 
 
-def test_create_request_returns_502_when_gate_returns_invalid_key_id(client):
-    headers, _ = _create_user_and_login(client)
+def test_create_request_returns_invalid_gate_key_error_when_gate_returns_invalid_key_id(client):
+    _, user_id = _create_user_and_login(client)
     original_add_permanent_key = gate_client.add_permanent_key
     gate_client.add_permanent_key = lambda **kwargs: 0
     try:
-        response = client.post(
-            "/api/requests/",
-            headers=headers,
-            json={
-                "key_type": "VehicleNumber",
-                "key_value": f"E{uuid4().hex[:6]}",
-                "access_point_ids": [1],
-                "is_permanent": True,
-            },
-        )
+        try:
+            asyncio.run(
+                _create_request_direct(
+                    user_id,
+                    key_type="VehicleNumber",
+                    key_value=f"E{uuid4().hex[:6]}",
+                    access_point_ids=[1],
+                    is_permanent=True,
+                )
+            )
+        except request_service.RequestIntegrationError as exc:
+            assert exc.code == "invalid_gate_key"
+        else:
+            raise AssertionError("Expected invalid gate key integration error")
     finally:
         gate_client.add_permanent_key = original_add_permanent_key
 
-    assert response.status_code == 502
-    assert response.json()["detail"]["code"] == "invalid_gate_key"
 
-
-def test_create_request_returns_502_when_gate_bridge_raises(client):
-    headers, _ = _create_user_and_login(client)
+def test_create_request_returns_gate_bridge_error_when_gate_bridge_raises(client):
+    _, user_id = _create_user_and_login(client)
     original_add_permanent_key = gate_client.add_permanent_key
 
     def _raise_gate_error(**kwargs):
@@ -383,18 +419,19 @@ def test_create_request_returns_502_when_gate_bridge_raises(client):
 
     gate_client.add_permanent_key = _raise_gate_error
     try:
-        response = client.post(
-            "/api/requests/",
-            headers=headers,
-            json={
-                "key_type": "VehicleNumber",
-                "key_value": f"Q{uuid4().hex[:6]}",
-                "access_point_ids": [1],
-                "is_permanent": True,
-            },
-        )
+        try:
+            asyncio.run(
+                _create_request_direct(
+                    user_id,
+                    key_type="VehicleNumber",
+                    key_value=f"Q{uuid4().hex[:6]}",
+                    access_point_ids=[1],
+                    is_permanent=True,
+                )
+            )
+        except request_service.RequestIntegrationError as exc:
+            assert exc.code == "gate_bridge_error"
+        else:
+            raise AssertionError("Expected gate bridge integration error")
     finally:
         gate_client.add_permanent_key = original_add_permanent_key
-
-    assert response.status_code == 502
-    assert response.json()["detail"]["code"] == "gate_bridge_error"

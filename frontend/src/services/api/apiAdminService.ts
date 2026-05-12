@@ -107,6 +107,9 @@ export type AdminUserQuery = {
   offset?: number;
 };
 
+const ADMIN_LIST_TIMEOUT_MS = 15000;
+const ADMIN_MUTATION_TIMEOUT_MS = 120000;
+
 const mapAdminRequest = (item: BackendAdminRequestItem): AdminRequestItem => ({
   id: String(item.id),
   resident: {
@@ -223,7 +226,9 @@ export const apiAdminService = {
     }
 
     const suffix = params.toString() ? `?${params.toString()}` : '';
-    const result = await apiRequest<BackendAdminUserList>(`/api/admin/users${suffix}`);
+    const result = await apiRequest<BackendAdminUserList>(`/api/admin/users${suffix}`, {
+      timeoutMs: ADMIN_LIST_TIMEOUT_MS,
+    });
 
     return {
       total: result.total,
@@ -234,6 +239,7 @@ export const apiAdminService = {
   async createUser(payload: AdminCreateUserPayload): Promise<AdminUserItem> {
     const result = await apiRequest<BackendAdminUserItem>('/api/admin/users', {
       method: 'POST',
+      timeoutMs: ADMIN_MUTATION_TIMEOUT_MS,
       body: {
         full_name: payload.fullName,
         phone: payload.phoneNumber,
@@ -246,6 +252,7 @@ export const apiAdminService = {
   async blockUser(userId: string): Promise<AdminUserItem> {
     const result = await apiRequest<BackendAdminUserItem>(`/api/admin/users/${userId}/block`, {
       method: 'POST',
+      timeoutMs: ADMIN_MUTATION_TIMEOUT_MS,
     });
     return mapAdminUser(result);
   },
@@ -253,6 +260,7 @@ export const apiAdminService = {
   async unblockUser(userId: string): Promise<AdminUserItem> {
     const result = await apiRequest<BackendAdminUserItem>(`/api/admin/users/${userId}/unblock`, {
       method: 'POST',
+      timeoutMs: ADMIN_MUTATION_TIMEOUT_MS,
     });
     return mapAdminUser(result);
   },
@@ -260,6 +268,7 @@ export const apiAdminService = {
   async deleteUser(userId: string): Promise<void> {
     await apiRequest<void>(`/api/admin/users/${userId}`, {
       method: 'DELETE',
+      timeoutMs: ADMIN_MUTATION_TIMEOUT_MS,
     });
   },
 

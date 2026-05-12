@@ -85,16 +85,28 @@ const TableCell = ({
   color,
 }: {
   width: number;
-  children: string;
+  children: React.ReactNode;
   header?: boolean;
   color?: string;
 }) => (
   <View style={[styles.cell, { width }]}>
-    <Text
-      numberOfLines={2}
-      style={[header ? styles.headerCellText : styles.cellText, color ? { color } : null]}
-    >
-      {children}
+    {typeof children === 'string' ? (
+      <Text
+        numberOfLines={2}
+        style={[header ? styles.headerCellText : styles.cellText, color ? { color } : null]}
+      >
+        {children}
+      </Text>
+    ) : (
+      children
+    )}
+  </View>
+);
+
+const MonitorActorCell = ({ item }: { item: AdminMonitorEventItem }) => (
+  <View style={styles.actorCell}>
+    <Text numberOfLines={2} style={styles.actorNameText}>
+      {actorName(item)}
     </Text>
   </View>
 );
@@ -115,10 +127,16 @@ const MonitorTable = ({ events }: { events: AdminMonitorEventItem[] }) => (
         return (
           <View key={item.id} style={[styles.tableRow, index % 2 === 1 ? styles.tableRowAlt : null]}>
             <TableCell width={COLUMNS.time}>{formatMonitorTime(item.createdAt)}</TableCell>
-            <TableCell width={COLUMNS.name}>{actorName(item)}</TableCell>
+            <TableCell width={COLUMNS.name}>
+              <MonitorActorCell item={item} />
+            </TableCell>
             <TableCell width={COLUMNS.point}>{pointName(item)}</TableCell>
-            <TableCell width={COLUMNS.event} color={color}>{eventLabel(item)}</TableCell>
-            <TableCell width={COLUMNS.status} color={color}>{statusLabel(item)}</TableCell>
+            <TableCell width={COLUMNS.event} color={color}>
+              {eventLabel(item)}
+            </TableCell>
+            <TableCell width={COLUMNS.status} color={color}>
+              {statusLabel(item)}
+            </TableCell>
           </View>
         );
       })}
@@ -176,7 +194,9 @@ export const AdminMonitorScreen = ({ navigation }: Props) => {
           <MaterialCommunityIcons name="monitor-eye" size={24} color={theme.colors.textPrimary} />
           <Text style={[styles.summaryTitle, { fontSize: metrics.isDesktop ? 22 : 19 }]}>Мониторинг доступа</Text>
         </View>
-        <Text style={styles.summaryText}>ФИО и номер берутся из приложения, даже когда Gate фиксирует открытие от имени администратора.</Text>
+        <Text style={styles.summaryText}>
+          ФИО и номер берутся из приложения, даже когда Gate фиксирует открытие от имени администратора.
+        </Text>
         <View style={styles.summaryMetaRow}>
           <Text style={styles.summaryMeta}>Строк: {events.length}</Text>
           {lastUpdated ? <Text style={styles.summaryMeta}>Обновлено: {formatDateTime(lastUpdated)}</Text> : null}
@@ -199,7 +219,11 @@ export const AdminMonitorScreen = ({ navigation }: Props) => {
 
           <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
             {summary}
-            {events.length > 0 ? <MonitorTable events={events} /> : loadState === 'loading' ? null : <EmptyState text="События не найдены" />}
+            {events.length > 0 ? (
+              <MonitorTable events={events} />
+            ) : loadState === 'loading' ? null : (
+              <EmptyState text="События не найдены" />
+            )}
           </ScrollView>
 
           <LoadingOverlay visible={loadState === 'loading'} />
@@ -312,6 +336,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   cellText: {
+    color: theme.colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 18,
+  },
+  actorCell: {
+    gap: 2,
+  },
+  actorNameText: {
     color: theme.colors.textSecondary,
     fontSize: 14,
     lineHeight: 18,

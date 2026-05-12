@@ -15,8 +15,19 @@ class _FakeCursor:
         self.commands: list[tuple[str, tuple | None]] = []
 
     def execute(self, sql: str, params=None):
+        if sql == "SELECT TOP 1 [Name] FROM Users":
+            raise RuntimeError("Too few parameters. Expected 1.")
         self.commands.append((sql, tuple(params) if params is not None else None))
         return self
+
+    def columns(self, *, table: str):
+        if table != "Users":
+            return []
+        return [
+            SimpleNamespace(column_name="LastName"),
+            SimpleNamespace(column_name="FirstName"),
+            SimpleNamespace(column_name="FatherName"),
+        ]
 
 
 class _RowCursor:
@@ -43,6 +54,23 @@ class _ConflictCleanupCursor:
 
     def fetchall(self):
         if "SELECT UserPtr, Phone, Number" in self._last_sql and "FROM Users" in self._last_sql:
+            return list(self._rows)
+        raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
+
+
+class _PhoneRepairCursor:
+    def __init__(self, rows) -> None:
+        self._rows = list(rows)
+        self.commands: list[tuple[str, tuple | None]] = []
+        self._last_sql = ""
+
+    def execute(self, sql: str, params=None):
+        self._last_sql = sql
+        self.commands.append((sql, tuple(params) if params is not None else None))
+        return self
+
+    def fetchall(self):
+        if "FROM Users" in self._last_sql:
             return list(self._rows)
         raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
 
@@ -132,6 +160,27 @@ class _UserActiveCursor:
         return self._row
 
 
+class _UserWithAccessRowsCursor:
+    def __init__(self, user_row, access_rows) -> None:
+        self.user_row = user_row
+        self.access_rows = list(access_rows)
+        self._last_sql = ""
+
+    def execute(self, sql: str, params=None):
+        self._last_sql = sql
+        return self
+
+    def fetchone(self):
+        if "FROM Users" in self._last_sql and "WHERE UserPtr = ?" in self._last_sql:
+            return self.user_row
+        raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
+
+    def fetchall(self):
+        if "FROM AccessTable" in self._last_sql and "WHERE UserPtr = ?" in self._last_sql:
+            return list(self.access_rows)
+        raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
+
+
 class _ResolveUserPtrCursor:
     def __init__(self, rows) -> None:
         self._rows = list(rows)
@@ -139,6 +188,8 @@ class _ResolveUserPtrCursor:
         self._last_sql = ""
 
     def execute(self, sql: str, params=None):
+        if sql == "SELECT TOP 1 [Name] FROM Users" and not self.with_display_name:
+            raise RuntimeError("Too few parameters. Expected 1.")
         self._last_sql = sql
         self.commands.append((sql, tuple(params) if params is not None else None))
         return self
@@ -249,6 +300,99 @@ class _VehicleRepairCursor:
     def fetchall(self):
         if "SELECT UserPtr, KeyType, Number, NumberU, Deleted" in self._last_sql:
             return list(self._rows)
+        raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
+
+
+class _DisplayNameRepairCursor:
+    def __init__(self, rows, *, with_display_name: bool = True) -> None:
+        self._rows = list(rows)
+        self.with_display_name = with_display_name
+        self.commands: list[tuple[str, tuple | None]] = []
+        self._last_sql = ""
+
+    def execute(self, sql: str, params=None):
+        self._last_sql = sql
+        self.commands.append((sql, tuple(params) if params is not None else None))
+        return self
+
+    def columns(self, *, table: str):
+        if table != "Users":
+            return []
+        columns = ["LastName", "FirstName", "FatherName"]
+        if self.with_display_name:
+            columns.insert(0, "Name")
+        return [SimpleNamespace(column_name=column_name) for column_name in columns]
+
+    def fetchall(self):
+        if "SELECT UserPtr, [Name] AS DisplayName, LastName, FirstName, FatherName, Deleted" in self._last_sql:
+            return list(self._rows)
+        raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
+
+
+class _EventIdentityCursor:
+    def __init__(self, rows, *, with_display_name: bool = True) -> None:
+        self._rows = list(rows)
+        self.with_display_name = with_display_name
+        self._last_sql = ""
+
+    def execute(self, sql: str, params=None):
+        if sql == "SELECT TOP 1 [Name] FROM Users" and not self.with_display_name:
+            raise RuntimeError("Too few parameters. Expected 1.")
+        self._last_sql = sql
+        return self
+
+    def columns(self, *, table: str):
+        if table != "Users":
+            return []
+        columns = ["LastName", "FirstName", "FatherName", "Number", "NumberU", "Phone"]
+        if self.with_display_name:
+            columns.insert(0, "Name")
+        return [SimpleNamespace(column_name=column_name) for column_name in columns]
+
+    def fetchall(self):
+        if "SELECT UserPtr," in self._last_sql and "LastName, FirstName, FatherName, [Number], NumberU, Phone" in self._last_sql:
+            return list(self._rows)
+        raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
+
+
+class _AnonymousEventInferenceCursor:
+    def __init__(self, *, reader_rows, user_rows, with_display_name: bool = True) -> None:
+        self.reader_rows = list(reader_rows)
+        self.user_rows = list(user_rows)
+        self.with_display_name = with_display_name
+        self._last_sql = ""
+
+    def execute(self, sql: str, params=None):
+        if sql == "SELECT TOP 1 [Name] FROM Users" and not self.with_display_name:
+            raise RuntimeError("Too few parameters. Expected 1.")
+        self._last_sql = sql
+        return self
+
+    def columns(self, *, table: str):
+        if table != "Users":
+            return []
+        columns = [
+            "LastName",
+            "FirstName",
+            "FatherName",
+            "Number",
+            "NumberU",
+            "Phone",
+            "KeyType",
+            "Deleted",
+            "Status",
+            "LastUsed",
+            "LastUsedRdrName",
+        ]
+        if self.with_display_name:
+            columns.insert(0, "Name")
+        return [SimpleNamespace(column_name=column_name) for column_name in columns]
+
+    def fetchall(self):
+        if "SELECT RdrPtr, Name" in self._last_sql and "FROM Readers" in self._last_sql:
+            return list(self.reader_rows)
+        if "SELECT TOP 500" in self._last_sql and "LastUsedRdrName" in self._last_sql:
+            return list(self.user_rows)
         raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
 
 
@@ -482,6 +626,125 @@ def test_open_gateterm_users_view_falls_back_to_menu_click(monkeypatch):
     ]
 
 
+def test_open_access_point_via_gateterm_ui_closes_access_window_after_success(monkeypatch):
+    calls: list[object] = []
+    fake_app = object()
+
+    class _FakeGrid:
+        def rectangle(self):
+            return SimpleNamespace(top=0, bottom=200)
+
+        def click_input(self, *, coords):
+            calls.append(("grid_click", coords))
+
+    class _FakeButton:
+        def click_input(self):
+            calls.append("button_click")
+
+    class _FakeWindow:
+        def set_focus(self):
+            calls.append("window_focus")
+
+        def child_window(self, *, class_name=None, control_id=None):
+            if class_name == "MSFlexGridWndClass":
+                return _FakeGrid()
+            if control_id == 11 and class_name == "ThunderRT6CommandButton":
+                return _FakeButton()
+            raise AssertionError(f"Unexpected child_window lookup: class_name={class_name!r}, control_id={control_id!r}")
+
+    class _FakeApplication:
+        def __init__(self, *args, **kwargs) -> None:
+            calls.append(("application_init", kwargs))
+
+        def connect(self, *, path):
+            calls.append(("connect", path))
+            return fake_app
+
+    monkeypatch.setitem(sys.modules, "pywinauto", SimpleNamespace(Application=_FakeApplication))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_env",
+        lambda name, *aliases, default=None, allow_empty=False: (
+            r"C:\GATE\Terminal\GateTerm.exe" if name == "GATE_GATETERM_EXE" else default
+        ),
+    )
+    monkeypatch.setattr(gate_runtime, "_gateterm_ui_visible_rows", lambda cursor: [{"access_point_id": 5}])
+    monkeypatch.setattr(gate_runtime, "_gateterm_ui_row_override", lambda: {})
+    monkeypatch.setattr(gate_runtime, "_latest_gate_open_event", lambda access_point_id: {"index": 12})
+    monkeypatch.setattr(gate_runtime, "_wait_for_gate_open_event", lambda *args, **kwargs: {"index": 13})
+    monkeypatch.setattr(gate_runtime, "_open_gateterm_access_window", lambda app: _FakeWindow())
+    monkeypatch.setattr(
+        gate_runtime,
+        "_close_gateterm_access_window_if_open",
+        lambda app: calls.append(("close_access_window", app)),
+    )
+
+    result = gate_runtime._open_access_point_via_gateterm_ui(object(), 5, external_key_id="key-1")
+
+    assert result.success is True
+    assert ("close_access_window", fake_app) in calls
+
+
+def test_open_access_point_via_gateterm_ui_closes_access_window_after_failure(monkeypatch):
+    calls: list[object] = []
+    fake_app = object()
+
+    class _BrokenGrid:
+        def rectangle(self):
+            return SimpleNamespace(top=0, bottom=200)
+
+        def click_input(self, *, coords):
+            calls.append(("grid_click", coords))
+            raise RuntimeError("boom")
+
+    class _FakeButton:
+        def click_input(self):
+            calls.append("button_click")
+
+    class _FakeWindow:
+        def set_focus(self):
+            calls.append("window_focus")
+
+        def child_window(self, *, class_name=None, control_id=None):
+            if class_name == "MSFlexGridWndClass":
+                return _BrokenGrid()
+            if control_id == 11 and class_name == "ThunderRT6CommandButton":
+                return _FakeButton()
+            raise AssertionError(f"Unexpected child_window lookup: class_name={class_name!r}, control_id={control_id!r}")
+
+    class _FakeApplication:
+        def __init__(self, *args, **kwargs) -> None:
+            calls.append(("application_init", kwargs))
+
+        def connect(self, *, path):
+            calls.append(("connect", path))
+            return fake_app
+
+    monkeypatch.setitem(sys.modules, "pywinauto", SimpleNamespace(Application=_FakeApplication))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_env",
+        lambda name, *aliases, default=None, allow_empty=False: (
+            r"C:\GATE\Terminal\GateTerm.exe" if name == "GATE_GATETERM_EXE" else default
+        ),
+    )
+    monkeypatch.setattr(gate_runtime, "_gateterm_ui_visible_rows", lambda cursor: [{"access_point_id": 5}])
+    monkeypatch.setattr(gate_runtime, "_gateterm_ui_row_override", lambda: {})
+    monkeypatch.setattr(gate_runtime, "_latest_gate_open_event", lambda access_point_id: {"index": 12})
+    monkeypatch.setattr(gate_runtime, "_open_gateterm_access_window", lambda app: _FakeWindow())
+    monkeypatch.setattr(
+        gate_runtime,
+        "_close_gateterm_access_window_if_open",
+        lambda app: calls.append(("close_access_window", app)),
+    )
+
+    result = gate_runtime._open_access_point_via_gateterm_ui(object(), 5, external_key_id="key-1")
+
+    assert result.success is False
+    assert result.error_code == "gateterm_ui_error"
+    assert ("close_access_window", fake_app) in calls
+
+
 def test_post_sync_vehicle_key_via_gateterm_ui_uses_clean_search_then_edit_flow(monkeypatch):
     calls: list[object] = []
     fake_app = object()
@@ -505,9 +768,8 @@ def test_post_sync_vehicle_key_via_gateterm_ui_uses_clean_search_then_edit_flow(
         ),
     )
     monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(gate_runtime, "_close_gateterm_message_boxes_if_open", lambda app: calls.append("close_messages"))
-    monkeypatch.setattr(gate_runtime, "_close_gateterm_search_window_if_open", lambda app: calls.append("close_search"))
-    monkeypatch.setattr(gate_runtime, "_close_gateterm_user_edit_window_if_open", lambda app: calls.append("close_edit"))
+    monkeypatch.setattr(gate_runtime, "_prepare_gateterm_users_workspace", lambda app: calls.append("prepare_workspace"))
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: calls.append("close_users"))
     monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: calls.append("open_users") or fake_users_window)
     monkeypatch.setattr(
         gate_runtime,
@@ -526,9 +788,15 @@ def test_post_sync_vehicle_key_via_gateterm_ui_uses_clean_search_then_edit_flow(
     )
     monkeypatch.setattr(
         gate_runtime,
+        "_set_gateterm_user_key_number",
+        lambda window, normalized_key_value: calls.append(("set_key_number", window, normalized_key_value)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
         "_click_gateterm_control",
         lambda window, control_id, *class_names: calls.append(("click", window, control_id, class_names)),
     )
+    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_user_edit_save", lambda app: calls.append(("finalize_save", app)))
     monkeypatch.setattr(
         gate_runtime,
         "_verify_vehicle_identity_persisted",
@@ -551,17 +819,16 @@ def test_post_sync_vehicle_key_via_gateterm_ui_uses_clean_search_then_edit_flow(
     assert calls == [
         ("application_init", {"backend": "win32"}),
         ("connect", r"C:\GATE\Terminal\GateTerm.exe"),
-        "close_messages",
-        "close_search",
-        "close_edit",
-        "close_messages",
-        "close_search",
+        "prepare_workspace",
         "open_users",
         ("search", fake_users_window, "A132FG777"),
         ("open_edit", fake_users_window),
         ("collect", fake_edit_window),
+        ("set_key_number", fake_edit_window, "A132FG777"),
         ("click", fake_edit_window, 1, ("ThunderRT6CommandButton", "Button")),
+        ("finalize_save", fake_app),
         ("verify", 42, "A132FG777", "A132FG777"),
+        "close_users",
     ]
 
 
@@ -601,6 +868,607 @@ def test_search_gateterm_user_by_key_number_tolerates_window_closing_after_apply
     assert edit_calls == ["focus", ("set_edit_text", "X901YY799")]
 
 
+def test_set_gateterm_user_key_number_updates_labeled_edit():
+    edit_calls: list[object] = []
+
+    class _FakeControl:
+        def __init__(self, text: str, class_name: str) -> None:
+            self._text = text
+            self._class_name = class_name
+
+        def wrapper_object(self):
+            return self
+
+        def is_visible(self):
+            return True
+
+        def window_text(self):
+            return self._text
+
+        def class_name(self):
+            return self._class_name
+
+    class _FakeEdit(_FakeControl):
+        def __init__(self) -> None:
+            super().__init__("", "ThunderRT6TextBox")
+
+        def set_focus(self):
+            edit_calls.append("focus")
+
+        def set_edit_text(self, value: str):
+            edit_calls.append(("set_edit_text", value))
+
+        def type_keys(self, value: str, **_kwargs):
+            edit_calls.append(("type_keys", value))
+
+    edit = _FakeEdit()
+    fake_window = SimpleNamespace(
+        descendants=lambda: [
+            _FakeControl("Фамилия", "ThunderRT6Label"),
+            _FakeControl("Resident", "ThunderRT6TextBox"),
+            _FakeControl(gate_runtime._GATETERM_USER_SEARCH_FIELD_KEY_NUMBER, "ThunderRT6Label"),
+            edit,
+        ]
+    )
+
+    original_sleep = gate_runtime.time_module.sleep
+    gate_runtime.time_module.sleep = lambda *_args, **_kwargs: None
+    try:
+        gate_runtime._set_gateterm_user_key_number(fake_window, "A777AA77")
+    finally:
+        gate_runtime.time_module.sleep = original_sleep
+
+    assert edit_calls == ["focus", ("set_edit_text", "A777AA77"), ("type_keys", "{TAB}")]
+
+
+def test_prepare_gateterm_users_workspace_closes_dialogs_and_user_windows_in_safe_order(monkeypatch):
+    calls: list[object] = []
+
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_message_boxes_if_open", lambda app: calls.append(("messages", app)))
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_search_window_if_open", lambda app: calls.append(("search", app)))
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_new_user_window_if_open", lambda app: calls.append(("new_user", app)))
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_user_edit_window_if_open", lambda app: calls.append(("edit", app)))
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: calls.append(("users", app)))
+
+    gate_runtime._prepare_gateterm_users_workspace("app")
+
+    assert calls == [
+        ("messages", "app"),
+        ("search", "app"),
+        ("messages", "app"),
+        ("new_user", "app"),
+        ("messages", "app"),
+        ("edit", "app"),
+        ("messages", "app"),
+        ("users", "app"),
+        ("messages", "app"),
+    ]
+
+
+def test_close_gateterm_message_boxes_if_open_prefers_no_for_save_prompt(monkeypatch):
+    calls: list[object] = []
+
+    dialog = _FakeGateUiWindow(title="Данные пользователя изменены", class_name="#32770", handle=91)
+
+    class _MutableFakeGateUiApp(_FakeGateUiApp):
+        def close_window(self, handle: int) -> None:
+            self._windows.pop(handle, None)
+
+    app = _MutableFakeGateUiApp([dialog])
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+
+    def _fake_click(window, control_id, *class_names):
+        calls.append((window.handle, control_id, class_names))
+        app.close_window(window.handle)
+
+    monkeypatch.setattr(gate_runtime, "_click_gateterm_control", _fake_click)
+
+    gate_runtime._close_gateterm_message_boxes_if_open(app)
+
+    assert calls == [(91, 7, ("Button", "ThunderRT6CommandButton"))]
+
+
+def test_confirm_gateterm_message_boxes_if_open_prefers_yes_for_save_prompt(monkeypatch):
+    calls: list[object] = []
+
+    dialog = _FakeGateUiWindow(title="Данные пользователя изменены", class_name="#32770", handle=92)
+
+    class _MutableFakeGateUiApp(_FakeGateUiApp):
+        def close_window(self, handle: int) -> None:
+            self._windows.pop(handle, None)
+
+    app = _MutableFakeGateUiApp([dialog])
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+
+    def _fake_click(window, control_id, *class_names):
+        calls.append((window.handle, control_id, class_names))
+        app.close_window(window.handle)
+
+    monkeypatch.setattr(gate_runtime, "_click_gateterm_control", _fake_click)
+
+    gate_runtime._confirm_gateterm_message_boxes_if_open(app)
+
+    assert calls == [(92, 6, ("Button", "ThunderRT6CommandButton"))]
+
+
+def test_post_sync_vehicle_key_allows_gateterm_to_rewrite_number_u(monkeypatch):
+    cursor = _UserActiveCursor(
+        SimpleNamespace(
+            UserPtr=42,
+            KeyType=3,
+            Number="A321BC77",
+            NumberU="RANDOM123456",
+            Deleted=False,
+        )
+    )
+
+    @contextmanager
+    def _fake_readonly_cursor():
+        yield None, cursor
+
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", _fake_readonly_cursor)
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 3)
+    monkeypatch.setattr(gate_runtime, "_is_vehicle_identity_row", lambda *args, **kwargs: True)
+    monkeypatch.setenv("GATE_VEHICLE_NUMBER_U_MODE", "random")
+    monkeypatch.setattr(
+        gate_runtime,
+        "_post_sync_vehicle_key_via_gateterm_ui",
+        lambda *, user_ptr, normalized_key_value, expected_number_u: {
+            "user_ptr": user_ptr,
+            "key_value": normalized_key_value,
+            "expected_number_u": expected_number_u,
+        },
+    )
+
+    result = gate_runtime.post_sync_vehicle_key(42)
+
+    assert result == {
+        "user_ptr": 42,
+        "key_value": "A321BC77",
+        "expected_number_u": None,
+    }
+
+
+def test_post_sync_vehicle_key_routes_plate_mode_through_gateterm_ui(monkeypatch):
+    cursor = _UserActiveCursor(
+        SimpleNamespace(
+            UserPtr=42,
+            KeyType=3,
+            Number="A321BC77",
+            NumberU="A321BC77",
+            Deleted=False,
+        )
+    )
+
+    @contextmanager
+    def _fake_readonly_cursor():
+        yield None, cursor
+
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", _fake_readonly_cursor)
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 3)
+    monkeypatch.setattr(gate_runtime, "_is_vehicle_identity_row", lambda *args, **kwargs: True)
+    monkeypatch.setenv("GATE_VEHICLE_NUMBER_U_MODE", "plate")
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(
+        gate_runtime,
+        "_post_sync_vehicle_key_via_gateterm_ui",
+        lambda *, user_ptr, normalized_key_value, expected_number_u: observed.update(
+            {
+                "user_ptr": user_ptr,
+                "normalized_key_value": normalized_key_value,
+                "expected_number_u": expected_number_u,
+            }
+        )
+        or {
+            "transport": "gateterm_ui",
+            "user_ptr": user_ptr,
+            "key_value": normalized_key_value,
+        },
+    )
+
+    result = gate_runtime.post_sync_vehicle_key(42)
+
+    assert result == {
+        "transport": "gateterm_ui",
+        "user_ptr": 42,
+        "key_value": "A321BC77",
+    }
+    assert observed == {
+        "user_ptr": 42,
+        "normalized_key_value": "A321BC77",
+        "expected_number_u": None,
+    }
+
+
+def test_post_sync_phone_key_routes_through_gateterm_ui(monkeypatch):
+    cursor = _UserWithAccessRowsCursor(
+        SimpleNamespace(
+            UserPtr=42,
+            KeyType=6,
+            Number="009991234567",
+            NumberU="009991234567",
+            Phone="89991234567",
+            Deleted=False,
+        ),
+        [
+            SimpleNamespace(RdrPtr=5),
+            SimpleNamespace(RdrPtr=6),
+            SimpleNamespace(RdrPtr=15),
+        ],
+    )
+
+    @contextmanager
+    def _fake_readonly_cursor():
+        yield None, cursor
+
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", _fake_readonly_cursor)
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 6)
+    monkeypatch.setattr(gate_runtime, "_is_phone_identity_row", lambda *args, **kwargs: True)
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(
+        gate_runtime,
+        "_post_sync_phone_key_via_gateterm_ui",
+        lambda *, user_ptr, normalized_key_value, phone_key_type_value, access_point_ids: observed.update(
+            {
+                "user_ptr": user_ptr,
+                "normalized_key_value": normalized_key_value,
+                "phone_key_type_value": phone_key_type_value,
+                "access_point_ids": list(access_point_ids),
+            }
+        )
+        or {
+            "transport": "gateterm_ui",
+            "user_ptr": user_ptr,
+            "key_value": normalized_key_value,
+        },
+    )
+
+    result = gate_runtime.post_sync_phone_key(42)
+
+    assert result == {
+        "transport": "gateterm_ui",
+        "user_ptr": 42,
+        "key_value": "009991234567",
+    }
+    assert observed == {
+        "user_ptr": 42,
+        "normalized_key_value": "009991234567",
+        "phone_key_type_value": 6,
+        "access_point_ids": [5, 6, 15],
+    }
+
+
+def test_verify_vehicle_identity_persisted_accepts_internal_number_u(monkeypatch):
+    cursor = _UserActiveCursor(SimpleNamespace(Number="A321BC77", NumberU="863542F3C837"))
+
+    @contextmanager
+    def _fake_readonly_cursor():
+        yield None, cursor
+
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", _fake_readonly_cursor)
+
+    gate_runtime._verify_vehicle_identity_persisted(42, "A321BC77", None)
+
+
+def test_verify_vehicle_identity_persisted_rejects_number_u_equal_to_vehicle(monkeypatch):
+    cursor = _UserActiveCursor(SimpleNamespace(Number="A321BC77", NumberU="A321BC77"))
+
+    @contextmanager
+    def _fake_readonly_cursor():
+        yield None, cursor
+
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", _fake_readonly_cursor)
+
+    with pytest.raises(RuntimeError, match="did not materialize"):
+        gate_runtime._verify_vehicle_identity_persisted(42, "A321BC77", None)
+
+
+def test_post_sync_phone_key_via_gateterm_ui_uses_clean_search_then_edit_flow(monkeypatch):
+    calls: list[object] = []
+    fake_app = object()
+    fake_users_window = object()
+    fake_edit_window = object()
+
+    class _FakeApplication:
+        def __init__(self, *args, **kwargs) -> None:
+            calls.append(("application_init", kwargs))
+
+        def connect(self, *, path):
+            calls.append(("connect", path))
+            return fake_app
+
+    monkeypatch.setitem(sys.modules, "pywinauto", SimpleNamespace(Application=_FakeApplication))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_env",
+        lambda name, *aliases, default=None, allow_empty=False: (
+            r"C:\GATE\Terminal\GateTerm.exe" if name == "GATE_GATETERM_EXE" else default
+        ),
+    )
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_prepare_gateterm_users_workspace", lambda app: calls.append("prepare_workspace"))
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: calls.append("close_users"))
+    monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: calls.append("open_users") or fake_users_window)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_search_gateterm_user_by_key_number",
+        lambda app, users_window, normalized_key_value: calls.append(("search", users_window, normalized_key_value)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_open_gateterm_user_edit_window",
+        lambda app, users_window: calls.append(("open_edit", users_window)) or fake_edit_window,
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_collect_gateterm_window_values",
+        lambda window: calls.append(("collect", window)) or ["009991234567"],
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_set_gateterm_user_key_number",
+        lambda window, normalized_key_value: calls.append(("set_key_number", window, normalized_key_value)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_click_gateterm_control",
+        lambda window, control_id, *class_names: calls.append(("click", window, control_id, class_names)),
+    )
+    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_user_edit_save", lambda app: calls.append(("finalize_save", app)))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_verify_phone_identity_persisted",
+        lambda user_ptr, normalized_key_value, phone_key_type_value, access_point_ids: calls.append(
+            ("verify", user_ptr, normalized_key_value, phone_key_type_value, list(access_point_ids))
+        ),
+    )
+
+    result = gate_runtime._post_sync_phone_key_via_gateterm_ui(
+        user_ptr=42,
+        normalized_key_value="009991234567",
+        phone_key_type_value=6,
+        access_point_ids=[5, 6, 15],
+    )
+
+    assert result == {
+        "transport": "gateterm_ui",
+        "user_ptr": 42,
+        "key_value": "009991234567",
+    }
+    assert calls == [
+        ("application_init", {"backend": "win32"}),
+        ("connect", r"C:\GATE\Terminal\GateTerm.exe"),
+        "prepare_workspace",
+        "open_users",
+        ("search", fake_users_window, "009991234567"),
+        ("open_edit", fake_users_window),
+        ("collect", fake_edit_window),
+        ("set_key_number", fake_edit_window, "009991234567"),
+        ("click", fake_edit_window, 1, ("ThunderRT6CommandButton", "Button")),
+        ("finalize_save", fake_app),
+        ("verify", 42, "009991234567", 6, [5, 6, 15]),
+        "close_users",
+    ]
+
+
+def test_add_phone_permanent_key_via_gateterm_ui_creates_new_user(monkeypatch):
+    calls: list[object] = []
+    fake_app = object()
+    fake_users_window = object()
+    fake_new_window = object()
+    fake_edit_window = object()
+
+    monkeypatch.setattr(
+        gate_runtime,
+        "_load_phone_ui_provisioning_context",
+        lambda **kwargs: {
+            "existing_user_ptr": None,
+            "phone_key_type_value": 6,
+            "phone_storage_value": "89991234567",
+            "desired_access_labels": {"калитка 1", "камера въезда", "считыватель въезд gsm"},
+            "current_access_labels": set(),
+        },
+    )
+    monkeypatch.setattr(gate_runtime, "_connect_or_start_gateterm_application", lambda: calls.append("connect") or fake_app)
+    monkeypatch.setattr(gate_runtime, "_prepare_gateterm_users_workspace", lambda app: calls.append(("prepare", app)))
+    monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: calls.append(("open_users", app)) or fake_users_window)
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: calls.append(("close_users", app)))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_open_gateterm_new_user_window",
+        lambda app, users_window: calls.append(("open_new", app, users_window)) or fake_new_window,
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_search_gateterm_user_by_key_number",
+        lambda app, users_window, normalized_key_value: calls.append(("search", app, users_window, normalized_key_value)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_open_gateterm_user_edit_window",
+        lambda app, users_window: calls.append(("open_edit", app, users_window)) or fake_edit_window,
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_populate_gateterm_phone_pass_editor",
+        lambda window, **kwargs: calls.append(("populate", window, kwargs)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_click_gateterm_control",
+        lambda window, control_id, *class_names: calls.append(("click", window, control_id, class_names)),
+    )
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_new_user_save", lambda app: calls.append(("finalize_new", app)))
+    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_user_edit_save", lambda app: calls.append(("finalize_edit", app)))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_wait_for_phone_user_ptr",
+        lambda **kwargs: calls.append(("wait_user_ptr", kwargs)) or 9123,
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_verify_phone_identity_persisted",
+        lambda user_ptr, normalized_key_value, phone_key_type_value, access_point_ids: calls.append(
+            ("verify", user_ptr, normalized_key_value, phone_key_type_value, list(access_point_ids))
+        ),
+    )
+
+    result = gate_runtime.add_phone_permanent_key_via_gateterm_ui(
+        key_value="+79991234567",
+        phone_number="+79991234567",
+        access_point_ids=[15, 19, 5],
+        resident_name="Новый Житель",
+        plot_number="11",
+    )
+
+    assert result == 9123
+    assert calls == [
+        "connect",
+        ("prepare", fake_app),
+        ("open_users", fake_app),
+        ("open_new", fake_app, fake_users_window),
+        (
+            "populate",
+            fake_new_window,
+            {
+                "normalized_key_value": "009991234567",
+                "phone_storage_value": "89991234567",
+                "resident_name": "Новый Житель",
+                "plot_number": "11",
+                "desired_access_labels": {"калитка 1", "камера въезда", "считыватель въезд gsm"},
+                "current_access_labels": set(),
+            },
+        ),
+        ("click", fake_new_window, 1, ("ThunderRT6CommandButton", "Button")),
+        ("finalize_new", fake_app),
+        (
+            "wait_user_ptr",
+            {
+                "normalized_key_value": "009991234567",
+                "phone_key_type_value": 6,
+                "timeout_seconds": 12.0,
+            },
+        ),
+        ("search", fake_app, fake_users_window, "009991234567"),
+        ("open_edit", fake_app, fake_users_window),
+        (
+            "populate",
+            fake_edit_window,
+            {
+                "normalized_key_value": "009991234567",
+                "phone_storage_value": "89991234567",
+                "resident_name": "Новый Житель",
+                "plot_number": "11",
+                "desired_access_labels": {"калитка 1", "камера въезда", "считыватель въезд gsm"},
+                "current_access_labels": set(),
+            },
+        ),
+        ("click", fake_edit_window, 1, ("ThunderRT6CommandButton", "Button")),
+        ("finalize_edit", fake_app),
+        ("verify", 9123, "009991234567", 6, [15, 19, 5]),
+        ("close_users", fake_app),
+    ]
+
+
+def test_add_phone_permanent_key_via_gateterm_ui_updates_existing_user(monkeypatch):
+    calls: list[object] = []
+    fake_app = object()
+    fake_users_window = object()
+    fake_edit_window = object()
+
+    monkeypatch.setattr(
+        gate_runtime,
+        "_load_phone_ui_provisioning_context",
+        lambda **kwargs: {
+            "existing_user_ptr": 3401,
+            "phone_key_type_value": 6,
+            "phone_storage_value": "89128152001",
+            "desired_access_labels": {"считыватель въезд gsm", "считыватель выезд gsm"},
+            "current_access_labels": {"считыватель въезд gsm"},
+        },
+    )
+    monkeypatch.setattr(gate_runtime, "_connect_or_start_gateterm_application", lambda: calls.append("connect") or fake_app)
+    monkeypatch.setattr(gate_runtime, "_prepare_gateterm_users_workspace", lambda app: calls.append(("prepare", app)))
+    monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: calls.append(("open_users", app)) or fake_users_window)
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: calls.append(("close_users", app)))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_search_gateterm_user_by_key_number",
+        lambda app, users_window, normalized_key_value: calls.append(("search", app, users_window, normalized_key_value)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_open_gateterm_user_edit_window",
+        lambda app, users_window: calls.append(("open_edit", app, users_window)) or fake_edit_window,
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_populate_gateterm_phone_pass_editor",
+        lambda window, **kwargs: calls.append(("populate", window, kwargs)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_click_gateterm_control",
+        lambda window, control_id, *class_names: calls.append(("click", window, control_id, class_names)),
+    )
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_user_edit_save", lambda app: calls.append(("finalize_edit", app)))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_wait_for_phone_user_ptr",
+        lambda **kwargs: calls.append(("wait_user_ptr", kwargs)) or 3401,
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_verify_phone_identity_persisted",
+        lambda user_ptr, normalized_key_value, phone_key_type_value, access_point_ids: calls.append(
+            ("verify", user_ptr, normalized_key_value, phone_key_type_value, list(access_point_ids))
+        ),
+    )
+
+    result = gate_runtime.add_phone_permanent_key_via_gateterm_ui(
+        key_value="+79128152001",
+        phone_number="+79128152001",
+        access_point_ids=[5, 6],
+        resident_name="Терентьева Ольга",
+        plot_number="007",
+    )
+
+    assert result == 3401
+    assert calls == [
+        "connect",
+        ("prepare", fake_app),
+        ("open_users", fake_app),
+        ("search", fake_app, fake_users_window, "009128152001"),
+        ("open_edit", fake_app, fake_users_window),
+        (
+            "populate",
+            fake_edit_window,
+            {
+                "normalized_key_value": "009128152001",
+                "phone_storage_value": "89128152001",
+                "resident_name": "Терентьева Ольга",
+                "plot_number": "007",
+                "desired_access_labels": {"считыватель въезд gsm", "считыватель выезд gsm"},
+                "current_access_labels": {"считыватель въезд gsm"},
+            },
+        ),
+        ("click", fake_edit_window, 1, ("ThunderRT6CommandButton", "Button")),
+        ("finalize_edit", fake_app),
+        (
+            "wait_user_ptr",
+            {
+                "normalized_key_value": "009128152001",
+                "phone_key_type_value": 6,
+                "timeout_seconds": 12.0,
+            },
+        ),
+        ("verify", 3401, "009128152001", 6, [5, 6]),
+        ("close_users", fake_app),
+    ]
+
+
 def test_post_sync_vehicle_key_via_gateterm_ui_retries_transient_failures(monkeypatch):
     calls: list[object] = []
     fake_app = object()
@@ -633,9 +1501,8 @@ def test_post_sync_vehicle_key_via_gateterm_ui_retries_transient_failures(monkey
         ),
     )
     monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(gate_runtime, "_close_gateterm_message_boxes_if_open", lambda app: calls.append("close_messages"))
-    monkeypatch.setattr(gate_runtime, "_close_gateterm_search_window_if_open", lambda app: calls.append("close_search"))
-    monkeypatch.setattr(gate_runtime, "_close_gateterm_user_edit_window_if_open", lambda app: calls.append("close_edit"))
+    monkeypatch.setattr(gate_runtime, "_prepare_gateterm_users_workspace", lambda app: calls.append("prepare_workspace"))
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: calls.append("close_users"))
     monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: calls.append("open_users") or fake_users_window)
     monkeypatch.setattr(gate_runtime, "_search_gateterm_user_by_key_number", _fake_search)
     monkeypatch.setattr(
@@ -650,9 +1517,15 @@ def test_post_sync_vehicle_key_via_gateterm_ui_retries_transient_failures(monkey
     )
     monkeypatch.setattr(
         gate_runtime,
+        "_set_gateterm_user_key_number",
+        lambda window, normalized_key_value: calls.append(("set_key_number", window, normalized_key_value)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
         "_click_gateterm_control",
         lambda window, control_id, *class_names: calls.append(("click", window, control_id, class_names)),
     )
+    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_user_edit_save", lambda app: calls.append(("finalize_save", app)))
     monkeypatch.setattr(
         gate_runtime,
         "_verify_vehicle_identity_persisted",
@@ -664,7 +1537,7 @@ def test_post_sync_vehicle_key_via_gateterm_ui_retries_transient_failures(monkey
     result = gate_runtime._post_sync_vehicle_key_via_gateterm_ui(
         user_ptr=42,
         normalized_key_value="X901YY799",
-        expected_number_u="X901YY799",
+        expected_number_u=None,
     )
 
     assert result == {
@@ -673,7 +1546,94 @@ def test_post_sync_vehicle_key_via_gateterm_ui_retries_transient_failures(monkey
         "key_value": "X901YY799",
     }
     assert state["search_attempts"] == 2
-    assert ("verify", 42, "X901YY799", "X901YY799") in calls
+    assert ("set_key_number", fake_edit_window, "X901YY799") in calls
+    assert ("finalize_save", fake_app) in calls
+    assert ("verify", 42, "X901YY799", None) in calls
+    assert "close_users" in calls
+
+
+def test_post_sync_vehicle_key_via_gateterm_ui_retries_when_edit_window_has_other_vehicle(monkeypatch):
+    calls: list[object] = []
+    fake_app = object()
+    fake_users_window = object()
+    fake_edit_window = object()
+    state = {"collect_attempts": 0}
+
+    class _FakeApplication:
+        def __init__(self, *args, **kwargs) -> None:
+            calls.append(("application_init", kwargs))
+
+        def connect(self, *, path):
+            calls.append(("connect", path))
+            return fake_app
+
+    def _fake_collect(window):
+        state["collect_attempts"] += 1
+        calls.append(("collect", state["collect_attempts"], window))
+        if state["collect_attempts"] == 1:
+            return ["Z999ZZ799"]
+        return ["A909BC799"]
+
+    monkeypatch.setitem(sys.modules, "pywinauto", SimpleNamespace(Application=_FakeApplication))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_env",
+        lambda name, *aliases, default=None, allow_empty=False: (
+            "2"
+            if name == "GATE_GATETERM_UI_POST_SYNC_ATTEMPTS"
+            else (r"C:\GATE\Terminal\GateTerm.exe" if name == "GATE_GATETERM_EXE" else default)
+        ),
+    )
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_prepare_gateterm_users_workspace", lambda app: calls.append("prepare_workspace"))
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: calls.append("close_users"))
+    monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: calls.append("open_users") or fake_users_window)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_search_gateterm_user_by_key_number",
+        lambda app, users_window, normalized_key_value: calls.append(("search", users_window, normalized_key_value)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_open_gateterm_user_edit_window",
+        lambda app, users_window: calls.append(("open_edit", users_window)) or fake_edit_window,
+    )
+    monkeypatch.setattr(gate_runtime, "_collect_gateterm_window_values", _fake_collect)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_set_gateterm_user_key_number",
+        lambda window, normalized_key_value: calls.append(("set_key_number", window, normalized_key_value)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_click_gateterm_control",
+        lambda window, control_id, *class_names: calls.append(("click", window, control_id, class_names)),
+    )
+    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_user_edit_save", lambda app: calls.append(("finalize_save", app)))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_verify_vehicle_identity_persisted",
+        lambda user_ptr, normalized_key_value, expected_number_u: calls.append(
+            ("verify", user_ptr, normalized_key_value, expected_number_u)
+        ),
+    )
+
+    result = gate_runtime._post_sync_vehicle_key_via_gateterm_ui(
+        user_ptr=7776,
+        normalized_key_value="A909BC799",
+        expected_number_u=None,
+    )
+
+    assert result == {
+        "transport": "gateterm_ui",
+        "user_ptr": 7776,
+        "key_value": "A909BC799",
+    }
+    assert state["collect_attempts"] == 2
+    assert ("set_key_number", fake_edit_window, "A909BC799") in calls
+    assert ("finalize_save", fake_app) in calls
+    assert ("verify", 7776, "A909BC799", None) in calls
+    assert "close_users" in calls
 
 
 def test_split_access_expiry_separates_date_and_time():
@@ -756,6 +1716,8 @@ def test_insert_real_user_uses_storage_phone_for_phone_keys(monkeypatch):
         sql.startswith("INSERT INTO Users")
         and params.count("89991234567") == 1
         and params.count("009991234567") == 2
+        and "Phone" in params
+        and "User" in params
         for sql, params in cursor.commands
     )
     assert any(sql.startswith("INSERT INTO Users") and 0 in params for sql, params in cursor.commands)
@@ -994,6 +1956,76 @@ def test_upsert_existing_phone_user_verifies_final_state(monkeypatch):
     }
 
 
+def test_upsert_phone_user_purges_deleted_match_and_inserts_fresh_row(monkeypatch):
+    cursor = _FakeCursor()
+    observed: dict[str, object] = {}
+
+    def _insert_real_user(*_args, **_kwargs):
+        observed["insert_called"] = True
+        return 77
+
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 6)
+    monkeypatch.setattr(gate_runtime, "_find_existing_user_ptr", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_find_reusable_deleted_user_ptr", lambda *args, **kwargs: 35)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_purge_deleted_phone_identity_rows",
+        lambda _cursor, **kwargs: observed.setdefault("purge", kwargs.copy()),
+    )
+    monkeypatch.setattr(gate_runtime, "_insert_real_user", _insert_real_user)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_reactivate_real_user",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("deleted phone row must not be reactivated")),
+    )
+    monkeypatch.setattr(gate_runtime, "_cleanup_conflicting_phone_rows", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_ensure_access_permissions",
+        lambda _cursor, user_ptr, access_point_ids, **kwargs: observed.setdefault(
+            "ensure",
+            {"user_ptr": user_ptr, "access_point_ids": list(access_point_ids), **kwargs},
+        ),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_prune_access_permissions",
+        lambda _cursor, user_ptr, access_point_ids: observed.setdefault("prune", (user_ptr, list(access_point_ids))),
+    )
+    monkeypatch.setattr(gate_runtime, "_verify_phone_user_state", lambda _cursor, **kwargs: observed.setdefault("verify", kwargs))
+
+    user_ptr = gate_runtime._upsert_real_user(
+        cursor,
+        key_type="Phone",
+        normalized_key_value="009006342765",
+        phone_number="+79006342765",
+        resident_name="Fresh Phone User",
+        plot_number="1111",
+        is_visitor=False,
+        expires_at=None,
+        access_point_ids=[15, 17, 19, 20, 21, 23, 5, 6],
+    )
+
+    assert user_ptr == 77
+    assert observed["purge"] == {
+        "normalized_key_value": "009006342765",
+        "phone_key_type_value": 6,
+    }
+    assert observed["insert_called"] is True
+    assert observed["ensure"] == {
+        "user_ptr": 77,
+        "access_point_ids": [15, 17, 19, 20, 21, 23, 5, 6],
+        "key_type": "Phone",
+    }
+    assert observed["prune"] == (77, [15, 17, 19, 20, 21, 23, 5, 6])
+    assert observed["verify"] == {
+        "user_ptr": 77,
+        "normalized_key_value": "009006342765",
+        "phone_key_type_value": 6,
+        "access_point_ids": [15, 17, 19, 20, 21, 23, 5, 6],
+    }
+
+
 def test_upsert_existing_vehicle_user_heals_number_u_field(monkeypatch):
     cursor = _FakeCursor()
 
@@ -1036,6 +2068,7 @@ def test_repair_vehicle_number_u_heals_existing_vehicle_rows(monkeypatch):
     monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 3)
     monkeypatch.setenv("GATE_VEHICLE_NUMBER_U_MODE", "plate")
     monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(cursor))
+    monkeypatch.setattr(gate_runtime, "_sync_user_defaults_if_needed", lambda *_args, **_kwargs: False)
 
     result = gate_runtime.repair_vehicle_number_u()
 
@@ -1045,6 +2078,428 @@ def test_repair_vehicle_number_u_heals_existing_vehicle_rows(monkeypatch):
         and params == ("O463OX198", 7745)
         for sql, params in cursor.commands
     )
+
+
+def test_repair_phone_identity_rows_repairs_unresolved_phone_owner_and_cleans_conflicts(monkeypatch):
+    cursor = _PhoneRepairCursor(
+        [
+            SimpleNamespace(
+                UserPtr=42,
+                KeyType=6,
+                Phone="",
+                Number="009111253128",
+                NumberU="009111253128",
+                Deleted=False,
+                LastUsed=datetime(2026, 5, 6, 19, 4, 22),
+                LastUsedRdrName=None,
+                GroupPtr=0,
+            ),
+            SimpleNamespace(
+                UserPtr=40,
+                KeyType=6,
+                Phone="89111253128\n",
+                Number="009111253128",
+                NumberU="009111253128",
+                Deleted=False,
+                LastUsed=None,
+                LastUsedRdrName=None,
+                GroupPtr=1,
+            ),
+            SimpleNamespace(
+                UserPtr=41,
+                KeyType=3,
+                Phone="009111253128",
+                Number="A182DC178",
+                NumberU="A182DC178",
+                Deleted=False,
+                LastUsed=None,
+                LastUsedRdrName=None,
+                GroupPtr=2,
+            ),
+        ]
+    )
+    cleanup_calls: list[tuple[str, int, int | None]] = []
+    defaults_calls: list[int] = []
+
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 6)
+    monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(cursor))
+    monkeypatch.setattr(gate_runtime, "_format_phone_for_storage", lambda *_args, **_kwargs: "89111253128\n")
+    monkeypatch.setattr(
+        gate_runtime,
+        "_cleanup_conflicting_phone_rows",
+        lambda _cursor, *, normalized_key_value, keep_user_ptr, phone_key_type_value: cleanup_calls.append(
+            (normalized_key_value, keep_user_ptr, phone_key_type_value)
+        ),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_sync_user_defaults_if_needed",
+        lambda _cursor, *, user_ptr, key_type, row=None, exclude_user_ptr=None: defaults_calls.append(int(user_ptr)) or True,
+    )
+
+    result = gate_runtime.repair_phone_identity_rows()
+
+    assert result == {
+        "scanned": 1,
+        "updated": 1,
+        "user_ptrs": [42],
+        "cleaned": 1,
+        "cleaned_user_ptrs": [40],
+    }
+    assert cleanup_calls == [("009111253128", 42, 6)]
+    assert defaults_calls == [42]
+    assert any(
+        sql == "UPDATE Users SET [Phone] = ? WHERE UserPtr = ?"
+        and params == ("89111253128\n", 42)
+        for sql, params in cursor.commands
+    )
+
+
+def test_repair_vehicle_visual_numbers_post_syncs_only_legacy_rows(monkeypatch):
+    cursor = _VehicleRepairCursor(
+        [
+            SimpleNamespace(UserPtr=7747, KeyType=3, Number="M88FIELD1", NumberU="M88FIELD1", Deleted=False),
+            SimpleNamespace(UserPtr=7746, KeyType=3, Number="A909BC799", NumberU="DE41E5938A2C", Deleted=False),
+            SimpleNamespace(UserPtr=7745, KeyType=6, Number="009111253128", NumberU="009111253128", Deleted=False),
+            SimpleNamespace(UserPtr=7744, KeyType=3, Number="A456CD178", NumberU="A456CD178", Deleted=True),
+        ]
+    )
+    repaired: list[int] = []
+
+    @contextmanager
+    def _fake_readonly_cursor():
+        yield None, cursor
+
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", _fake_readonly_cursor)
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 3)
+    monkeypatch.setattr(gate_runtime, "post_sync_vehicle_key", lambda user_ptr: repaired.append(int(user_ptr)) or {"user_ptr": user_ptr})
+
+    result = gate_runtime.repair_vehicle_visual_numbers(limit=10)
+
+    assert result == {
+        "scanned": 1,
+        "updated": 1,
+        "failed": 0,
+        "user_ptrs": [7747],
+        "failures": [],
+    }
+    assert repaired == [7747]
+
+
+def test_repair_user_display_names_backfills_empty_name_from_split_fields(monkeypatch):
+    cursor = _DisplayNameRepairCursor(
+        [
+            SimpleNamespace(UserPtr=9003, DisplayName="Existing Name", LastName="Ignore", FirstName="Me", FatherName=None, Deleted=False),
+            SimpleNamespace(UserPtr=9002, Name="", LastName="Иванов", FirstName="Иван", FatherName="Иванович", Deleted=False),
+            SimpleNamespace(UserPtr=9001, DisplayName=None, LastName=None, FirstName=None, FatherName=None, Deleted=False),
+        ]
+    )
+
+    monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(cursor))
+
+    result = gate_runtime.repair_user_display_names()
+
+    assert result == {"scanned": 3, "updated": 1, "user_ptrs": [9002]}
+    assert any(
+        sql == "UPDATE Users SET [Name] = ? WHERE UserPtr = ?"
+        and params == ("Иванов Иван Иванович", 9002)
+        for sql, params in cursor.commands
+    )
+
+
+def test_repair_user_display_names_skips_gate_schema_without_name_column(monkeypatch):
+    cursor = _DisplayNameRepairCursor([], with_display_name=False)
+
+    monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(cursor))
+
+    result = gate_runtime.repair_user_display_names()
+
+    assert result == {"scanned": 0, "updated": 0, "user_ptrs": []}
+    assert all("UPDATE Users SET [Name] = ?" not in sql for sql, _params in cursor.commands)
+
+
+def test_load_gate_user_event_identities_reads_full_name_and_key_value(monkeypatch):
+    cursor = _EventIdentityCursor(
+        [
+            SimpleNamespace(
+                UserPtr=42,
+                Name="",
+                LastName="Петров",
+                FirstName="Петр",
+                FatherName="Петрович",
+                Number="A123AA77",
+                NumberU="A123AA77",
+                Phone=None,
+            ),
+            SimpleNamespace(
+                UserPtr=43,
+                Name="Сидоров Сидор",
+                LastName=None,
+                FirstName=None,
+                FatherName=None,
+                Number="009991234567",
+                NumberU="009991234567",
+                Phone="9991234567",
+            ),
+        ]
+    )
+
+    @contextmanager
+    def _fake_readonly_cursor():
+        yield None, cursor
+
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", _fake_readonly_cursor)
+
+    identities = gate_runtime._load_gate_user_event_identities([42, 43])
+
+    assert identities == {
+        42: {
+            "full_name": "Петров Петр Петрович",
+            "key_type": "VehicleNumber",
+            "key_value": "A123AA77",
+        },
+        43: {
+            "full_name": "Сидоров Сидор",
+            "key_type": "Phone",
+            "key_value": "009991234567",
+        },
+    }
+
+
+def test_load_gate_user_event_identities_ignores_contact_phone_on_vehicle_rows(monkeypatch):
+    cursor = _EventIdentityCursor(
+        [
+            SimpleNamespace(
+                UserPtr=52,
+                Name="",
+                LastName="РРІР°РЅРѕРІ",
+                FirstName="РРІР°РЅ",
+                FatherName=None,
+                Number="A182DC178",
+                NumberU="A182DC178",
+                Phone="89111253128\n",
+            ),
+        ]
+    )
+
+    @contextmanager
+    def _fake_readonly_cursor():
+        yield None, cursor
+
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", _fake_readonly_cursor)
+
+    identities = gate_runtime._load_gate_user_event_identities([52])
+
+    assert identities == {
+        52: {
+            "full_name": "РРІР°РЅРѕРІ РРІР°РЅ",
+            "key_type": "VehicleNumber",
+            "key_value": "A182DC178",
+        },
+    }
+
+def test_infer_anonymous_gate_event_identities_uses_unique_recent_phone_user(monkeypatch):
+    cursor = _AnonymousEventInferenceCursor(
+        reader_rows=[
+            SimpleNamespace(RdrPtr=6, Name="GSM Gate"),
+        ],
+        user_rows=[
+            SimpleNamespace(
+                UserPtr=7940,
+                Name="",
+                LastName="М",
+                FirstName="Н",
+                FatherName="Ю",
+                Number="009006342765",
+                NumberU="009006342765",
+                Phone="89006342765\n",
+                KeyType=6,
+                Deleted=False,
+                Status=0,
+                LastUsed=datetime(2026, 5, 8, 17, 14, 34),
+                LastUsedRdrPtr=6,
+                LastUsedRdrName=None,
+                LastUsedEvent="Проход по ключу разрешен",
+            ),
+            SimpleNamespace(
+                UserPtr=7001,
+                Name="",
+                LastName="Старый",
+                FirstName="Пользователь",
+                FatherName=None,
+                Number="009001112233",
+                NumberU="009001112233",
+                Phone="89001112233\n",
+                KeyType=6,
+                Deleted=False,
+                Status=0,
+                LastUsed=datetime(2026, 5, 8, 17, 13, 0),
+                LastUsedRdrPtr=6,
+                LastUsedRdrName="GSM Gate",
+                LastUsedEvent="Проход по ключу разрешен",
+            ),
+        ],
+    )
+
+    @contextmanager
+    def _fake_readonly_cursor():
+        yield None, cursor
+
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", _fake_readonly_cursor)
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *_args, **_kwargs: 6)
+
+    inferred = gate_runtime._infer_anonymous_gate_event_identities(
+        [
+            {
+                "index": 3244,
+                "time": "2026-05-08T17:14:56",
+                "event_code": 8,
+                "access_point_id": 6,
+                "unit": "GSM Gate",
+                "message": "Opened by call",
+                "name": "",
+                "user_ptr": 0,
+                "full_name": None,
+                "key_type": None,
+                "key_value": None,
+            }
+        ]
+    )
+
+    assert inferred == {
+        3244: {
+            "full_name": "М Н Ю",
+            "key_type": "Phone",
+            "key_value": "009006342765",
+            "user_ptr": 7940,
+            "source": "last_used",
+        }
+    }
+
+
+def test_infer_anonymous_gate_event_identities_skips_non_success_button_event(monkeypatch):
+    cursor = _AnonymousEventInferenceCursor(
+        reader_rows=[
+            SimpleNamespace(RdrPtr=6, Name="GSM Gate"),
+        ],
+        user_rows=[
+            SimpleNamespace(
+                UserPtr=7940,
+                Name="",
+                LastName="М",
+                FirstName="Н",
+                FatherName="Ю",
+                Number="009006342765",
+                NumberU="009006342765",
+                Phone="89006342765\n",
+                KeyType=6,
+                Deleted=False,
+                Status=0,
+                LastUsed=datetime(2026, 5, 8, 17, 14, 34),
+                LastUsedRdrPtr=6,
+                LastUsedRdrName=None,
+                LastUsedEvent="Проход по ключу разрешен",
+            ),
+        ],
+    )
+
+    @contextmanager
+    def _fake_readonly_cursor():
+        yield None, cursor
+
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", _fake_readonly_cursor)
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *_args, **_kwargs: 6)
+
+    inferred = gate_runtime._infer_anonymous_gate_event_identities(
+        [
+            {
+                "index": 3243,
+                "time": "2026-05-08T17:14:45",
+                "event_code": 0,
+                "access_point_id": 6,
+                "unit": "GSM Gate",
+                "message": "Button pressed",
+                "name": "",
+                "user_ptr": 0,
+                "full_name": None,
+                "key_type": None,
+                "key_value": None,
+            }
+        ]
+    )
+
+    assert inferred == {}
+
+
+def test_infer_anonymous_gate_event_identities_skips_ambiguous_recent_phone_users(monkeypatch):
+    cursor = _AnonymousEventInferenceCursor(
+        reader_rows=[
+            SimpleNamespace(RdrPtr=6, Name="GSM Gate"),
+        ],
+        user_rows=[
+            SimpleNamespace(
+                UserPtr=7940,
+                Name="",
+                LastName="Первый",
+                FirstName="Житель",
+                FatherName=None,
+                Number="009006342765",
+                NumberU="009006342765",
+                Phone="89006342765\n",
+                KeyType=6,
+                Deleted=False,
+                Status=0,
+                LastUsed=datetime(2026, 5, 8, 17, 14, 34),
+                LastUsedRdrPtr=6,
+                LastUsedRdrName=None,
+                LastUsedEvent="Проход по ключу разрешен",
+            ),
+            SimpleNamespace(
+                UserPtr=7941,
+                Name="",
+                LastName="Второй",
+                FirstName="Житель",
+                FatherName=None,
+                Number="009001112233",
+                NumberU="009001112233",
+                Phone="89001112233\n",
+                KeyType=6,
+                Deleted=False,
+                Status=0,
+                LastUsed=datetime(2026, 5, 8, 17, 14, 38),
+                LastUsedRdrPtr=6,
+                LastUsedRdrName=None,
+                LastUsedEvent="Проход по ключу разрешен",
+            ),
+        ],
+    )
+
+    @contextmanager
+    def _fake_readonly_cursor():
+        yield None, cursor
+
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", _fake_readonly_cursor)
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *_args, **_kwargs: 6)
+
+    inferred = gate_runtime._infer_anonymous_gate_event_identities(
+        [
+            {
+                "index": 3244,
+                "time": "2026-05-08T17:14:56",
+                "event_code": 8,
+                "access_point_id": 6,
+                "unit": "GSM Gate",
+                "message": "Opened by call",
+                "name": "",
+                "user_ptr": 0,
+                "full_name": None,
+                "key_type": None,
+                "key_value": None,
+            }
+        ]
+    )
+
+    assert inferred == {}
 
 
 def test_insert_real_phone_user_sets_gate_details(monkeypatch):
@@ -1127,6 +2582,64 @@ def test_apply_user_defaults_for_existing_phone_user_uses_other_phone_template()
     )
 
 
+def test_sync_user_defaults_if_needed_repairs_wrong_phone_group(monkeypatch):
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 6)
+    current_row = SimpleNamespace(
+        UserPtr=42,
+        GroupPtr=2,
+        IdleNotLimited=False,
+        NoFacility=True,
+        BgPtr=9,
+        SendSms=False,
+        SendMail=False,
+        UniPassMode=5,
+        Phone="89991234567\n",
+        Number="009991234567",
+        NumberU="009991234567",
+        KeyType=6,
+        Deleted=False,
+        Status=0,
+        GsmAccessCount=2,
+    )
+    cursor = _TemplateSamplingCursor(
+        access_rows=[
+            current_row,
+            SimpleNamespace(
+                UserPtr=41,
+                GroupPtr=1,
+                IdleNotLimited=True,
+                NoFacility=False,
+                BgPtr=0,
+                SendSms=True,
+                SendMail=True,
+                UniPassMode=0,
+                Phone="89990001122\n",
+                Number="0099990001122",
+                NumberU="0099990001122",
+                KeyType=6,
+                Deleted=False,
+                Status=0,
+                GsmAccessCount=2,
+            ),
+        ]
+    )
+
+    updated = gate_runtime._sync_user_defaults_if_needed(
+        cursor,
+        user_ptr=42,
+        key_type="Phone",
+        row=current_row,
+        exclude_user_ptr=42,
+    )
+
+    assert updated is True
+    assert any(
+        sql == "UPDATE Users SET [GroupPtr] = ?, [IdleNotLimited] = ?, [NoFacility] = ?, [BgPtr] = ?, [SendSms] = ?, [SendMail] = ?, [UniPassMode] = ? WHERE UserPtr = ?"
+        and params == (1, True, False, 0, True, True, 0, 42)
+        for sql, params in cursor.commands
+    )
+
+
 def test_sample_phone_user_defaults_prefers_dominant_gsm_group(monkeypatch):
     monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 6)
     cursor = _TemplateSamplingCursor(
@@ -1189,6 +2702,64 @@ def test_sample_phone_user_defaults_prefers_dominant_gsm_group(monkeypatch):
 
     assert defaults["GroupPtr"] == 1
     assert defaults["NoFacility"] is False
+
+
+def test_sync_user_defaults_if_needed_repairs_wrong_vehicle_group(monkeypatch):
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda *args, **kwargs: 3)
+    current_row = SimpleNamespace(
+        UserPtr=77,
+        GroupPtr=1,
+        IdleNotLimited=False,
+        NoFacility=True,
+        BgPtr=9,
+        SendSms=False,
+        SendMail=False,
+        UniPassMode=5,
+        Phone="",
+        Number="A123AA77",
+        NumberU="A123AA77",
+        KeyType=3,
+        Deleted=False,
+        Status=0,
+        AccessCount=2,
+    )
+    cursor = _TemplateSamplingCursor(
+        access_rows=[
+            current_row,
+            SimpleNamespace(
+                UserPtr=76,
+                GroupPtr=2,
+                IdleNotLimited=True,
+                NoFacility=False,
+                BgPtr=0,
+                SendSms=True,
+                SendMail=True,
+                UniPassMode=0,
+                Phone="",
+                Number="B456BB77",
+                NumberU="B456BB77",
+                KeyType=3,
+                Deleted=False,
+                Status=0,
+                AccessCount=2,
+            ),
+        ]
+    )
+
+    updated = gate_runtime._sync_user_defaults_if_needed(
+        cursor,
+        user_ptr=77,
+        key_type="VehicleNumber",
+        row=current_row,
+        exclude_user_ptr=77,
+    )
+
+    assert updated is True
+    assert any(
+        sql == "UPDATE Users SET [GroupPtr] = ?, [IdleNotLimited] = ?, [NoFacility] = ?, [BgPtr] = ?, [SendSms] = ?, [SendMail] = ?, [UniPassMode] = ? WHERE UserPtr = ?"
+        and params == (2, True, False, 0, True, True, 0, 77)
+        for sql, params in cursor.commands
+    )
 
 
 def test_sample_vehicle_user_defaults_prefers_dominant_nonzero_group(monkeypatch):
@@ -1305,11 +2876,44 @@ def test_resolve_user_ptr_matches_phone_number_without_large_userptr_lookup():
     assert not any("WHERE UserPtr = ?" in sql for sql, _params in cursor.commands)
 
 
+def test_resolve_user_ptr_prefers_phone_identity_over_vehicle_contact_phone():
+    cursor = _ResolveUserPtrCursor(
+        [
+            SimpleNamespace(
+                UserPtr=7662,
+                Phone="89111253128\n",
+                Number="A182DC178",
+                NumberU="A182DC178",
+                KeyType=3,
+                Deleted=False,
+            ),
+            SimpleNamespace(
+                UserPtr=7661,
+                Phone="89111253128\n",
+                Number="009111253128",
+                NumberU="009111253128",
+                KeyType=6,
+                Deleted=False,
+            ),
+        ]
+    )
+
+    user_ptr = gate_runtime._resolve_user_ptr(cursor, "89111253128")
+
+    assert user_ptr == 7661
+
+
 def test_normalize_phone_keeps_legacy_formats_compatible():
     assert gate_runtime._normalize_phone("8 (999) 123-45-67") == "009991234567"
     assert gate_runtime._normalize_phone("+7 999 123-45-67") == "009991234567"
     assert gate_runtime._normalize_phone("0079991234567") == "009991234567"
     assert gate_runtime._normalize_phone("9991234567") == "009991234567"
+
+
+def test_looks_like_phone_identity_number_rejects_numeric_wiegand_codes():
+    assert gate_runtime._looks_like_phone_identity_number("000000458293") is False
+    assert gate_runtime._looks_like_phone_identity_number("000000C8E183") is False
+    assert gate_runtime._looks_like_phone_identity_number("009111253128") is True
 
 
 def test_normalize_vehicle_canonicalizes_lookalikes_and_separators():
@@ -1762,7 +3366,26 @@ def test_find_existing_phone_user_ptr_matches_number_when_phone_is_empty():
     assert user_ptr == 34
 
 
-def test_cleanup_conflicting_phone_rows_deletes_other_phone_identities_and_clears_vehicle_contact_phone():
+def test_find_reusable_deleted_phone_user_ptr_reuses_deleted_gate_phone_row():
+    cursor = _RowCursor(
+        [
+            SimpleNamespace(
+                UserPtr=35,
+                Phone="89006342765\n",
+                Number="009006342765",
+                NumberU="009006342765",
+                KeyType=6,
+                Deleted=True,
+            ),
+        ]
+    )
+
+    user_ptr = gate_runtime._find_reusable_deleted_user_ptr(cursor, "Phone", "009006342765", key_type_value=6)
+
+    assert user_ptr == 35
+
+
+def test_cleanup_conflicting_phone_rows_deletes_other_phone_identities_only():
     cursor = _ConflictCleanupCursor(
         [
             SimpleNamespace(UserPtr=42, Phone="89111253128\n", Number="009111253128", KeyType=6, Deleted=False),
@@ -1796,7 +3419,41 @@ def test_cleanup_conflicting_phone_rows_deletes_other_phone_identities_and_clear
         and params[-1] == 38
         for sql, params in cursor.commands
     )
-    assert any(sql == "UPDATE Users SET Phone = ? WHERE UserPtr = ?" and params == (None, 40) for sql, params in cursor.commands)
+    assert not any(sql == "UPDATE Users SET Phone = ? WHERE UserPtr = ?" and params == (None, 40) for sql, params in cursor.commands)
+
+
+def test_purge_deleted_phone_identity_rows_scrubs_only_deleted_phone_matches():
+    cursor = _ConflictCleanupCursor(
+        [
+            SimpleNamespace(UserPtr=52, Phone="89006342765\n", Number="009006342765", NumberU="009006342765", KeyType=6, Deleted=True),
+            SimpleNamespace(UserPtr=51, Phone=None, Number="009006342765", NumberU="009006342765", KeyType=6, Deleted=True),
+            SimpleNamespace(UserPtr=50, Phone="89006342765\n", Number="A135BC178", NumberU="A135BC178", KeyType=3, Deleted=True),
+            SimpleNamespace(UserPtr=49, Phone="89006342765\n", Number="009006342765", NumberU="009006342765", KeyType=6, Deleted=False),
+        ]
+    )
+
+    gate_runtime._purge_deleted_phone_identity_rows(
+        cursor,
+        normalized_key_value="009006342765",
+        phone_key_type_value=6,
+    )
+
+    purged_user_ptrs = [params[0] for sql, params in cursor.commands if sql == "DELETE FROM AccessTable WHERE UserPtr = ?"]
+    assert purged_user_ptrs == [52, 51]
+    assert any(
+        "UPDATE Users" in sql
+        and "PURGED" in str(params)
+        and params[-1] == 52
+        for sql, params in cursor.commands
+    )
+    assert any(
+        "UPDATE Users" in sql
+        and "PURGED" in str(params)
+        and params[-1] == 51
+        for sql, params in cursor.commands
+    )
+    assert 50 not in purged_user_ptrs
+    assert 49 not in purged_user_ptrs
 
 
 def test_prune_access_permissions_keeps_only_requested_readers():
