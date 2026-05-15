@@ -4600,6 +4600,7 @@ def _post_sync_vehicle_key_via_gateterm_ui(
             time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_DELAY_SECONDS", 0.75))
             _finalize_gateterm_vehicle_user_edit_save(app)
             _restore_gate_user_name_fields(user_ptr=user_ptr, resident_name=resident_name)
+            _close_gateterm_users_window_if_open(app)
             break
         except Exception as exc:
             last_error = exc

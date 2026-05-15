@@ -836,6 +836,7 @@ def test_post_sync_vehicle_key_via_gateterm_ui_uses_clean_search_then_edit_flow(
         ("click", fake_edit_window, 1, ("ThunderRT6CommandButton", "Button")),
         ("finalize_vehicle_save", fake_app),
         ("restore_name", 42, "Resident Vehicle"),
+        "close_users",
     ]
 
 
@@ -1611,6 +1612,7 @@ def test_post_sync_vehicle_key_via_gateterm_ui_retries_transient_failures(monkey
     assert ("populate_vehicle", fake_edit_window, "X901YY799", "Resident Vehicle") in calls
     assert ("finalize_vehicle_save", fake_app) in calls
     assert ("restore_name", 42, "Resident Vehicle") in calls
+    assert "close_users" in calls
 
 
 def test_post_sync_vehicle_key_via_gateterm_ui_retries_when_edit_window_has_other_vehicle(monkeypatch):
@@ -1702,6 +1704,7 @@ def test_post_sync_vehicle_key_via_gateterm_ui_retries_when_edit_window_has_othe
     assert ("populate_vehicle", fake_edit_window, "A909BC799", "Resident Vehicle") in calls
     assert ("finalize_vehicle_save", fake_app) in calls
     assert ("restore_name", 7776, "Resident Vehicle") in calls
+    assert "close_users" in calls
 
 
 def test_split_access_expiry_separates_date_and_time():
