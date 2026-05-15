@@ -1422,6 +1422,67 @@ def test_admin_monitor_uses_gate_identity_when_gate_event_has_no_app_match(clien
     assert gate_event['gate_original_name'] is None
 
 
+def test_admin_monitor_enriches_camera_gate_event_from_backend_request_when_gate_identity_is_blank(client, monkeypatch):
+    admin_login = f'admin_monitor_camera_{uuid4().hex[:6]}'
+    resident_login = f'resident_camera_{uuid4().hex[:6]}'
+    password = 'demo123'
+    gate_key_id = 771501
+    gate_event_index = 555501
+    access_point_id = get_settings().gate_action_map["entry"]
+    key_value = 'P345OK77'
+
+    asyncio.run(_ensure_user(admin_login, password, full_name='Admin Monitor', plot_number='901', is_admin=True))
+    asyncio.run(_ensure_user(resident_login, password, full_name='Resident Camera', plot_number='407'))
+
+    monkeypatch.setattr(
+        'backend.app.services.requests.gate_client.add_permanent_key',
+        lambda **kwargs: gate_key_id,
+    )
+    created_request_id = asyncio.run(
+        _create_request_for_user(
+            resident_login,
+            key_type='VehicleNumber',
+            key_value=key_value,
+            access_point_ids=[access_point_id],
+        )
+    )
+    monkeypatch.setattr(
+        'backend.app.services.admin_monitor.gate_client.get_recent_events',
+        lambda limit: [
+            {
+                'index': gate_event_index,
+                'time': datetime.now(timezone.utc).isoformat(),
+                'event_code': 2,
+                'access_point_id': access_point_id,
+                'unit': 'Camera Entry',
+                'message': 'Camera allowed',
+                'name': '',
+                'user_ptr': gate_key_id,
+                'full_name': None,
+                'key_type': None,
+                'key_value': None,
+            }
+        ],
+    )
+
+    admin_token = _api_login(client, admin_login, password)
+    response = client.get('/api/admin/monitor?limit=10', headers={'Authorization': f'Bearer {admin_token}'})
+
+    assert response.status_code == 200
+    body = response.json()
+    gate_event = next(item for item in body['items'] if item['id'] == f'gate-{gate_event_index}')
+    assert gate_event['source'] == 'gate'
+    assert gate_event['actor_login'] == resident_login
+    assert gate_event['actor_name'] == 'Resident Camera'
+    assert gate_event['key_type'] == 'VehicleNumber'
+    assert gate_event['key_value'] == key_value
+    assert gate_event['app_request_id'] == created_request_id
+    assert gate_event['gate_key_id'] == gate_key_id
+    assert gate_event['gate_name'] == f'{key_value}   Resident Camera'
+    assert gate_event['gate_original_name'] is None
+    assert gate_event['details']['matched_request']['gate_key_id'] == gate_key_id
+
+
 def test_admin_monitor_uses_inferred_gate_identity_when_raw_gate_name_is_blank(client, monkeypatch):
     admin_login = f'admin_monitor_inferred_{uuid4().hex[:6]}'
     password = 'demo123'

@@ -113,6 +113,17 @@ async def _run_gate_startup_sync() -> None:
         logging.exception("Failed to repair Gate vehicle NumberU values")
 
     try:
+        vehicle_visual_result = await asyncio.to_thread(gate_client.repair_vehicle_visual_numbers)
+        if int(vehicle_visual_result.get("updated") or 0) > 0 or int(vehicle_visual_result.get("failed") or 0) > 0:
+            logging.info(
+                "Post-synced %s Gate vehicle visual rows with %s failures",
+                int(vehicle_visual_result.get("updated") or 0),
+                int(vehicle_visual_result.get("failed") or 0),
+            )
+    except Exception:
+        logging.exception("Failed to repair Gate vehicle visual rows")
+
+    try:
         repair_result = await asyncio.to_thread(gate_client.repair_user_display_names)
         if int(repair_result.get("updated") or 0) > 0:
             logging.info(

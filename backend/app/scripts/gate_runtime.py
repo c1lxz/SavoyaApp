@@ -473,6 +473,15 @@ def _compose_gate_user_name(
     return " ".join(visible_parts)
 
 
+def _gate_row_resident_name(row: Any) -> str | None:
+    return _compose_gate_user_name(
+        getattr(row, "DisplayName", getattr(row, "Name", None)),
+        getattr(row, "LastName", None),
+        getattr(row, "FirstName", None),
+        getattr(row, "FatherName", None),
+    )
+
+
 def _generate_unique_number_u(cursor: pyodbc.Cursor) -> str:
     for _ in range(64):
         candidate = uuid.uuid4().hex[:12].upper()
@@ -2372,9 +2381,12 @@ def repair_vehicle_visual_numbers(*, include_deleted: bool = False, limit: int =
     candidates: list[int] = []
     with _readonly_cursor() as (_, cursor):
         vehicle_key_type_value = _sample_key_type(cursor, "VehicleNumber")
+        has_display_name = _users_has_display_name_column(cursor)
+        display_name_column = "[Name] AS DisplayName," if has_display_name else ""
         rows = cursor.execute(
-            """
-            SELECT UserPtr, KeyType, Number, NumberU, Deleted
+            f"""
+            SELECT UserPtr, KeyType, Number, NumberU, Deleted, {display_name_column}
+                   LastName, FirstName, FatherName
             FROM Users
             ORDER BY UserPtr DESC
             """
@@ -2390,7 +2402,14 @@ def repair_vehicle_visual_numbers(*, include_deleted: bool = False, limit: int =
 
             normalized_number = _normalize_optional_text(getattr(row, "Number", None))
             normalized_number_u = _normalize_optional_text(getattr(row, "NumberU", None))
-            if not normalized_number or normalized_number_u != normalized_number:
+            resident_name = _gate_row_resident_name(row)
+            legacy_number_u = bool(normalized_number) and normalized_number_u == normalized_number
+            missing_display_name = (
+                has_display_name
+                and _normalize_gate_detail(getattr(row, "DisplayName", getattr(row, "Name", None))) is None
+                and resident_name is not None
+            )
+            if not legacy_number_u and not missing_display_name:
                 continue
 
             candidates.append(user_ptr)
@@ -3071,9 +3090,11 @@ def post_sync_vehicle_key(key_id: int) -> dict[str, Any]:
         raise ValueError("key_id must be a positive integer")
 
     with _readonly_cursor() as (_, cursor):
+        display_name_column = "[Name] AS DisplayName," if _users_has_display_name_column(cursor) else ""
         row = cursor.execute(
-            """
-            SELECT TOP 1 UserPtr, KeyType, Number, NumberU, Deleted
+            f"""
+            SELECT TOP 1 UserPtr, KeyType, Number, NumberU, Deleted, {display_name_column}
+                   LastName, FirstName, FatherName
             FROM Users
             WHERE UserPtr = ?
             """,
@@ -3095,11 +3116,13 @@ def post_sync_vehicle_key(key_id: int) -> dict[str, Any]:
         # when the row was originally inserted in plate mode, so post-sync must
         # always allow GateTerm to choose the final internal NumberU value.
         expected_number_u = None
+        resident_name = _gate_row_resident_name(row)
 
     return _post_sync_vehicle_key_via_gateterm_ui(
         user_ptr=key_id,
         normalized_key_value=normalized_key_value,
         expected_number_u=expected_number_u,
+        resident_name=resident_name,
     )
 
 
@@ -3121,16 +3144,19 @@ def _remove_key_via_gateterm_ui(*, key_id: int, normalized_key_value: str) -> bo
                 users_window.menu().items()[0].sub_menu().items()[2].click()
             except Exception:
                 users_window.type_keys("^d")
-            time_module.sleep(_env_float("GATE_GATETERM_UI_DELETE_CONFIRM_DELAY_SECONDS", 0.5))
+            # GateTerm opens delete confirmation asynchronously; wait for it before leaving the user card flow.
+            dialog = _wait_for_gateterm_confirmation_dialog(
+                app,
+                timeout_seconds=_env_float("GATE_GATETERM_UI_DELETE_CONFIRM_TIMEOUT_SECONDS", 5.0),
+            )
+            _confirm_gateterm_dialog(dialog)
             _confirm_gateterm_message_boxes_if_open(app)
-            time_module.sleep(_env_float("GATE_GATETERM_UI_DELETE_APPLY_DELAY_SECONDS", 0.8))
-            _confirm_gateterm_message_boxes_if_open(app)
+            _wait_for_gate_user_deleted(
+                key_id,
+                timeout_seconds=_env_float("GATE_GATETERM_UI_DELETE_APPLY_TIMEOUT_SECONDS", 6.0),
+            )
 
-            with _readonly_cursor() as (_, cursor):
-                row = cursor.execute("SELECT TOP 1 UserPtr FROM Users WHERE UserPtr = ?", (int(key_id),)).fetchone()
-            if row is not None:
-                raise RuntimeError(f"GateTerm did not delete key {key_id}")
-
+            _close_gateterm_user_edit_window_if_open(app)
             try:
                 _close_gateterm_users_window_if_open(app)
             except Exception:
@@ -3454,7 +3480,11 @@ def _dismiss_gateterm_window_via_escape(app: Any, title_fragment: str) -> None:
     except Exception as exc:
         if _is_invalid_window_handle_error(exc) and not _window_still_open(app, title_fragment):
             return
-        raise
+        try:
+            window.close()
+            return
+        except Exception:
+            raise exc
 
 
 def _close_gateterm_search_window_if_open(app: Any) -> None:
@@ -3605,6 +3635,45 @@ def _confirm_gateterm_message_boxes_if_open(app: Any) -> None:
         time_module.sleep(_env_float("GATE_GATETERM_UI_MESSAGE_BOX_CLOSE_DELAY_SECONDS", 0.15))
 
 
+def _wait_for_gateterm_confirmation_dialog(app: Any, *, timeout_seconds: float) -> Any:
+    deadline = time_module.monotonic() + max(0.0, timeout_seconds)
+    while True:
+        dialogs = _gateterm_dialog_windows(app)
+        if dialogs:
+            return dialogs[0]
+        if time_module.monotonic() >= deadline:
+            raise RuntimeError(f"GateTerm confirmation dialog did not appear; open windows: {_list_gateterm_windows(app)!r}")
+        time_module.sleep(0.1)
+
+
+def _confirm_gateterm_dialog(dialog: Any) -> None:
+    if _click_gateterm_dialog_button(dialog, 6, 1):
+        return
+    try:
+        dialog.type_keys("%Y")
+    except Exception:
+        dialog.type_keys("{ENTER}")
+
+
+def _wait_for_gate_user_deleted(user_ptr: int, *, timeout_seconds: float) -> None:
+    deadline = time_module.monotonic() + max(0.0, timeout_seconds)
+    while True:
+        with _readonly_cursor() as (_, cursor):
+            row = cursor.execute(
+                "SELECT TOP 1 UserPtr, Deleted FROM Users WHERE UserPtr = ?",
+                (int(user_ptr),),
+            ).fetchone()
+            access_row = cursor.execute(
+                "SELECT TOP 1 UserPtr FROM AccessTable WHERE UserPtr = ?",
+                (int(user_ptr),),
+            ).fetchone()
+        if row is None or (bool(getattr(row, "Deleted", False)) and access_row is None):
+            return
+        if time_module.monotonic() >= deadline:
+            raise RuntimeError(f"GateTerm did not delete key {int(user_ptr)}")
+        time_module.sleep(0.25)
+
+
 def _finalize_gateterm_user_edit_save(app: Any) -> None:
     _confirm_gateterm_message_boxes_if_open(app)
     time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_CONFIRM_DELAY_SECONDS", 0.35))
@@ -3617,6 +3686,18 @@ def _finalize_gateterm_user_edit_save(app: Any) -> None:
             )
         except Exception:
             _close_gateterm_user_edit_window_if_open(app)
+
+
+def _finalize_gateterm_vehicle_user_edit_save(app: Any) -> None:
+    _confirm_gateterm_message_boxes_if_open(app)
+    time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_CONFIRM_DELAY_SECONDS", 0.35))
+    if _window_still_open(app, _GATETERM_USER_EDIT_WINDOW_TITLE):
+        # Vehicle macro should finish with OK and the window close button; do not re-open/check the row.
+        _close_gateterm_window_if_open(
+            app,
+            _GATETERM_USER_EDIT_WINDOW_TITLE,
+            timeout_seconds=_env_float("GATE_GATETERM_UI_USER_EDIT_CLOSE_DELAY_SECONDS", 1.2),
+        )
 
 
 def _finalize_gateterm_new_user_save(app: Any) -> None:
@@ -4219,6 +4300,46 @@ def _populate_gateterm_phone_pass_editor(
     )
 
 
+def _populate_gateterm_vehicle_pass_editor(
+    window: Any,
+    *,
+    normalized_key_value: str,
+    resident_name: str | None,
+) -> None:
+    normalized_resident_name = _compose_gate_user_name(resident_name)
+    if normalized_resident_name is not None:
+        # GateTerm vehicle save can blank visual owner fields unless they are re-applied with the plate.
+        last_name, first_name, father_name = _split_name(normalized_resident_name)
+        _set_gateterm_text_input(
+            _visible_gateterm_control_by_id(window, 8, "ThunderRT6TextBox", "Edit"),
+            str(last_name or ""),
+            field_name="resident last name",
+        )
+        _set_gateterm_text_input(
+            _visible_gateterm_control_by_id(window, 7, "ThunderRT6TextBox", "Edit"),
+            str(first_name or ""),
+            field_name="resident first name",
+        )
+        _set_gateterm_text_input(
+            _visible_gateterm_control_by_id(window, 6, "ThunderRT6TextBox", "Edit"),
+            str(father_name or ""),
+            field_name="resident father name",
+        )
+
+    # GateTerm vehicle keys must be typed in the Latin canonical plate form, not Cyrillic lookalikes.
+    latin_key_value = _normalize_vehicle(normalized_key_value)
+    _set_gateterm_user_key_number(window, latin_key_value)
+
+
+def _restore_gate_user_name_fields(*, user_ptr: int, resident_name: str | None) -> None:
+    normalized_resident_name = _compose_gate_user_name(resident_name)
+    if normalized_resident_name is None:
+        return
+
+    with _transaction_cursor() as (_, cursor):
+        _set_gate_user_name_fields(cursor, user_ptr=int(user_ptr), resident_name=normalized_resident_name)
+
+
 def _open_gateterm_user_edit_window(app: Any, users_window: Any) -> Any:
     dialog_delay_seconds = _env_float("GATE_GATETERM_UI_USER_EDIT_OPEN_DELAY_SECONDS", 0.9)
     attempts: list[str] = []
@@ -4270,11 +4391,20 @@ def _verify_gateterm_selected_user_key_number(app: Any, users_window: Any, norma
         )
 
 
-def _verify_vehicle_identity_persisted(user_ptr: int, normalized_key_value: str, expected_number_u: str | None) -> None:
+def _verify_vehicle_identity_persisted(
+    user_ptr: int,
+    normalized_key_value: str,
+    expected_number_u: str | None,
+    *,
+    expected_resident_name: str | None = None,
+) -> None:
     with _readonly_cursor() as (_, cursor):
+        has_display_name = _users_has_display_name_column(cursor)
+        display_name_column = "[Name] AS DisplayName," if has_display_name else ""
         row = cursor.execute(
-            """
-            SELECT TOP 1 Number, NumberU
+            f"""
+            SELECT TOP 1 Number, NumberU, {display_name_column}
+                   LastName, FirstName, FatherName
             FROM Users
             WHERE UserPtr = ?
             """,
@@ -4299,6 +4429,21 @@ def _verify_vehicle_identity_persisted(user_ptr: int, normalized_key_value: str,
             "GateTerm vehicle post-sync left Users.NumberU empty; "
             f"Number={normalized_key_value!r}, UserPtr={user_ptr}"
         )
+    expected_full_name = _compose_gate_user_name(expected_resident_name)
+    if expected_full_name is not None:
+        actual_full_name = _gate_row_resident_name(row)
+        if actual_full_name != expected_full_name:
+            raise RuntimeError(
+                "GateTerm vehicle post-sync changed resident name unexpectedly; "
+                f"expected={expected_full_name!r}, actual={actual_full_name!r}, UserPtr={user_ptr}"
+            )
+        if has_display_name:
+            actual_display_name = _normalize_gate_detail(getattr(row, "DisplayName", getattr(row, "Name", None)))
+            if actual_display_name != expected_full_name:
+                raise RuntimeError(
+                    "GateTerm vehicle post-sync changed Users.Name unexpectedly; "
+                    f"expected={expected_full_name!r}, actual={actual_display_name!r}, UserPtr={user_ptr}"
+                )
     if expected_number_u_normalized:
         if actual_number_u == str(expected_number_u or "").strip():
             return
@@ -4418,6 +4563,7 @@ def _post_sync_vehicle_key_via_gateterm_ui(
     user_ptr: int,
     normalized_key_value: str,
     expected_number_u: str | None,
+    resident_name: str | None,
 ) -> dict[str, Any]:
     try:
         from pywinauto import Application
@@ -4445,12 +4591,15 @@ def _post_sync_vehicle_key_via_gateterm_ui(
                     f"expected {normalized_key_value!r}, got {editor_values!r}"
                 )
 
-            _set_gateterm_user_key_number(edit_window, normalized_key_value)
+            _populate_gateterm_vehicle_pass_editor(
+                edit_window,
+                normalized_key_value=normalized_key_value,
+                resident_name=resident_name,
+            )
             _click_gateterm_control(edit_window, 1, "ThunderRT6CommandButton", "Button")
             time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_DELAY_SECONDS", 0.75))
-            _finalize_gateterm_user_edit_save(app)
-            _verify_vehicle_identity_persisted(user_ptr, normalized_key_value, expected_number_u)
-            _close_gateterm_users_window_if_open(app)
+            _finalize_gateterm_vehicle_user_edit_save(app)
+            _restore_gate_user_name_fields(user_ptr=user_ptr, resident_name=resident_name)
             break
         except Exception as exc:
             last_error = exc

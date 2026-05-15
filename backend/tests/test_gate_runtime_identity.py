@@ -788,20 +788,27 @@ def test_post_sync_vehicle_key_via_gateterm_ui_uses_clean_search_then_edit_flow(
     )
     monkeypatch.setattr(
         gate_runtime,
-        "_set_gateterm_user_key_number",
-        lambda window, normalized_key_value: calls.append(("set_key_number", window, normalized_key_value)),
+        "_populate_gateterm_vehicle_pass_editor",
+        lambda window, *, normalized_key_value, resident_name: calls.append(
+            ("populate_vehicle", window, normalized_key_value, resident_name)
+        ),
     )
     monkeypatch.setattr(
         gate_runtime,
         "_click_gateterm_control",
         lambda window, control_id, *class_names: calls.append(("click", window, control_id, class_names)),
     )
-    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_user_edit_save", lambda app: calls.append(("finalize_save", app)))
+    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_vehicle_user_edit_save", lambda app: calls.append(("finalize_vehicle_save", app)))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_restore_gate_user_name_fields",
+        lambda *, user_ptr, resident_name: calls.append(("restore_name", user_ptr, resident_name)),
+    )
     monkeypatch.setattr(
         gate_runtime,
         "_verify_vehicle_identity_persisted",
-        lambda user_ptr, normalized_key_value, expected_number_u: calls.append(
-            ("verify", user_ptr, normalized_key_value, expected_number_u)
+        lambda user_ptr, normalized_key_value, expected_number_u, *, expected_resident_name=None: calls.append(
+            ("verify", user_ptr, normalized_key_value, expected_number_u, expected_resident_name)
         ),
     )
 
@@ -809,6 +816,7 @@ def test_post_sync_vehicle_key_via_gateterm_ui_uses_clean_search_then_edit_flow(
         user_ptr=42,
         normalized_key_value="A132FG777",
         expected_number_u="A132FG777",
+        resident_name="Resident Vehicle",
     )
 
     assert result == {
@@ -824,11 +832,10 @@ def test_post_sync_vehicle_key_via_gateterm_ui_uses_clean_search_then_edit_flow(
         ("search", fake_users_window, "A132FG777"),
         ("open_edit", fake_users_window),
         ("collect", fake_edit_window),
-        ("set_key_number", fake_edit_window, "A132FG777"),
+        ("populate_vehicle", fake_edit_window, "A132FG777", "Resident Vehicle"),
         ("click", fake_edit_window, 1, ("ThunderRT6CommandButton", "Button")),
-        ("finalize_save", fake_app),
-        ("verify", 42, "A132FG777", "A132FG777"),
-        "close_users",
+        ("finalize_vehicle_save", fake_app),
+        ("restore_name", 42, "Resident Vehicle"),
     ]
 
 
@@ -998,6 +1005,7 @@ def test_post_sync_vehicle_key_allows_gateterm_to_rewrite_number_u(monkeypatch):
             KeyType=3,
             Number="A321BC77",
             NumberU="RANDOM123456",
+            DisplayName="Resident Vehicle",
             Deleted=False,
         )
     )
@@ -1013,10 +1021,11 @@ def test_post_sync_vehicle_key_allows_gateterm_to_rewrite_number_u(monkeypatch):
     monkeypatch.setattr(
         gate_runtime,
         "_post_sync_vehicle_key_via_gateterm_ui",
-        lambda *, user_ptr, normalized_key_value, expected_number_u: {
+        lambda *, user_ptr, normalized_key_value, expected_number_u, resident_name: {
             "user_ptr": user_ptr,
             "key_value": normalized_key_value,
             "expected_number_u": expected_number_u,
+            "resident_name": resident_name,
         },
     )
 
@@ -1026,6 +1035,7 @@ def test_post_sync_vehicle_key_allows_gateterm_to_rewrite_number_u(monkeypatch):
         "user_ptr": 42,
         "key_value": "A321BC77",
         "expected_number_u": None,
+        "resident_name": "Resident Vehicle",
     }
 
 
@@ -1036,6 +1046,7 @@ def test_post_sync_vehicle_key_routes_plate_mode_through_gateterm_ui(monkeypatch
             KeyType=3,
             Number="A321BC77",
             NumberU="A321BC77",
+            DisplayName="Resident Vehicle",
             Deleted=False,
         )
     )
@@ -1052,11 +1063,12 @@ def test_post_sync_vehicle_key_routes_plate_mode_through_gateterm_ui(monkeypatch
     monkeypatch.setattr(
         gate_runtime,
         "_post_sync_vehicle_key_via_gateterm_ui",
-        lambda *, user_ptr, normalized_key_value, expected_number_u: observed.update(
+        lambda *, user_ptr, normalized_key_value, expected_number_u, resident_name: observed.update(
             {
                 "user_ptr": user_ptr,
                 "normalized_key_value": normalized_key_value,
                 "expected_number_u": expected_number_u,
+                "resident_name": resident_name,
             }
         )
         or {
@@ -1077,6 +1089,7 @@ def test_post_sync_vehicle_key_routes_plate_mode_through_gateterm_ui(monkeypatch
         "user_ptr": 42,
         "normalized_key_value": "A321BC77",
         "expected_number_u": None,
+        "resident_name": "Resident Vehicle",
     }
 
 
@@ -1139,7 +1152,16 @@ def test_post_sync_phone_key_routes_through_gateterm_ui(monkeypatch):
 
 
 def test_verify_vehicle_identity_persisted_accepts_internal_number_u(monkeypatch):
-    cursor = _UserActiveCursor(SimpleNamespace(Number="A321BC77", NumberU="863542F3C837"))
+    cursor = _UserActiveCursor(
+        SimpleNamespace(
+            Number="A321BC77",
+            NumberU="863542F3C837",
+            DisplayName="Resident Vehicle",
+            LastName="Resident",
+            FirstName="Vehicle",
+            FatherName=None,
+        )
+    )
 
     @contextmanager
     def _fake_readonly_cursor():
@@ -1147,7 +1169,12 @@ def test_verify_vehicle_identity_persisted_accepts_internal_number_u(monkeypatch
 
     monkeypatch.setattr(gate_runtime, "_readonly_cursor", _fake_readonly_cursor)
 
-    gate_runtime._verify_vehicle_identity_persisted(42, "A321BC77", None)
+    gate_runtime._verify_vehicle_identity_persisted(
+        42,
+        "A321BC77",
+        None,
+        expected_resident_name="Resident Vehicle",
+    )
 
 
 def test_verify_vehicle_identity_persisted_rejects_number_u_equal_to_vehicle(monkeypatch):
@@ -1161,6 +1188,33 @@ def test_verify_vehicle_identity_persisted_rejects_number_u_equal_to_vehicle(mon
 
     with pytest.raises(RuntimeError, match="did not materialize"):
         gate_runtime._verify_vehicle_identity_persisted(42, "A321BC77", None)
+
+
+def test_verify_vehicle_identity_persisted_rejects_missing_resident_name(monkeypatch):
+    cursor = _UserActiveCursor(
+        SimpleNamespace(
+            Number="A321BC77",
+            NumberU="863542F3C837",
+            DisplayName="",
+            LastName="Resident",
+            FirstName="Vehicle",
+            FatherName=None,
+        )
+    )
+
+    @contextmanager
+    def _fake_readonly_cursor():
+        yield None, cursor
+
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", _fake_readonly_cursor)
+
+    with pytest.raises(RuntimeError, match="Users.Name unexpectedly"):
+        gate_runtime._verify_vehicle_identity_persisted(
+            42,
+            "A321BC77",
+            None,
+            expected_resident_name="Resident Vehicle",
+        )
 
 
 def test_post_sync_phone_key_via_gateterm_ui_uses_clean_search_then_edit_flow(monkeypatch):
@@ -1517,20 +1571,27 @@ def test_post_sync_vehicle_key_via_gateterm_ui_retries_transient_failures(monkey
     )
     monkeypatch.setattr(
         gate_runtime,
-        "_set_gateterm_user_key_number",
-        lambda window, normalized_key_value: calls.append(("set_key_number", window, normalized_key_value)),
+        "_populate_gateterm_vehicle_pass_editor",
+        lambda window, *, normalized_key_value, resident_name: calls.append(
+            ("populate_vehicle", window, normalized_key_value, resident_name)
+        ),
     )
     monkeypatch.setattr(
         gate_runtime,
         "_click_gateterm_control",
         lambda window, control_id, *class_names: calls.append(("click", window, control_id, class_names)),
     )
-    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_user_edit_save", lambda app: calls.append(("finalize_save", app)))
+    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_vehicle_user_edit_save", lambda app: calls.append(("finalize_vehicle_save", app)))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_restore_gate_user_name_fields",
+        lambda *, user_ptr, resident_name: calls.append(("restore_name", user_ptr, resident_name)),
+    )
     monkeypatch.setattr(
         gate_runtime,
         "_verify_vehicle_identity_persisted",
-        lambda user_ptr, normalized_key_value, expected_number_u: calls.append(
-            ("verify", user_ptr, normalized_key_value, expected_number_u)
+        lambda user_ptr, normalized_key_value, expected_number_u, *, expected_resident_name=None: calls.append(
+            ("verify", user_ptr, normalized_key_value, expected_number_u, expected_resident_name)
         ),
     )
 
@@ -1538,6 +1599,7 @@ def test_post_sync_vehicle_key_via_gateterm_ui_retries_transient_failures(monkey
         user_ptr=42,
         normalized_key_value="X901YY799",
         expected_number_u=None,
+        resident_name="Resident Vehicle",
     )
 
     assert result == {
@@ -1546,10 +1608,9 @@ def test_post_sync_vehicle_key_via_gateterm_ui_retries_transient_failures(monkey
         "key_value": "X901YY799",
     }
     assert state["search_attempts"] == 2
-    assert ("set_key_number", fake_edit_window, "X901YY799") in calls
-    assert ("finalize_save", fake_app) in calls
-    assert ("verify", 42, "X901YY799", None) in calls
-    assert "close_users" in calls
+    assert ("populate_vehicle", fake_edit_window, "X901YY799", "Resident Vehicle") in calls
+    assert ("finalize_vehicle_save", fake_app) in calls
+    assert ("restore_name", 42, "Resident Vehicle") in calls
 
 
 def test_post_sync_vehicle_key_via_gateterm_ui_retries_when_edit_window_has_other_vehicle(monkeypatch):
@@ -1601,20 +1662,27 @@ def test_post_sync_vehicle_key_via_gateterm_ui_retries_when_edit_window_has_othe
     monkeypatch.setattr(gate_runtime, "_collect_gateterm_window_values", _fake_collect)
     monkeypatch.setattr(
         gate_runtime,
-        "_set_gateterm_user_key_number",
-        lambda window, normalized_key_value: calls.append(("set_key_number", window, normalized_key_value)),
+        "_populate_gateterm_vehicle_pass_editor",
+        lambda window, *, normalized_key_value, resident_name: calls.append(
+            ("populate_vehicle", window, normalized_key_value, resident_name)
+        ),
     )
     monkeypatch.setattr(
         gate_runtime,
         "_click_gateterm_control",
         lambda window, control_id, *class_names: calls.append(("click", window, control_id, class_names)),
     )
-    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_user_edit_save", lambda app: calls.append(("finalize_save", app)))
+    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_vehicle_user_edit_save", lambda app: calls.append(("finalize_vehicle_save", app)))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_restore_gate_user_name_fields",
+        lambda *, user_ptr, resident_name: calls.append(("restore_name", user_ptr, resident_name)),
+    )
     monkeypatch.setattr(
         gate_runtime,
         "_verify_vehicle_identity_persisted",
-        lambda user_ptr, normalized_key_value, expected_number_u: calls.append(
-            ("verify", user_ptr, normalized_key_value, expected_number_u)
+        lambda user_ptr, normalized_key_value, expected_number_u, *, expected_resident_name=None: calls.append(
+            ("verify", user_ptr, normalized_key_value, expected_number_u, expected_resident_name)
         ),
     )
 
@@ -1622,6 +1690,7 @@ def test_post_sync_vehicle_key_via_gateterm_ui_retries_when_edit_window_has_othe
         user_ptr=7776,
         normalized_key_value="A909BC799",
         expected_number_u=None,
+        resident_name="Resident Vehicle",
     )
 
     assert result == {
@@ -1630,10 +1699,9 @@ def test_post_sync_vehicle_key_via_gateterm_ui_retries_when_edit_window_has_othe
         "key_value": "A909BC799",
     }
     assert state["collect_attempts"] == 2
-    assert ("set_key_number", fake_edit_window, "A909BC799") in calls
-    assert ("finalize_save", fake_app) in calls
-    assert ("verify", 7776, "A909BC799", None) in calls
-    assert "close_users" in calls
+    assert ("populate_vehicle", fake_edit_window, "A909BC799", "Resident Vehicle") in calls
+    assert ("finalize_vehicle_save", fake_app) in calls
+    assert ("restore_name", 7776, "Resident Vehicle") in calls
 
 
 def test_split_access_expiry_separates_date_and_time():
@@ -2155,13 +2223,43 @@ def test_repair_phone_identity_rows_repairs_unresolved_phone_owner_and_cleans_co
     )
 
 
-def test_repair_vehicle_visual_numbers_post_syncs_only_legacy_rows(monkeypatch):
+def test_repair_vehicle_visual_numbers_repairs_legacy_rows_and_blank_display_names(monkeypatch):
     cursor = _VehicleRepairCursor(
         [
-            SimpleNamespace(UserPtr=7747, KeyType=3, Number="M88FIELD1", NumberU="M88FIELD1", Deleted=False),
-            SimpleNamespace(UserPtr=7746, KeyType=3, Number="A909BC799", NumberU="DE41E5938A2C", Deleted=False),
+            SimpleNamespace(
+                UserPtr=7747,
+                KeyType=3,
+                Number="M88FIELD1",
+                NumberU="M88FIELD1",
+                DisplayName="Resident Legacy",
+                LastName="Resident",
+                FirstName="Legacy",
+                FatherName=None,
+                Deleted=False,
+            ),
+            SimpleNamespace(
+                UserPtr=7746,
+                KeyType=3,
+                Number="A909BC799",
+                NumberU="DE41E5938A2C",
+                DisplayName="",
+                LastName="Resident",
+                FirstName="Vehicle",
+                FatherName=None,
+                Deleted=False,
+            ),
             SimpleNamespace(UserPtr=7745, KeyType=6, Number="009111253128", NumberU="009111253128", Deleted=False),
-            SimpleNamespace(UserPtr=7744, KeyType=3, Number="A456CD178", NumberU="A456CD178", Deleted=True),
+            SimpleNamespace(
+                UserPtr=7744,
+                KeyType=3,
+                Number="A456CD178",
+                NumberU="A456CD178",
+                DisplayName="Deleted Vehicle",
+                LastName="Deleted",
+                FirstName="Vehicle",
+                FatherName=None,
+                Deleted=True,
+            ),
         ]
     )
     repaired: list[int] = []
@@ -2177,13 +2275,13 @@ def test_repair_vehicle_visual_numbers_post_syncs_only_legacy_rows(monkeypatch):
     result = gate_runtime.repair_vehicle_visual_numbers(limit=10)
 
     assert result == {
-        "scanned": 1,
-        "updated": 1,
+        "scanned": 2,
+        "updated": 2,
         "failed": 0,
-        "user_ptrs": [7747],
+        "user_ptrs": [7747, 7746],
         "failures": [],
     }
-    assert repaired == [7747]
+    assert repaired == [7747, 7746]
 
 
 def test_repair_user_display_names_backfills_empty_name_from_split_fields(monkeypatch):
@@ -2926,6 +3024,73 @@ def test_normalize_vehicle_accepts_real_cyrillic_plates():
 
 def test_normalize_vehicle_repairs_utf8_mojibake_before_ascii_canonicalization():
     assert gate_runtime._normalize_vehicle("\u0420\u0452123\u0420\u0452\u0420\u045277") == "A123AA77"
+
+
+def test_populate_gateterm_vehicle_pass_editor_types_latin_plate(monkeypatch):
+    typed_values = []
+
+    monkeypatch.setattr(
+        gate_runtime,
+        "_set_gateterm_user_key_number",
+        lambda _window, value: typed_values.append(value),
+    )
+
+    gate_runtime._populate_gateterm_vehicle_pass_editor(
+        object(),
+        normalized_key_value="\u0420 234 \u041e\u041a 77",
+        resident_name=None,
+    )
+
+    assert typed_values == ["P234OK77"]
+
+
+class _GateDeleteWaitCursor:
+    def __init__(self, *, user_row, access_row) -> None:
+        self.user_row = user_row
+        self.access_row = access_row
+        self._last_sql = ""
+
+    def execute(self, sql: str, params=None):
+        self._last_sql = sql
+        return self
+
+    def fetchone(self):
+        if "FROM Users" in self._last_sql:
+            return self.user_row
+        if "FROM AccessTable" in self._last_sql:
+            return self.access_row
+        raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
+
+
+def test_wait_for_gate_user_deleted_accepts_deleted_tombstone_without_access(monkeypatch):
+    cursor = _GateDeleteWaitCursor(
+        user_row=SimpleNamespace(UserPtr=42, Deleted=True),
+        access_row=None,
+    )
+
+    @contextmanager
+    def fake_readonly_cursor():
+        yield None, cursor
+
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", fake_readonly_cursor)
+
+    gate_runtime._wait_for_gate_user_deleted(42, timeout_seconds=0)
+
+
+def test_wait_for_gate_user_deleted_rejects_deleted_tombstone_with_access(monkeypatch):
+    cursor = _GateDeleteWaitCursor(
+        user_row=SimpleNamespace(UserPtr=42, Deleted=True),
+        access_row=SimpleNamespace(UserPtr=42),
+    )
+
+    @contextmanager
+    def fake_readonly_cursor():
+        yield None, cursor
+
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", fake_readonly_cursor)
+
+    with pytest.raises(RuntimeError, match="did not delete key 42"):
+        gate_runtime._wait_for_gate_user_deleted(42, timeout_seconds=0)
 
 
 def test_sample_key_type_prefers_phone_reader_device_key_type(monkeypatch):

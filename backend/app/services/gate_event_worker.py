@@ -46,6 +46,19 @@ async def run_gate_maintenance_pass_once() -> None:
         logger.exception("Failed to repair Gate vehicle rows during maintenance")
 
     try:
+        vehicle_visual_result = await asyncio.to_thread(gate_client.repair_vehicle_visual_numbers)
+        updated = int(vehicle_visual_result.get("updated") or 0)
+        failed = int(vehicle_visual_result.get("failed") or 0)
+        if updated or failed:
+            logger.info(
+                "Gate maintenance post-synced %s vehicle visual rows with %s failures",
+                updated,
+                failed,
+            )
+    except Exception:
+        logger.exception("Failed to repair Gate vehicle visual rows during maintenance")
+
+    try:
         display_name_result = await asyncio.to_thread(gate_client.repair_user_display_names)
         updated = int(display_name_result.get("updated") or 0)
         if updated:

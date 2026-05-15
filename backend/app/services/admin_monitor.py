@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import AccessEventLog, AccessPoint, User
+from ..models import AccessEventLog, AccessPoint, Request, User
 from ..schemas import AdminMonitorEventItem, AdminMonitorResponse
 from ..utils.datetime import ensure_utc_datetime
 from .gate import gate_client
@@ -146,6 +146,73 @@ def _match_app_context_for_gate_event(
     return matched[0][1]
 
 
+async def _load_request_contexts_for_gate_events(
+    session: AsyncSession,
+    gate_events: list[dict[str, Any]],
+) -> dict[int, dict[str, Any]]:
+    gate_key_ids = sorted(
+        {
+            user_ptr
+            for event in gate_events
+            if (user_ptr := _int_or_none(event.get("user_ptr"))) is not None and user_ptr > 0
+        }
+    )
+    if not gate_key_ids:
+        return {}
+
+    query = await session.execute(
+        select(Request, User)
+        .join(User, User.id == Request.resident_id)
+        .where(Request.gate_key_id.in_(gate_key_ids))
+        .where(Request.status == "active")
+        .order_by(Request.created_at.desc(), Request.id.desc())
+    )
+
+    contexts: dict[int, dict[str, Any]] = {}
+    for request, user in query.all():
+        gate_key_id = _int_or_none(request.gate_key_id)
+        if gate_key_id is None or gate_key_id in contexts:
+            continue
+        contexts[gate_key_id] = {
+            "item_id": f"gate-request-{request.id}",
+            "event_id": None,
+            "created_at": ensure_utc_datetime(request.created_at) or request.created_at,
+            "status": "success",
+            "message": None,
+            "request_id": None,
+            "actor_user_id": user.id,
+            "actor_login": user.login,
+            "actor_name": user.name,
+            "actor_phone": user.phone,
+            "access_point_ids": list(request.access_point_ids or []),
+            "access_point_id": None,
+            "access_point_name": None,
+            "app_request_id": request.id,
+            "gate_key_id": gate_key_id,
+            "key_type": request.key_type,
+            "key_value": request.key_value,
+            "context_source": "request",
+        }
+    return contexts
+
+
+def _match_request_context_for_gate_event(
+    *,
+    access_point_id: int | None,
+    user_ptr: int | None,
+    contexts_by_gate_key_id: dict[int, dict[str, Any]],
+) -> dict[str, Any] | None:
+    if user_ptr is None:
+        return None
+    context = contexts_by_gate_key_id.get(user_ptr)
+    if context is None:
+        return None
+    access_point_ids = [int(item) for item in context.get("access_point_ids") or []]
+    if access_point_id is not None and access_point_ids and access_point_id not in access_point_ids:
+        return None
+    return {**context, "access_point_id": access_point_id}
+
+
 async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) -> AdminMonitorResponse:
     safe_limit = max(1, min(int(limit), 500))
     query = await session.execute(
@@ -220,6 +287,7 @@ async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) 
             "gate_key_id": gate_key_id,
             "key_type": key_type,
             "key_value": key_value,
+            "context_source": "app",
         }
         app_context_candidates.append(app_context)
         if observed_index is not None:
@@ -231,6 +299,7 @@ async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) 
     except Exception as exc:
         gate_events = []
         gate_error = str(exc)
+    request_context_by_gate_key_id = await _load_request_contexts_for_gate_events(session, gate_events)
 
     gate_items: list[AdminMonitorEventItem] = []
     matched_app_item_ids: set[str] = set()
@@ -247,6 +316,12 @@ async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) 
                 access_point_id=access_point_id,
                 user_ptr=user_ptr,
                 candidates=app_context_candidates,
+            )
+        if app_context is None:
+            app_context = _match_request_context_for_gate_event(
+                access_point_id=access_point_id,
+                user_ptr=user_ptr,
+                contexts_by_gate_key_id=request_context_by_gate_key_id,
             )
         raw_gate_name = _str_or_none(event.get("name"))
         raw_gate_full_name = _str_or_none(event.get("full_name"))
@@ -268,13 +343,21 @@ async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) 
                 unit=event.get("unit"),
                 access_point_name=app_context.get("access_point_name") if app_context is not None else None,
             )
+        if gate_identity_label is None and app_context is not None:
+            gate_identity_label = _compose_identity_label(
+                full_name=app_context.get("actor_name"),
+                key_value=app_context.get("key_value"),
+            )
+        context_source = _str_or_none(app_context.get("context_source")) if app_context is not None else None
         raw_gate_details = dict(event)
         if app_context is not None:
-            matched_app_item_ids.add(str(app_context["item_id"]))
+            if context_source == "app":
+                matched_app_item_ids.add(str(app_context["item_id"]))
+            context_details_key = "app_event" if context_source == "app" else "matched_request"
             raw_gate_details = {
                 **raw_gate_details,
                 "gate_original_name": raw_gate_name,
-                "app_event": {
+                context_details_key: {
                     "event_id": app_context["event_id"],
                     "request_id": app_context["request_id"],
                     "actor_login": app_context["actor_login"],
@@ -297,7 +380,11 @@ async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) 
                 message=(
                     str(app_context["message"])
                     if app_context is not None and app_context.get("message")
-                    else "Открыто из приложения"
+                    else (
+                        str(event.get("message") or "Открыто камерой")
+                        if context_source == "request"
+                        else "Открыто из приложения"
+                    )
                     if app_context is not None
                     else str(event.get("message") or "")
                 ),

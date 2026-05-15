@@ -36,7 +36,7 @@ _PLATE_ALLOWED_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -")
 
 
 def _repair_vehicle_mojibake(value: str) -> str:
-    for encoding in ("cp1251", "latin-1"):
+    for encoding in ("cp1251", "cp1254", "latin-1"):
         try:
             repaired = value.encode(encoding).decode("utf-8")
         except (UnicodeEncodeError, UnicodeDecodeError):

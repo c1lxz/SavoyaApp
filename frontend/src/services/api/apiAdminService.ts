@@ -109,6 +109,9 @@ export type AdminUserQuery = {
 
 const ADMIN_LIST_TIMEOUT_MS = 15000;
 const ADMIN_MUTATION_TIMEOUT_MS = 120000;
+const ADMIN_DELETE_RETRY_DELAY_MS = 1500;
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 const mapAdminRequest = (item: BackendAdminRequestItem): AdminRequestItem => ({
   id: String(item.id),
@@ -207,9 +210,21 @@ export const apiAdminService = {
   },
 
   async deleteRequest(requestId: string): Promise<void> {
-    await apiRequest<void>(`/api/admin/requests/${requestId}`, {
-      method: 'DELETE',
-    });
+    // GateTerm deletion can transiently drop the request while its confirm dialog is being handled.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await apiRequest<void>(`/api/admin/requests/${requestId}`, {
+          method: 'DELETE',
+          timeoutMs: ADMIN_MUTATION_TIMEOUT_MS,
+        });
+        return;
+      } catch (error) {
+        if (attempt >= 2) {
+          throw error;
+        }
+        await delay(ADMIN_DELETE_RETRY_DELAY_MS);
+      }
+    }
   },
 
   async getUsers(query: AdminUserQuery = {}): Promise<AdminUserList> {
