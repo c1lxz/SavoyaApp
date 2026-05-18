@@ -2052,6 +2052,7 @@ def add_vehicle_key_via_gateterm_ui(
     attempts = max(1, _env_int("GATE_GATETERM_UI_CREATE_ATTEMPTS", 3))
     last_error: Exception | None = None
 
+    user_ptr: int | None = None
     for attempt_index in range(attempts):
         app: Any | None = None
         try:
@@ -2094,40 +2095,12 @@ def add_vehicle_key_via_gateterm_ui(
                 timeout_seconds=_env_float("GATE_GATETERM_UI_CREATE_VERIFY_TIMEOUT_SECONDS", 12.0),
             )
 
-            with _transaction_cursor() as (_, cursor):
-                expiry_date, expiry_time = _split_access_expiry(expires_at, key_type="VehicleNumber")
-                lock_date = _access_lock_date(expires_at)
-                cursor.execute(
-                    """
-                    UPDATE Users
-                    SET UseExpiry = ?, ExpiryDate = ?, ExpiryTime = ?, LockDate = ?,
-                        Visitor = ?, Status = ?
-                    WHERE UserPtr = ?
-                    """,
-                    (
-                        expiry_date is not None,
-                        expiry_date,
-                        expiry_time,
-                        lock_date,
-                        is_visitor,
-                        ACTIVE_USER_STATUS,
-                        user_ptr,
-                    ),
-                )
-                if phone_number is not None:
-                    cursor.execute(
-                        "UPDATE Users SET Phone = ? WHERE UserPtr = ?",
-                        (_normalize_contact_phone(phone_number), user_ptr),
-                    )
-                _set_gate_user_name_fields(cursor, user_ptr=user_ptr, resident_name=resident_name)
-                _ensure_access_permissions(cursor, user_ptr, validated_points, key_type="VehicleNumber")
-
             try:
                 _close_gateterm_users_window_if_open(app)
             except Exception:
                 pass
 
-            return user_ptr
+            break  # GateTerm UI step succeeded; MDB patch is handled below
         except Exception as exc:
             last_error = exc
             try:
@@ -2141,9 +2114,50 @@ def add_vehicle_key_via_gateterm_ui(
                 raise RuntimeError(f"GateTerm vehicle provisioning failed: {exc}") from exc
             time_module.sleep(_env_float("GATE_GATETERM_UI_RETRY_DELAY_SECONDS", 0.35))
 
-    if last_error is not None and attempts < 1:
-        raise RuntimeError(f"GateTerm vehicle provisioning failed: {last_error}") from last_error
-    raise RuntimeError("GateTerm vehicle provisioning failed unexpectedly")
+    if user_ptr is None:
+        raise RuntimeError("GateTerm vehicle provisioning failed unexpectedly")
+
+    # MDB field patch (expiry, phone, name, access permissions) is best-effort.
+    # If it fails the pass is still registered in the app DB under user_ptr and
+    # the background repair will correct the Gate record on the next maintenance pass.
+    try:
+        with _transaction_cursor() as (_, cursor):
+            expiry_date, expiry_time = _split_access_expiry(expires_at, key_type="VehicleNumber")
+            lock_date = _access_lock_date(expires_at)
+            cursor.execute(
+                """
+                UPDATE Users
+                SET UseExpiry = ?, ExpiryDate = ?, ExpiryTime = ?, LockDate = ?,
+                    Visitor = ?, Status = ?
+                WHERE UserPtr = ?
+                """,
+                (
+                    expiry_date is not None,
+                    expiry_date,
+                    expiry_time,
+                    lock_date,
+                    is_visitor,
+                    ACTIVE_USER_STATUS,
+                    user_ptr,
+                ),
+            )
+            if phone_number is not None:
+                cursor.execute(
+                    "UPDATE Users SET Phone = ? WHERE UserPtr = ?",
+                    (_normalize_contact_phone(phone_number), user_ptr),
+                )
+            _set_gate_user_name_fields(cursor, user_ptr=user_ptr, resident_name=resident_name)
+            _ensure_access_permissions(cursor, user_ptr, validated_points, key_type="VehicleNumber")
+    except Exception as exc:
+        import sys as _sys
+        print(
+            f"[gate_runtime] WARNING: MDB patch failed for vehicle user_ptr={user_ptr};"
+            f" pass is registered but may need repair: {exc}",
+            file=_sys.stderr,
+            flush=True,
+        )
+
+    return user_ptr
 
 
 def add_temporary_key(
