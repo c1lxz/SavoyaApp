@@ -4482,12 +4482,13 @@ def _populate_gateterm_vehicle_pass_editor(
     latin_key_value = _normalize_vehicle(normalized_key_value)
     _set_gateterm_user_key_number(window, latin_key_value)
 
-    _select_gateterm_user_editor_tab(window, "info")
-    _set_gateterm_text_input(
-        _visible_gateterm_control_by_id(window, 68, "ThunderRT6TextBox", "Edit"),
-        str(_normalize_gate_detail(plot_number) or ""),
-        field_name="resident plot number",
-    )
+    if plot_number is not None:
+        _select_gateterm_user_editor_tab(window, "info")
+        _set_gateterm_text_input(
+            _visible_gateterm_control_by_id(window, 68, "ThunderRT6TextBox", "Edit"),
+            str(_normalize_gate_detail(plot_number) or ""),
+            field_name="resident plot number",
+        )
 
 
 def _restore_gate_user_name_fields(*, user_ptr: int, resident_name: str | None) -> None:

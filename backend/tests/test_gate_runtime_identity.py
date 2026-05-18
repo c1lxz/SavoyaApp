@@ -3080,6 +3080,50 @@ def test_populate_gateterm_vehicle_pass_editor_types_latin_plate(monkeypatch):
     assert ("text", ("control", 68, ("ThunderRT6TextBox", "Edit")), "15", "resident plot number") in calls
 
 
+
+
+def test_populate_gateterm_vehicle_pass_editor_skips_info_tab_without_plot_number(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        gate_runtime,
+        "_visible_gateterm_control_by_id",
+        lambda _window, control_id, *class_names: ("control", control_id, class_names),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_set_gateterm_text_input",
+        lambda control, value, *, field_name: calls.append(("text", control, value, field_name)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_set_gateterm_combo_value",
+        lambda control, value, *, field_name: calls.append(("combo", control, value, field_name)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_set_gateterm_checkbox_state",
+        lambda control, value, *, field_name: calls.append(("checkbox", control, value, field_name)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_select_gateterm_user_editor_tab",
+        lambda _window, tab_name: calls.append(("tab", tab_name)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_set_gateterm_user_key_number",
+        lambda _window, value: calls.append(("key_number", value)),
+    )
+
+    gate_runtime._populate_gateterm_vehicle_pass_editor(
+        object(),
+        normalized_key_value="A100BC77",
+        resident_name="Test User",
+    )
+
+    assert ("tab", "info") not in calls
+    assert not any(c[0] == "text" and isinstance(c[1], tuple) and c[1][1] == 68 for c in calls)
 class _GateDeleteWaitCursor:
     def __init__(self, *, user_row, access_row) -> None:
         self.user_row = user_row
