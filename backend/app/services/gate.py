@@ -142,21 +142,8 @@ class GateClient:
     def _add_real_key(self, action: str, payload: dict[str, Any], *, key_type: str) -> int:
         result = self._run_bridge(action, payload)
         key_id = int(result)
-        try:
-            self._post_sync_vehicle_key_if_needed(key_type=key_type, key_id=key_id)
-        except Exception:
-            if settings.gate_vehicle_post_sync_required:
-                try:
-                    self._run_bridge("remove_key", {"key_id": key_id})
-                except Exception:
-                    pass
-                raise
-            logger.warning(
-                "Gate vehicle post-sync failed for key_id=%s; keeping created key because "
-                "GATE_VEHICLE_POST_SYNC_REQUIRED is false",
-                key_id,
-                exc_info=True,
-            )
+        # VehicleNumber keys are fully provisioned via GateTerm UI inside the bridge action;
+        # no separate post-sync step is needed.
         try:
             self._post_sync_phone_key_if_needed(key_type=key_type, key_id=key_id)
         except Exception:

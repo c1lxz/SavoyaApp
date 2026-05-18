@@ -3068,6 +3068,7 @@ def test_populate_gateterm_vehicle_pass_editor_types_latin_plate(monkeypatch):
         object(),
         normalized_key_value="\u0420 234 \u041e\u041a 77",
         resident_name="Resident Vehicle",
+        plot_number="15",
     )
 
     assert ("combo", ("control", 10, ("ThunderRT6ComboBox", "ComboBox")), "Группа", "resident group") in calls
@@ -3075,6 +3076,8 @@ def test_populate_gateterm_vehicle_pass_editor_types_latin_plate(monkeypatch):
     assert ("combo", ("control", 83, ("ThunderRT6ComboBox", "ComboBox")), "Номер ТС", "vehicle key type") in calls
     assert ("checkbox", ("control", 81, ("ThunderRT6CheckBox", "Button")), False, "vehicle key facility embedding") in calls
     assert ("key_number", "P234OK77") in calls
+    assert ("tab", "info") in calls
+    assert ("text", ("control", 68, ("ThunderRT6TextBox", "Edit")), "15", "resident plot number") in calls
 
 
 class _GateDeleteWaitCursor:

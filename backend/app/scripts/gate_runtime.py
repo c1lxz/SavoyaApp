@@ -1909,6 +1909,18 @@ def add_permanent_key(
     validated_key_type = _validate_key_type(key_type)
     normalized_key_value = _normalize_key_value(validated_key_type, key_value)
     validated_points = _validate_access_point_ids(access_point_ids)
+
+    if validated_key_type == "VehicleNumber":
+        return add_vehicle_key_via_gateterm_ui(
+            normalized_key_value,
+            expires_at=None,
+            access_point_ids=validated_points,
+            resident_name=resident_name,
+            plot_number=plot_number,
+            phone_number=phone_number,
+            is_visitor=False,
+        )
+
     with _transaction_cursor() as (_, cursor):
         return _upsert_real_user(
             cursor,
@@ -2026,6 +2038,114 @@ def add_phone_permanent_key_via_gateterm_ui(
     raise RuntimeError("GateTerm phone provisioning failed unexpectedly")
 
 
+def add_vehicle_key_via_gateterm_ui(
+    key_value: str,
+    expires_at: datetime | None,
+    access_point_ids: list[int],
+    resident_name: str = "Resident",
+    plot_number: str | None = None,
+    phone_number: str | None = None,
+    is_visitor: bool = True,
+) -> int:
+    normalized_key_value = _normalize_vehicle(key_value)
+    validated_points = _validate_access_point_ids(access_point_ids)
+    attempts = max(1, _env_int("GATE_GATETERM_UI_CREATE_ATTEMPTS", 3))
+    last_error: Exception | None = None
+
+    for attempt_index in range(attempts):
+        app: Any | None = None
+        try:
+            with _readonly_cursor() as (_, cursor):
+                vehicle_key_type_value = _sample_key_type(cursor, "VehicleNumber", validated_points)
+                existing_user_ptr = _find_existing_user_ptr(
+                    cursor,
+                    "VehicleNumber",
+                    normalized_key_value,
+                    key_type_value=vehicle_key_type_value,
+                )
+
+            app = _connect_or_start_gateterm_application()
+            _prepare_gateterm_users_workspace(app)
+            users_window = _open_gateterm_users_view(app)
+
+            if existing_user_ptr is None:
+                editor_window = _open_gateterm_new_user_window(app, users_window)
+                finalize_save = _finalize_gateterm_new_user_save
+            else:
+                _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
+                editor_window = _open_gateterm_user_edit_window(app, users_window)
+                finalize_save = _finalize_gateterm_vehicle_user_edit_save
+
+            _populate_gateterm_vehicle_pass_editor(
+                editor_window,
+                normalized_key_value=normalized_key_value,
+                resident_name=resident_name,
+                plot_number=plot_number,
+            )
+            _click_gateterm_control(editor_window, 1, "ThunderRT6CommandButton", "Button")
+            time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_DELAY_SECONDS", 0.75))
+            finalize_save(app)
+
+            with _readonly_cursor() as (_, cursor):
+                vehicle_key_type_value = _sample_key_type(cursor, "VehicleNumber", validated_points)
+            user_ptr = _wait_for_vehicle_user_ptr(
+                normalized_key_value=normalized_key_value,
+                vehicle_key_type_value=vehicle_key_type_value,
+                timeout_seconds=_env_float("GATE_GATETERM_UI_CREATE_VERIFY_TIMEOUT_SECONDS", 12.0),
+            )
+
+            with _transaction_cursor() as (_, cursor):
+                expiry_date, expiry_time = _split_access_expiry(expires_at, key_type="VehicleNumber")
+                lock_date = _access_lock_date(expires_at)
+                cursor.execute(
+                    """
+                    UPDATE Users
+                    SET UseExpiry = ?, ExpiryDate = ?, ExpiryTime = ?, LockDate = ?,
+                        Visitor = ?, Status = ?
+                    WHERE UserPtr = ?
+                    """,
+                    (
+                        expiry_date is not None,
+                        expiry_date,
+                        expiry_time,
+                        lock_date,
+                        is_visitor,
+                        ACTIVE_USER_STATUS,
+                        user_ptr,
+                    ),
+                )
+                if phone_number is not None:
+                    cursor.execute(
+                        "UPDATE Users SET Phone = ? WHERE UserPtr = ?",
+                        (_normalize_contact_phone(phone_number), user_ptr),
+                    )
+                _set_gate_user_name_fields(cursor, user_ptr=user_ptr, resident_name=resident_name)
+                _ensure_access_permissions(cursor, user_ptr, validated_points, key_type="VehicleNumber")
+
+            try:
+                _close_gateterm_users_window_if_open(app)
+            except Exception:
+                pass
+
+            return user_ptr
+        except Exception as exc:
+            last_error = exc
+            try:
+                if app is None:
+                    app = _connect_or_start_gateterm_application()
+                _prepare_gateterm_users_workspace(app)
+                _close_gateterm_users_window_if_open(app)
+            except Exception:
+                pass
+            if attempt_index + 1 >= attempts:
+                raise RuntimeError(f"GateTerm vehicle provisioning failed: {exc}") from exc
+            time_module.sleep(_env_float("GATE_GATETERM_UI_RETRY_DELAY_SECONDS", 0.35))
+
+    if last_error is not None and attempts < 1:
+        raise RuntimeError(f"GateTerm vehicle provisioning failed: {last_error}") from last_error
+    raise RuntimeError("GateTerm vehicle provisioning failed unexpectedly")
+
+
 def add_temporary_key(
     key_type: str,
     key_value: str,
@@ -2042,6 +2162,17 @@ def add_temporary_key(
     if normalized_expires_at <= datetime.now(timezone.utc):
         raise ValueError("expires_at must be in the future")
 
+    if validated_key_type == "VehicleNumber":
+        return add_vehicle_key_via_gateterm_ui(
+            normalized_key_value,
+            expires_at=normalized_expires_at,
+            access_point_ids=validated_points,
+            resident_name=resident_name,
+            plot_number=plot_number,
+            phone_number=phone_number,
+            is_visitor=True,
+        )
+
     with _transaction_cursor() as (_, cursor):
         return _upsert_real_user(
             cursor,
@@ -2050,7 +2181,7 @@ def add_temporary_key(
             phone_number=phone_number,
             resident_name=resident_name,
             plot_number=plot_number,
-            is_visitor=False if validated_key_type == "Phone" else True,
+            is_visitor=False,
             expires_at=normalized_expires_at,
             access_point_ids=validated_points,
         )
@@ -4305,6 +4436,7 @@ def _populate_gateterm_vehicle_pass_editor(
     *,
     normalized_key_value: str,
     resident_name: str | None,
+    plot_number: str | None = None,
 ) -> None:
     normalized_resident_name = _compose_gate_user_name(resident_name)
     if normalized_resident_name is not None:
@@ -4349,6 +4481,13 @@ def _populate_gateterm_vehicle_pass_editor(
     # GateTerm vehicle keys must be typed in the Latin canonical plate form, not Cyrillic lookalikes.
     latin_key_value = _normalize_vehicle(normalized_key_value)
     _set_gateterm_user_key_number(window, latin_key_value)
+
+    _select_gateterm_user_editor_tab(window, "info")
+    _set_gateterm_text_input(
+        _visible_gateterm_control_by_id(window, 68, "ThunderRT6TextBox", "Edit"),
+        str(_normalize_gate_detail(plot_number) or ""),
+        field_name="resident plot number",
+    )
 
 
 def _restore_gate_user_name_fields(*, user_ptr: int, resident_name: str | None) -> None:
@@ -4514,6 +4653,28 @@ def _wait_for_phone_user_ptr(
             return int(user_ptr)
         if time_module.monotonic() >= deadline:
             raise RuntimeError(f"GateTerm did not materialize phone key {normalized_key_value!r} in time")
+        time_module.sleep(_env_float("GATE_GATETERM_UI_CREATE_VERIFY_POLL_SECONDS", 0.5))
+
+
+def _wait_for_vehicle_user_ptr(
+    *,
+    normalized_key_value: str,
+    vehicle_key_type_value: Any | None,
+    timeout_seconds: float,
+) -> int:
+    deadline = time_module.monotonic() + max(timeout_seconds, 0.0)
+    while True:
+        with _readonly_cursor() as (_, cursor):
+            user_ptr = _find_existing_user_ptr(
+                cursor,
+                "VehicleNumber",
+                normalized_key_value,
+                key_type_value=vehicle_key_type_value,
+            )
+        if user_ptr is not None:
+            return int(user_ptr)
+        if time_module.monotonic() >= deadline:
+            raise RuntimeError(f"GateTerm did not materialize vehicle key {normalized_key_value!r} in time")
         time_module.sleep(_env_float("GATE_GATETERM_UI_CREATE_VERIFY_POLL_SECONDS", 0.5))
 
 
