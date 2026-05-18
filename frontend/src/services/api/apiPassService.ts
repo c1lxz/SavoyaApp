@@ -6,6 +6,7 @@ export const apiPassService = {
     return apiRequest<PassItem>('/passes', {
       method: 'POST',
       body: payload,
+      timeoutMs: 120_000,
     });
   },
   async getMyPasses(): Promise<PassItem[]> {

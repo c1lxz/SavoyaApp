@@ -121,7 +121,7 @@ export const apiRequest = async <T>(path: string, options: RequestOptions = {}):
   }
 
   if (!response.ok) {
-    let message = 'Ошибка сети';
+    let message = response.status >= 500 ? 'Ошибка сервера, попробуйте ещё раз' : 'Ошибка запроса';
     try {
       const errorPayload = await response.json();
       message = resolveErrorMessage(errorPayload) ?? message;

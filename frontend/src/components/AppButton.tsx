@@ -9,6 +9,7 @@ type AppButtonProps = {
   onPress: () => void;
   disabled?: boolean;
   loading?: boolean;
+  loadingLabel?: string;
   variant?: 'primary' | 'card';
   leftIcon?: React.ReactNode;
   minHeight?: number;
@@ -20,6 +21,7 @@ const AppButtonComponent = ({
   onPress,
   disabled = false,
   loading = false,
+  loadingLabel,
   variant = 'primary',
   leftIcon,
   minHeight,
@@ -57,7 +59,19 @@ const AppButtonComponent = ({
         ]}
       >
         {loading ? (
-          <ActivityIndicator color={theme.colors.textPrimary} />
+          <View style={styles.row}>
+            <ActivityIndicator color={theme.colors.textPrimary} />
+            {loadingLabel ? (
+              <Text
+                adjustsFontSizeToFit
+                minimumFontScale={0.82}
+                numberOfLines={1}
+                style={[styles.label, { fontSize: resolvedLabelFontSize }]}
+              >
+                {loadingLabel}
+              </Text>
+            ) : null}
+          </View>
         ) : (
           <View style={styles.row}>
             {leftIcon ? <View style={styles.iconWrap}>{leftIcon}</View> : null}

@@ -287,6 +287,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
 
               <AppButton
                 title="Создать пропуск"
+                loadingLabel="Создаём пропуск..."
                 onPress={onCreate}
                 loading={createState === 'loading' || profileState === 'loading'}
               />
