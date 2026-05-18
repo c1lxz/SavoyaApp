@@ -3030,21 +3030,51 @@ def test_normalize_vehicle_repairs_utf8_mojibake_before_ascii_canonicalization()
 
 
 def test_populate_gateterm_vehicle_pass_editor_types_latin_plate(monkeypatch):
-    typed_values = []
+    calls = []
+
+    monkeypatch.setattr(
+        gate_runtime,
+        "_visible_gateterm_control_by_id",
+        lambda _window, control_id, *class_names: ("control", control_id, class_names),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_set_gateterm_text_input",
+        lambda control, value, *, field_name: calls.append(("text", control, value, field_name)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_set_gateterm_combo_value",
+        lambda control, value, *, field_name: calls.append(("combo", control, value, field_name)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_set_gateterm_checkbox_state",
+        lambda control, value, *, field_name: calls.append(("checkbox", control, value, field_name)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_select_gateterm_user_editor_tab",
+        lambda _window, tab_name: calls.append(("tab", tab_name)),
+    )
 
     monkeypatch.setattr(
         gate_runtime,
         "_set_gateterm_user_key_number",
-        lambda _window, value: typed_values.append(value),
+        lambda _window, value: calls.append(("key_number", value)),
     )
 
     gate_runtime._populate_gateterm_vehicle_pass_editor(
         object(),
         normalized_key_value="\u0420 234 \u041e\u041a 77",
-        resident_name=None,
+        resident_name="Resident Vehicle",
     )
 
-    assert typed_values == ["P234OK77"]
+    assert ("combo", ("control", 10, ("ThunderRT6ComboBox", "ComboBox")), "Группа", "resident group") in calls
+    assert ("tab", "key") in calls
+    assert ("combo", ("control", 83, ("ThunderRT6ComboBox", "ComboBox")), "Номер ТС", "vehicle key type") in calls
+    assert ("checkbox", ("control", 81, ("ThunderRT6CheckBox", "Button")), False, "vehicle key facility embedding") in calls
+    assert ("key_number", "P234OK77") in calls
 
 
 class _GateDeleteWaitCursor:

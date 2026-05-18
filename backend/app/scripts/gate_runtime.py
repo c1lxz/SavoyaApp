@@ -4308,7 +4308,6 @@ def _populate_gateterm_vehicle_pass_editor(
 ) -> None:
     normalized_resident_name = _compose_gate_user_name(resident_name)
     if normalized_resident_name is not None:
-        # GateTerm vehicle save can blank visual owner fields unless they are re-applied with the plate.
         last_name, first_name, father_name = _split_name(normalized_resident_name)
         _set_gateterm_text_input(
             _visible_gateterm_control_by_id(window, 8, "ThunderRT6TextBox", "Edit"),
@@ -4325,7 +4324,28 @@ def _populate_gateterm_vehicle_pass_editor(
             str(father_name or ""),
             field_name="resident father name",
         )
+    _set_gateterm_combo_value(
+        _visible_gateterm_control_by_id(window, 10, "ThunderRT6ComboBox", "ComboBox"),
+        "Группа",
+        field_name="resident group",
+    )
+    _set_gateterm_checkbox_state(
+        _visible_gateterm_control_by_id(window, 4, "ThunderRT6CheckBox", "Button"),
+        False,
+        field_name="resident visitor flag",
+    )
 
+    _select_gateterm_user_editor_tab(window, "key")
+    _set_gateterm_combo_value(
+        _visible_gateterm_control_by_id(window, 83, "ThunderRT6ComboBox", "ComboBox"),
+        "Номер ТС",
+        field_name="vehicle key type",
+    )
+    _set_gateterm_checkbox_state(
+        _visible_gateterm_control_by_id(window, 81, "ThunderRT6CheckBox", "Button"),
+        False,
+        field_name="vehicle key facility embedding",
+    )
     # GateTerm vehicle keys must be typed in the Latin canonical plate form, not Cyrillic lookalikes.
     latin_key_value = _normalize_vehicle(normalized_key_value)
     _set_gateterm_user_key_number(window, latin_key_value)
