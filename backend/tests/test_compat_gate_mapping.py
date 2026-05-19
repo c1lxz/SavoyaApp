@@ -100,9 +100,8 @@ def test_runtime_gsm_access_point_ids_detects_terminal_hints_when_config_is_empt
     assert compatibility._runtime_gsm_access_point_ids() == [71]
 
 
-def test_build_compat_create_payloads_adds_gsm_points_for_phone_when_available(monkeypatch):
-    monkeypatch.setattr(compatibility, "_runtime_default_access_point_ids", lambda: [15, 17, 19])
-    monkeypatch.setattr(compatibility, "_runtime_gsm_access_point_ids", lambda: [70, 71])
+def test_build_compat_create_payloads_uses_camera_points_for_vehicle(monkeypatch):
+    monkeypatch.setattr(compatibility, "_runtime_vehicle_camera_access_point_ids", lambda: [19, 20])
 
     payload = CompatCreatePassPayload(
         carNumber="A123AA77",
@@ -113,10 +112,60 @@ def test_build_compat_create_payloads_adds_gsm_points_for_phone_when_available(m
         isCourier=False,
     )
 
-    rows = compatibility._build_compat_create_payloads(payload)
+    rows = compatibility._build_compat_create_payloads(payload, contact_phone_number=None)
 
-    assert len(rows) == 2
+    assert len(rows) == 1
     assert rows[0].key_type == "VehicleNumber"
-    assert rows[0].access_point_ids == [15, 17, 19]
-    assert rows[1].key_type == "Phone"
-    assert rows[1].access_point_ids == [15, 17, 19, 70, 71]
+    assert rows[0].access_point_ids == [19, 20]
+
+
+def test_looks_like_vehicle_camera_reader_matches_russian_names():
+    assert compatibility._looks_like_vehicle_camera_reader("Камера Въезда") is True
+    assert compatibility._looks_like_vehicle_camera_reader("Камера Выезда") is True
+
+
+def test_looks_like_vehicle_camera_reader_matches_english_names():
+    assert compatibility._looks_like_vehicle_camera_reader("Entry Camera") is True
+    assert compatibility._looks_like_vehicle_camera_reader("Exit Camera") is True
+
+
+def test_looks_like_vehicle_camera_reader_rejects_non_camera_readers():
+    assert compatibility._looks_like_vehicle_camera_reader("Считыватель Северная калитка 1") is False
+    assert compatibility._looks_like_vehicle_camera_reader("Gate Terminal Entry") is False
+    assert compatibility._looks_like_vehicle_camera_reader("Вход озеро") is False
+
+
+def test_runtime_vehicle_camera_access_point_ids_filters_to_cameras_only(monkeypatch):
+    monkeypatch.setattr(compatibility.settings, "gate_real_integration_enabled", True)
+    monkeypatch.setattr(
+        compatibility.gate_client,
+        "get_access_points",
+        lambda: [
+            {"id": 19, "name": "Камера Въезда"},
+            {"id": 20, "name": "Камера Выезда"},
+            {"id": 15, "name": "Считыватель Северная калитка 1"},
+            {"id": 71, "name": "Gate Terminal Entry"},
+        ],
+    )
+
+    ids = compatibility._runtime_vehicle_camera_access_point_ids()
+
+    assert ids == [19, 20]
+    assert 15 not in ids
+    assert 71 not in ids
+
+
+def test_runtime_vehicle_camera_access_point_ids_falls_back_when_no_cameras(monkeypatch):
+    monkeypatch.setattr(compatibility.settings, "gate_real_integration_enabled", True)
+    monkeypatch.setattr(
+        compatibility.gate_client,
+        "get_access_points",
+        lambda: [
+            {"id": 15, "name": "Считыватель калитка 1"},
+            {"id": 71, "name": "Gate Terminal Entry"},
+        ],
+    )
+
+    ids = compatibility._runtime_vehicle_camera_access_point_ids()
+
+    assert ids == [15, 71]

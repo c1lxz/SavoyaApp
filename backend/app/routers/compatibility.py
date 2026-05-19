@@ -42,6 +42,7 @@ settings = get_settings()
 
 
 _INVALID_LOGIN_MESSAGE = "Invalid login or password"
+_VEHICLE_CAMERA_HINTS = ("камер", "camera")
 _PHONE_READER_HINTS = (
     "gsm",
     "gate terminal",
@@ -118,6 +119,24 @@ def _looks_like_phone_reader(name: str) -> bool:
     return any(hint in value for hint in _PHONE_READER_HINTS)
 
 
+def _looks_like_vehicle_camera_reader(name: str) -> bool:
+    value = (name or "").strip().lower()
+    return any(hint in value for hint in _VEHICLE_CAMERA_HINTS)
+
+
+def _runtime_vehicle_camera_access_point_ids() -> list[int]:
+    if not settings.gate_real_integration_enabled:
+        return list(settings.default_access_point_ids)
+
+    points = gate_client.get_access_points()
+    camera_ids = [
+        int(item["id"])
+        for item in points
+        if _looks_like_vehicle_camera_reader(str(item["name"] or ""))
+    ]
+    return camera_ids or [int(item["id"]) for item in points] or list(settings.default_access_point_ids)
+
+
 def _runtime_gsm_access_point_ids() -> list[int]:
     configured = list(settings.gsm_access_point_ids)
     if not settings.gate_real_integration_enabled:
@@ -173,7 +192,7 @@ def _build_compat_create_payloads(
         except ValueError:
             hours = 24
 
-    default_access_point_ids = _runtime_default_access_point_ids()
+    vehicle_camera_access_point_ids = _runtime_vehicle_camera_access_point_ids()
     requests: list[CreateRequestRequest] = []
     if payload.carNumber:
         requests.append(
@@ -182,7 +201,7 @@ def _build_compat_create_payloads(
                 key_value=payload.carNumber,
                 phone_number=payload.phoneNumber or contact_phone_number,
                 resident_name=payload.residentName,
-                access_point_ids=default_access_point_ids,
+                access_point_ids=vehicle_camera_access_point_ids,
                 is_permanent=payload.isPermanent,
                 is_courier=payload.isCourier,
                 expires_at=None if payload.isPermanent else expires_at,

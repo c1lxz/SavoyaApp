@@ -3060,8 +3060,8 @@ def test_populate_gateterm_vehicle_pass_editor_types_latin_plate(monkeypatch):
 
     monkeypatch.setattr(
         gate_runtime,
-        "_set_gateterm_user_key_number",
-        lambda _window, value: calls.append(("key_number", value)),
+        "_type_gateterm_field",
+        lambda control, value, *, field_name: calls.append(("type_keys", control, value, field_name)),
     )
 
     gate_runtime._populate_gateterm_vehicle_pass_editor(
@@ -3075,7 +3075,8 @@ def test_populate_gateterm_vehicle_pass_editor_types_latin_plate(monkeypatch):
     assert ("tab", "key") in calls
     assert ("combo", ("control", 83, ("ThunderRT6ComboBox", "ComboBox")), "Номер ТС", "vehicle key type") in calls
     assert ("checkbox", ("control", 81, ("ThunderRT6CheckBox", "Button")), False, "vehicle key facility embedding") in calls
-    assert ("key_number", "P234OK77") in calls
+    # key number filled via type_keys so VB6 TextBox_Change event fires
+    assert ("type_keys", ("control", 88, ("ThunderRT6TextBox", "Edit")), "P234OK77", "vehicle key number") in calls
     assert ("tab", "info") in calls
     assert ("text", ("control", 68, ("ThunderRT6TextBox", "Edit")), "15", "resident plot number") in calls
 
@@ -3112,8 +3113,8 @@ def test_populate_gateterm_vehicle_pass_editor_skips_info_tab_without_plot_numbe
     )
     monkeypatch.setattr(
         gate_runtime,
-        "_set_gateterm_user_key_number",
-        lambda _window, value: calls.append(("key_number", value)),
+        "_type_gateterm_field",
+        lambda control, value, *, field_name: calls.append(("type_keys", control, value, field_name)),
     )
 
     gate_runtime._populate_gateterm_vehicle_pass_editor(
@@ -3799,3 +3800,840 @@ def test_resolve_inserted_user_ptr_falls_back_when_identity_is_zero():
             ("ABC123NUMBER",),
         ),
     ]
+
+
+# ---------------------------------------------------------------------------
+# _gateterm_dialog_windows
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_window(title: str, class_name: str, handle: int):
+    return SimpleNamespace(
+        window_text=lambda: title,
+        class_name=lambda: class_name,
+        handle=handle,
+    )
+
+
+class _FakeApp:
+    def __init__(self, windows):
+        self._windows = windows
+        self.captured_handles: list[int] = []
+
+    def windows(self):
+        return list(self._windows)
+
+    def window(self, *, handle):
+        self.captured_handles.append(handle)
+        return SimpleNamespace(handle=handle)
+
+
+def test_gateterm_dialog_windows_detects_standard_message_box():
+    """#32770 class window (Win32 MessageBox) is returned as a dialog."""
+    app = _FakeApp(
+        [
+            _make_fake_window("GateTerm", "ThunderRT6Main", 1000),
+            _make_fake_window("GateTerm", "#32770", 1001),
+        ]
+    )
+
+    dialogs = gate_runtime._gateterm_dialog_windows(app)
+
+    assert len(dialogs) == 1
+    assert 1001 in app.captured_handles
+    assert 1000 not in app.captured_handles
+
+
+def test_gateterm_dialog_windows_excludes_thunder_main_class():
+    """ThunderRT6Main is always skipped regardless of window title."""
+    app = _FakeApp(
+        [
+            _make_fake_window("GateTerm", "ThunderRT6Main", 1000),
+        ]
+    )
+
+    dialogs = gate_runtime._gateterm_dialog_windows(app)
+
+    assert dialogs == []
+
+
+def test_gateterm_dialog_windows_detects_gateterm_titled_non_form_dialog():
+    """A window titled 'GateTerm' that is not ThunderRT6FormDC is a dialog."""
+    app = _FakeApp(
+        [
+            _make_fake_window("GateTerm", "#32770", 1001),
+            _make_fake_window("GateTerm - Список пользователей", "ThunderRT6FormDC", 1002),
+        ]
+    )
+
+    dialogs = gate_runtime._gateterm_dialog_windows(app)
+
+    assert len(dialogs) == 1
+    assert 1001 in app.captured_handles
+    assert 1002 not in app.captured_handles
+
+
+def test_gateterm_dialog_windows_excludes_form_dc_windows():
+    """ThunderRT6FormDC class windows are not dialogs even if titled 'GateTerm'."""
+    app = _FakeApp(
+        [
+            _make_fake_window("GateTerm", "ThunderRT6FormDC", 1003),
+        ]
+    )
+
+    dialogs = gate_runtime._gateterm_dialog_windows(app)
+
+    assert dialogs == []
+
+
+def test_gateterm_dialog_windows_returns_empty_when_no_dialogs_present():
+    """No dialogs and no ThunderRT6Main → empty list."""
+    app = _FakeApp([])
+
+    dialogs = gate_runtime._gateterm_dialog_windows(app)
+
+    assert dialogs == []
+
+
+# ---------------------------------------------------------------------------
+# _close_gateterm_message_boxes_if_open
+# ---------------------------------------------------------------------------
+
+
+def test_close_gateterm_message_boxes_tries_ok_button_for_error_dialog(monkeypatch):
+    """Simulates a VB6 error dialog that only has an OK button (id=1); verifies it is clicked."""
+    clicked_ids: list[int] = []
+
+    def fake_click_button(dialog, *control_ids):
+        for cid in control_ids:
+            if cid == 1:
+                clicked_ids.append(cid)
+                return True
+        return False
+
+    call_seq: list[int] = []
+
+    def fake_dialogs(app):
+        call_seq.append(len(call_seq))
+        if len(call_seq) <= 1:
+            return [SimpleNamespace(type_keys=lambda k: None)]
+        return []
+
+    monkeypatch.setattr(gate_runtime, "_gateterm_dialog_windows", fake_dialogs)
+    monkeypatch.setattr(gate_runtime, "_click_gateterm_dialog_button", fake_click_button)
+
+    gate_runtime._close_gateterm_message_boxes_if_open(object())
+
+    assert 1 in clicked_ids
+
+
+def test_close_gateterm_message_boxes_stops_when_no_dialogs_remain(monkeypatch):
+    """Loop exits immediately when _gateterm_dialog_windows returns empty list."""
+    call_count = [0]
+
+    def fake_dialogs(app):
+        call_count[0] += 1
+        return []
+
+    monkeypatch.setattr(gate_runtime, "_gateterm_dialog_windows", fake_dialogs)
+
+    gate_runtime._close_gateterm_message_boxes_if_open(object())
+
+    assert call_count[0] == 1
+
+
+def test_close_gateterm_message_boxes_runs_up_to_four_rounds(monkeypatch):
+    """With persistent dialogs the loop runs exactly 4 times then exits."""
+    clicked: list[tuple] = []
+
+    def fake_click_button(dialog, *control_ids):
+        clicked.append(control_ids)
+        return True
+
+    call_count = [0]
+
+    def fake_dialogs(app):
+        call_count[0] += 1
+        return [SimpleNamespace(type_keys=lambda k: None)]  # always a dialog
+
+    monkeypatch.setattr(gate_runtime, "_gateterm_dialog_windows", fake_dialogs)
+    monkeypatch.setattr(gate_runtime, "_click_gateterm_dialog_button", fake_click_button)
+
+    gate_runtime._close_gateterm_message_boxes_if_open(object())
+
+    assert call_count[0] == 4
+
+
+# ---------------------------------------------------------------------------
+# _confirm_gateterm_message_boxes_if_open
+# ---------------------------------------------------------------------------
+
+
+def test_confirm_gateterm_message_boxes_clicks_yes_then_ok(monkeypatch):
+    """Tries button 6 (Yes) first, then 1 (OK)."""
+    clicked_ids: list[int] = []
+
+    def fake_click_button(dialog, *control_ids):
+        for cid in control_ids:
+            clicked_ids.extend(list(control_ids))
+            return True
+        return False
+
+    call_count = [0]
+
+    def fake_dialogs(app):
+        call_count[0] += 1
+        if call_count[0] <= 1:
+            return [SimpleNamespace(type_keys=lambda k: None)]
+        return []
+
+    monkeypatch.setattr(gate_runtime, "_gateterm_dialog_windows", fake_dialogs)
+    monkeypatch.setattr(gate_runtime, "_click_gateterm_dialog_button", fake_click_button)
+
+    gate_runtime._confirm_gateterm_message_boxes_if_open(object())
+
+    assert 6 in clicked_ids or 1 in clicked_ids
+
+
+def test_confirm_gateterm_message_boxes_falls_back_to_enter_on_type_keys_failure(monkeypatch):
+    """When button click fails AND type_keys('%Y') raises, {ENTER} is sent as final fallback."""
+    enter_sent: list[str] = []
+
+    def fake_click_button(dialog, *control_ids):
+        return False
+
+    def make_dialog():
+        call_count = [0]
+
+        def type_keys(k):
+            call_count[0] += 1
+            if k == "%Y":
+                raise RuntimeError("type_keys failed")
+            enter_sent.append(k)
+
+        return SimpleNamespace(type_keys=type_keys)
+
+    dialog_returned = [False]
+
+    def fake_dialogs(app):
+        if not dialog_returned[0]:
+            dialog_returned[0] = True
+            return [make_dialog()]
+        return []
+
+    monkeypatch.setattr(gate_runtime, "_gateterm_dialog_windows", fake_dialogs)
+    monkeypatch.setattr(gate_runtime, "_click_gateterm_dialog_button", fake_click_button)
+
+    gate_runtime._confirm_gateterm_message_boxes_if_open(object())
+
+    assert "{ENTER}" in enter_sent
+
+
+# ---------------------------------------------------------------------------
+# _open_gateterm_new_user_window — error dialog detection
+# ---------------------------------------------------------------------------
+
+
+def test_open_gateterm_new_user_window_raises_when_error_dialog_appears(monkeypatch):
+    """When GateTerm shows an error dialog instead of opening the new-user window, raises."""
+    monkeypatch.setattr(gate_runtime, "_try_wait_for_gateterm_window", lambda *a, **kw: None)
+    monkeypatch.setattr(gate_runtime, "_list_gateterm_windows", lambda app: [])
+
+    dialog_obj = SimpleNamespace(type_keys=lambda k: None)
+    monkeypatch.setattr(gate_runtime, "_gateterm_dialog_windows", lambda app: [dialog_obj])
+
+    dismissed: list[bool] = []
+    monkeypatch.setattr(
+        gate_runtime,
+        "_close_gateterm_message_boxes_if_open",
+        lambda app: dismissed.append(True),
+    )
+
+    users_window = SimpleNamespace(
+        set_focus=lambda: None,
+        menu=lambda: SimpleNamespace(
+            items=lambda: [
+                SimpleNamespace(
+                    sub_menu=lambda: SimpleNamespace(
+                        items=lambda: [SimpleNamespace(click=lambda: None)]
+                    )
+                )
+            ]
+        ),
+        type_keys=lambda k: None,
+    )
+
+    with pytest.raises(RuntimeError, match="error dialog appeared instead of new-user window"):
+        gate_runtime._open_gateterm_new_user_window(object(), users_window)
+
+    assert dismissed, "error dialog must be dismissed before raising"
+
+
+def test_open_gateterm_new_user_window_dismisses_dialog_on_hotkey_attempt(monkeypatch):
+    """Error dialog that appears on the hotkey (Ctrl+N) attempt is also dismissed."""
+    call_count = [0]
+
+    def fake_try_wait(app, title, *, timeout_seconds):
+        # First call (menu attempt) → no dialog yet; second call (hotkey) → None
+        call_count[0] += 1
+        return None
+
+    # No dialog after menu attempt; dialog appears after hotkey attempt
+    menu_attempt_done = [False]
+
+    def fake_dialog_windows(app):
+        if not menu_attempt_done[0]:
+            menu_attempt_done[0] = True
+            return []  # no error after menu
+        return [SimpleNamespace(type_keys=lambda k: None)]
+
+    dismissed: list[bool] = []
+    monkeypatch.setattr(gate_runtime, "_try_wait_for_gateterm_window", fake_try_wait)
+    monkeypatch.setattr(gate_runtime, "_gateterm_dialog_windows", fake_dialog_windows)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_close_gateterm_message_boxes_if_open",
+        lambda app: dismissed.append(True),
+    )
+    monkeypatch.setattr(gate_runtime, "_list_gateterm_windows", lambda app: [])
+
+    users_window = SimpleNamespace(
+        set_focus=lambda: None,
+        menu=lambda: SimpleNamespace(
+            items=lambda: [
+                SimpleNamespace(
+                    sub_menu=lambda: SimpleNamespace(
+                        items=lambda: [SimpleNamespace(click=lambda: None)]
+                    )
+                )
+            ]
+        ),
+        type_keys=lambda k: None,
+    )
+
+    with pytest.raises(RuntimeError, match="hotkey attempt"):
+        gate_runtime._open_gateterm_new_user_window(object(), users_window)
+
+    assert dismissed
+
+
+def test_open_gateterm_new_user_window_returns_window_when_no_error(monkeypatch):
+    """Happy path: no error dialogs, new-user window opens on first menu attempt."""
+    expected_window = object()
+
+    monkeypatch.setattr(
+        gate_runtime,
+        "_try_wait_for_gateterm_window",
+        lambda *a, **kw: expected_window,
+    )
+    monkeypatch.setattr(gate_runtime, "_gateterm_dialog_windows", lambda app: [])
+
+    users_window = SimpleNamespace(
+        set_focus=lambda: None,
+        menu=lambda: SimpleNamespace(
+            items=lambda: [
+                SimpleNamespace(
+                    sub_menu=lambda: SimpleNamespace(
+                        items=lambda: [SimpleNamespace(click=lambda: None)]
+                    )
+                )
+            ]
+        ),
+        type_keys=lambda k: None,
+    )
+
+    result = gate_runtime._open_gateterm_new_user_window(object(), users_window)
+
+    assert result is expected_window
+
+
+# ---------------------------------------------------------------------------
+# _close_gateterm_new_user_window_if_open — uses Cancel button, not WM_CLOSE
+# ---------------------------------------------------------------------------
+
+
+def test_close_gateterm_new_user_window_clicks_cancel_button(monkeypatch):
+    """Cancel button (id=2) must be clicked, NOT WM_CLOSE/Alt+F4, to avoid VB6 Error 91."""
+    clicked_controls: list[tuple] = []
+
+    def fake_find_window(app, title_fragment):
+        if gate_runtime._GATETERM_NEW_USER_WINDOW_TITLE in title_fragment:
+            return SimpleNamespace(window_text=lambda: gate_runtime._GATETERM_NEW_USER_WINDOW_TITLE)
+        return None
+
+    def fake_click_control(window, control_id, *class_names):
+        clicked_controls.append((control_id, class_names))
+
+    monkeypatch.setattr(gate_runtime, "_find_gateterm_window", fake_find_window)
+    monkeypatch.setattr(gate_runtime, "_click_gateterm_control", fake_click_control)
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_message_boxes_if_open", lambda app: None)
+    monkeypatch.setattr(gate_runtime, "_window_still_open", lambda app, title: False)
+
+    gate_runtime._close_gateterm_new_user_window_if_open(object())
+
+    assert any(cid == 2 for cid, _ in clicked_controls), "Cancel button (id=2) must be clicked"
+
+
+def test_close_gateterm_new_user_window_uses_escape_when_cancel_fails(monkeypatch):
+    """Falls back to ESC when clicking Cancel raises an exception."""
+    escape_sent: list[bool] = []
+
+    def fake_find_window(app, title_fragment):
+        if gate_runtime._GATETERM_NEW_USER_WINDOW_TITLE in title_fragment:
+            return SimpleNamespace(window_text=lambda: gate_runtime._GATETERM_NEW_USER_WINDOW_TITLE)
+        return None
+
+    def fake_click_control(window, control_id, *class_names):
+        raise RuntimeError("control not found")
+
+    def fake_window_still_open(app, title):
+        return not escape_sent  # open until ESC is sent
+
+    def fake_dismiss_via_escape(app, title):
+        escape_sent.append(True)
+
+    monkeypatch.setattr(gate_runtime, "_find_gateterm_window", fake_find_window)
+    monkeypatch.setattr(gate_runtime, "_click_gateterm_control", fake_click_control)
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_message_boxes_if_open", lambda app: None)
+    monkeypatch.setattr(gate_runtime, "_window_still_open", fake_window_still_open)
+    monkeypatch.setattr(gate_runtime, "_dismiss_gateterm_window_via_escape", fake_dismiss_via_escape)
+
+    gate_runtime._close_gateterm_new_user_window_if_open(object())
+
+    assert escape_sent, "ESC fallback must be used when Cancel button click fails"
+
+
+def test_close_gateterm_new_user_window_skips_when_not_open(monkeypatch):
+    """Does nothing when the window is not open."""
+    monkeypatch.setattr(gate_runtime, "_find_gateterm_window", lambda app, title: None)
+    clicked: list[bool] = []
+    monkeypatch.setattr(gate_runtime, "_click_gateterm_control", lambda *a: clicked.append(True))
+
+    gate_runtime._close_gateterm_new_user_window_if_open(object())
+
+    assert not clicked
+
+
+# ---------------------------------------------------------------------------
+# _type_gateterm_field — clipboard paste, not char-by-char type_keys
+# ---------------------------------------------------------------------------
+
+
+def test_type_gateterm_field_uses_em_replacesel_not_clipboard(monkeypatch):
+    """_type_gateterm_field must use EM_REPLACESEL, not clipboard paste or char-by-char typing.
+
+    EM_REPLACESEL fires EN_CHANGE exactly once with the full value.  Ctrl+V is unreliable
+    in VB6 ThunderRT6TextBox; typing char-by-char triggers Change on every keystroke and
+    causes GateTerm to insert separator '/' into vehicle plate numbers mid-input.
+    """
+    keys_sent: list[str] = []
+    em_replacesel_calls: list[tuple] = []
+
+    class _FakeControl:
+        handle = 12345
+
+        def set_focus(self):
+            pass
+
+        def type_keys(self, keys, **kwargs):
+            keys_sent.append(keys)
+
+    monkeypatch.setattr(gate_runtime, "_em_replacesel", lambda hwnd, value: em_replacesel_calls.append((hwnd, value)))
+
+    gate_runtime._type_gateterm_field(_FakeControl(), "A123BB77", field_name="vehicle key number")
+
+    assert em_replacesel_calls == [(12345, "A123BB77")], "_em_replacesel must be called with hwnd and value"
+    assert "{TAB}" in keys_sent, "must send TAB to commit"
+    assert "A123BB77" not in keys_sent, "plate must not be typed char-by-char via type_keys"
+    assert "^v" not in keys_sent, "must not use Ctrl+V clipboard paste"
+    assert "^a" not in keys_sent, "must not use Ctrl+A (EM_SETSEL is used inside _em_replacesel)"
+
+
+# ---------------------------------------------------------------------------
+# add_vehicle_key_via_gateterm_ui — fully UI-based, search-first
+# ---------------------------------------------------------------------------
+
+
+def _fake_noop_cursor():
+    """Cursor that silently accepts any execute() call."""
+
+    class _Noop:
+        def execute(self, sql, params=None):
+            return self
+
+        def fetchone(self):
+            return None
+
+        def fetchall(self):
+            return []
+
+    return _Noop()
+
+
+def test_add_vehicle_key_via_gateterm_ui_creates_new_user(monkeypatch):
+    """New user: search is performed BEFORE clicking Add, then access-fix pass after creation."""
+    calls: list[object] = []
+    fake_app = object()
+    fake_users_window = object()
+    fake_new_window = object()
+    fake_edit_window = object()
+
+    monkeypatch.setattr(
+        gate_runtime,
+        "_load_vehicle_ui_provisioning_context",
+        lambda **kwargs: {
+            "existing_user_ptr": None,
+            "vehicle_key_type_value": 3,
+            "desired_access_labels": {"камера въезда", "камера выезда"},
+            "current_access_labels": set(),
+        },
+    )
+    monkeypatch.setattr(gate_runtime, "_connect_or_start_gateterm_application", lambda: calls.append("connect") or fake_app)
+    monkeypatch.setattr(gate_runtime, "_prepare_gateterm_users_workspace", lambda app: calls.append(("prepare", app)))
+    monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: calls.append(("open_users", app)) or fake_users_window)
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: calls.append(("close_users", app)))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_search_gateterm_user_by_key_number",
+        lambda app, users_window, key: calls.append(("search", app, users_window, key)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_open_gateterm_new_user_window",
+        lambda app, users_window: calls.append(("open_new", app, users_window)) or fake_new_window,
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_open_gateterm_user_edit_window",
+        lambda app, users_window: calls.append(("open_edit", app, users_window)) or fake_edit_window,
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_populate_gateterm_vehicle_pass_editor",
+        lambda window, **kwargs: calls.append(("populate", window, kwargs)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_click_gateterm_control",
+        lambda window, control_id, *class_names: calls.append(("click", window, control_id, class_names)),
+    )
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_new_user_save", lambda app: calls.append(("finalize_new", app)))
+    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_vehicle_user_edit_save", lambda app: calls.append(("finalize_vehicle_edit", app)))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_wait_for_vehicle_user_ptr",
+        lambda **kwargs: calls.append(("wait_user_ptr", kwargs)) or 8881,
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_verify_vehicle_identity_persisted",
+        lambda user_ptr, key, number_u: calls.append(("verify", user_ptr, key, number_u)),
+    )
+    monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(_fake_noop_cursor()))
+
+    result = gate_runtime.add_vehicle_key_via_gateterm_ui(
+        key_value="A123AA77",
+        expires_at=None,
+        access_point_ids=[19, 20],
+        resident_name="Тест Пользователь",
+        plot_number="42",
+        phone_number="+79991234567",
+    )
+
+    assert result == 8881
+    # search before Add is the first GateTerm action after opening the users window
+    open_users_idx = calls.index(("open_users", fake_app))
+    search_idx = next(i for i, c in enumerate(calls) if isinstance(c, tuple) and c[0] == "search")
+    open_new_idx = next(i for i, c in enumerate(calls) if isinstance(c, tuple) and c[0] == "open_new")
+    assert search_idx == open_users_idx + 1, "search must immediately follow open_users for new users"
+    assert open_new_idx == search_idx + 1, "open_new must immediately follow the initial search"
+
+    # the pre-Add search must use the dummy init value, NOT the real plate number
+    init_search = calls[search_idx]
+    assert init_search[3] == gate_runtime._GATETERM_SEARCH_INIT_DUMMY_VALUE, (
+        "pre-Add search must use the dummy value, not the real plate number"
+    )
+
+    # populate first call uses new-user window
+    first_populate = next(c for c in calls if isinstance(c, tuple) and c[0] == "populate")
+    assert first_populate[1] is fake_new_window
+    assert first_populate[2]["phone_number"] == "+79991234567"
+    assert first_populate[2]["desired_access_labels"] == {"камера въезда", "камера выезда"}
+    assert first_populate[2]["current_access_labels"] == set()
+
+    # access fix pass happens after wait_user_ptr (current set() != desired)
+    wait_idx = next(i for i, c in enumerate(calls) if isinstance(c, tuple) and c[0] == "wait_user_ptr")
+    searches_after_wait = [c for c in calls[wait_idx:] if isinstance(c, tuple) and c[0] == "search"]
+    assert searches_after_wait, "access fix pass must search after creation"
+    edits_after_wait = [c for c in calls[wait_idx:] if isinstance(c, tuple) and c[0] == "open_edit"]
+    assert edits_after_wait, "access fix pass must open edit window"
+
+    assert ("verify", 8881, "A123AA77", None) in calls
+
+
+def test_add_vehicle_key_via_gateterm_ui_updates_existing_user(monkeypatch):
+    """Existing user: search then edit, access labels passed to editor, no access-fix pass."""
+    calls: list[object] = []
+    fake_app = object()
+    fake_users_window = object()
+    fake_edit_window = object()
+
+    monkeypatch.setattr(
+        gate_runtime,
+        "_load_vehicle_ui_provisioning_context",
+        lambda **kwargs: {
+            "existing_user_ptr": 5001,
+            "vehicle_key_type_value": 3,
+            "desired_access_labels": {"камера въезда", "камера выезда"},
+            "current_access_labels": {"камера въезда"},
+        },
+    )
+    monkeypatch.setattr(gate_runtime, "_connect_or_start_gateterm_application", lambda: calls.append("connect") or fake_app)
+    monkeypatch.setattr(gate_runtime, "_prepare_gateterm_users_workspace", lambda app: calls.append(("prepare", app)))
+    monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: calls.append(("open_users", app)) or fake_users_window)
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: calls.append(("close_users", app)))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_search_gateterm_user_by_key_number",
+        lambda app, users_window, key: calls.append(("search", app, users_window, key)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_open_gateterm_user_edit_window",
+        lambda app, users_window: calls.append(("open_edit", app, users_window)) or fake_edit_window,
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_populate_gateterm_vehicle_pass_editor",
+        lambda window, **kwargs: calls.append(("populate", window, kwargs)),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_click_gateterm_control",
+        lambda window, control_id, *class_names: calls.append(("click", window, control_id, class_names)),
+    )
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_vehicle_user_edit_save", lambda app: calls.append(("finalize_vehicle_edit", app)))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_wait_for_vehicle_user_ptr",
+        lambda **kwargs: calls.append(("wait_user_ptr", kwargs)) or 5001,
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_verify_vehicle_identity_persisted",
+        lambda user_ptr, key, number_u: calls.append(("verify", user_ptr, key, number_u)),
+    )
+    monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(_fake_noop_cursor()))
+
+    result = gate_runtime.add_vehicle_key_via_gateterm_ui(
+        key_value="B456BB77",
+        expires_at=None,
+        access_point_ids=[19, 20],
+        resident_name="Житель Существующий",
+        plot_number="10",
+        phone_number="+79000000001",
+    )
+
+    assert result == 5001
+    # no open_new call for existing user
+    assert not any(isinstance(c, tuple) and c[0] == "open_new" for c in calls)
+
+    open_users_idx = calls.index(("open_users", fake_app))
+    search_idx = next(i for i, c in enumerate(calls) if isinstance(c, tuple) and c[0] == "search")
+    open_edit_idx = next(i for i, c in enumerate(calls) if isinstance(c, tuple) and c[0] == "open_edit")
+    assert search_idx == open_users_idx + 1
+    assert open_edit_idx == search_idx + 1
+
+    populate_call = next(c for c in calls if isinstance(c, tuple) and c[0] == "populate")
+    assert populate_call[1] is fake_edit_window
+    assert populate_call[2]["desired_access_labels"] == {"камера въезда", "камера выезда"}
+    assert populate_call[2]["current_access_labels"] == {"камера въезда"}
+    assert populate_call[2]["phone_number"] == "+79000000001"
+
+    # no second open_edit after wait_user_ptr (access fix not needed for existing user)
+    wait_idx = next(i for i, c in enumerate(calls) if isinstance(c, tuple) and c[0] == "wait_user_ptr")
+    assert not any(isinstance(c, tuple) and c[0] == "open_edit" for c in calls[wait_idx:])
+
+    assert ("verify", 5001, "B456BB77", None) in calls
+
+
+def test_add_vehicle_key_via_gateterm_ui_mdb_patch_sets_expiry_only(monkeypatch):
+    """MDB patch after UI must only touch expiry/visitor/status — no phone, name, or access."""
+    fake_app = object()
+    fake_users_window = object()
+    fake_window = object()
+    mdb_cursor = _FakeCursor()
+
+    monkeypatch.setattr(
+        gate_runtime,
+        "_load_vehicle_ui_provisioning_context",
+        lambda **kwargs: {
+            "existing_user_ptr": None,
+            "vehicle_key_type_value": 3,
+            "desired_access_labels": set(),
+            "current_access_labels": set(),
+        },
+    )
+    monkeypatch.setattr(gate_runtime, "_connect_or_start_gateterm_application", lambda: fake_app)
+    monkeypatch.setattr(gate_runtime, "_prepare_gateterm_users_workspace", lambda app: None)
+    monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: fake_users_window)
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: None)
+    monkeypatch.setattr(gate_runtime, "_search_gateterm_user_by_key_number", lambda *a: None)
+    monkeypatch.setattr(gate_runtime, "_open_gateterm_new_user_window", lambda *a: fake_window)
+    monkeypatch.setattr(gate_runtime, "_populate_gateterm_vehicle_pass_editor", lambda *a, **kw: None)
+    monkeypatch.setattr(gate_runtime, "_click_gateterm_control", lambda *a: None)
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_new_user_save", lambda app: None)
+    monkeypatch.setattr(gate_runtime, "_wait_for_vehicle_user_ptr", lambda **kw: 9999)
+    monkeypatch.setattr(gate_runtime, "_verify_vehicle_identity_persisted", lambda *a: None)
+    monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(mdb_cursor))
+
+    gate_runtime.add_vehicle_key_via_gateterm_ui(
+        key_value="C789CC99",
+        expires_at=None,
+        access_point_ids=[19, 20],
+        resident_name="Любой Житель",
+        plot_number=None,
+        phone_number="+79001112233",
+    )
+
+    executed_sqls = " ".join(sql for sql, _ in mdb_cursor.commands)
+
+    # expiry/status fields must be present
+    assert "UseExpiry" in executed_sqls
+    assert "Visitor" in executed_sqls
+    assert "Status" in executed_sqls
+
+    # phone, name, and access must NOT be patched via MDB
+    assert "Phone" not in executed_sqls, "phone must be set via GateTerm UI, not MDB"
+    assert "LastName" not in executed_sqls, "name must be set via GateTerm UI, not MDB"
+    assert "AccessTable" not in executed_sqls, "access must be set via GateTerm UI, not MDB"
+
+
+# ---------------------------------------------------------------------------
+# _configure_gateterm_phone_access_permissions — LB_GETITEMDATA-based state
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_access_listbox(item_names: list[str], checked_indices: set[int]):
+    """Return a fake listbox whose LB_GETITEMDATA returns 1 for checked_indices."""
+
+    class _FakeRect:
+        top = 0
+        bottom = 20
+
+    class _FakeListbox:
+        handle = 7777
+
+        def item_texts(self):
+            return list(item_names)
+
+        def item_rect(self, index):
+            return _FakeRect()
+
+        def click_input(self, coords):
+            _FakeListbox.clicks.append(coords)
+
+        clicks: list = []
+
+    _FakeListbox.clicks = []
+    return _FakeListbox()
+
+
+def test_configure_gateterm_phone_access_reads_actual_ui_state_via_lb_getitemdata(monkeypatch):
+    """When GateTerm has all items checked, only unchecked the ones not in desired."""
+    # UI has all three items checked (cameras + wicket)
+    item_names = ["Камера Въезда", "Камера Выезда", "Калитка Север"]
+    fake_lb = _make_fake_access_listbox(item_names, checked_indices={0, 1, 2})
+
+    lb_calls: list[tuple] = []
+
+    def _fake_lb_getitemdata(hwnd, index):
+        lb_calls.append((hwnd, index))
+        return 1  # all checked in UI
+
+    monkeypatch.setattr(gate_runtime, "_lb_getitemdata", _fake_lb_getitemdata)
+    monkeypatch.setattr(gate_runtime, "_select_gateterm_user_editor_tab", lambda *a: None)
+    monkeypatch.setattr(gate_runtime, "_visible_gateterm_control_by_id", lambda *a, **kw: fake_lb)
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_: None)
+
+    # desired: cameras only; DB current=set() (new user) — DB state must be ignored
+    gate_runtime._configure_gateterm_phone_access_permissions(
+        object(),
+        desired_access_labels={"камера въезда", "камера выезда"},
+        current_access_labels=set(),
+    )
+
+    # toggle_labels = desired ^ actual = {cameras} ^ {cameras, wicket} = {wicket}
+    # Only one click: uncheck the wicket
+    assert len(fake_lb.clicks) == 1, "only the wicket item should be unchecked"
+    assert len(lb_calls) == 3, "LB_GETITEMDATA must be called for each item"
+
+
+def test_configure_gateterm_phone_access_checks_cameras_when_all_unchecked(monkeypatch):
+    """When GateTerm starts with all items unchecked, check only desired cameras."""
+    item_names = ["Камера Въезда", "Камера Выезда", "Калитка Север"]
+    fake_lb = _make_fake_access_listbox(item_names, checked_indices=set())
+
+    monkeypatch.setattr(gate_runtime, "_lb_getitemdata", lambda hwnd, index: 0)  # all unchecked
+    monkeypatch.setattr(gate_runtime, "_select_gateterm_user_editor_tab", lambda *a: None)
+    monkeypatch.setattr(gate_runtime, "_visible_gateterm_control_by_id", lambda *a, **kw: fake_lb)
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_: None)
+
+    gate_runtime._configure_gateterm_phone_access_permissions(
+        object(),
+        desired_access_labels={"камера въезда", "камера выезда"},
+        current_access_labels=set(),
+    )
+
+    # toggle_labels = {cameras} ^ {} = {cameras} — two clicks to check both cameras
+    assert len(fake_lb.clicks) == 2, "both camera items should be checked"
+
+
+def test_configure_gateterm_phone_access_no_op_when_already_correct(monkeypatch):
+    """No clicks when UI already matches desired state."""
+    item_names = ["Камера Въезда", "Камера Выезда", "Калитка Север"]
+    fake_lb = _make_fake_access_listbox(item_names, checked_indices=set())
+
+    # UI: cameras checked, wicket unchecked
+    def _fake_lb(hwnd, index):
+        return 1 if item_names[index].lower().startswith("камера") else 0
+
+    monkeypatch.setattr(gate_runtime, "_lb_getitemdata", _fake_lb)
+    monkeypatch.setattr(gate_runtime, "_select_gateterm_user_editor_tab", lambda *a: None)
+    monkeypatch.setattr(gate_runtime, "_visible_gateterm_control_by_id", lambda *a, **kw: fake_lb)
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_: None)
+
+    gate_runtime._configure_gateterm_phone_access_permissions(
+        object(),
+        desired_access_labels={"камера въезда", "камера выезда"},
+        current_access_labels=set(),
+    )
+
+    assert len(fake_lb.clicks) == 0, "no clicks when UI already matches desired state"
+
+
+def test_configure_gateterm_phone_access_falls_back_to_db_state_on_lb_error(monkeypatch):
+    """On LB_GETITEMDATA failure, fall back to DB-based symmetric_difference."""
+    item_names = ["Камера Въезда", "Камера Выезда", "Калитка Север"]
+    fake_lb = _make_fake_access_listbox(item_names, checked_indices=set())
+
+    def _failing_lb(hwnd, index):
+        raise OSError("win32 failure")
+
+    monkeypatch.setattr(gate_runtime, "_lb_getitemdata", _failing_lb)
+    monkeypatch.setattr(gate_runtime, "_select_gateterm_user_editor_tab", lambda *a: None)
+    monkeypatch.setattr(gate_runtime, "_visible_gateterm_control_by_id", lambda *a, **kw: fake_lb)
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_: None)
+
+    # DB current: wicket checked (canonical label for "Калитка Север" is "северная калитка")
+    # fallback toggle = {cameras} ^ {northern wicket} = all three
+    gate_runtime._configure_gateterm_phone_access_permissions(
+        object(),
+        desired_access_labels={"камера въезда", "камера выезда"},
+        current_access_labels={"северная калитка"},
+    )
+
+    assert len(fake_lb.clicks) == 3, "fallback should toggle all three (cameras to check, wicket to uncheck)"

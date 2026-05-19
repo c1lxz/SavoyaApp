@@ -43,6 +43,9 @@ _GATETERM_USER_SEARCH_WINDOW_TITLE = "Поиск пользователя"
 _GATETERM_USER_EDIT_WINDOW_TITLE = "Изменение пользователя"
 _GATETERM_USER_SEARCH_FIELD_KEY_NUMBER = "Номер ключа"
 _GATETERM_USER_SEARCH_FIELD_KEY_NUMBER_INDEX = 4
+# Short dummy value used to initialise GateTerm's internal list object before clicking Add.
+# The actual content does not matter — it just needs to trigger the search dialog flow.
+_GATETERM_SEARCH_INIT_DUMMY_VALUE = "157/42325"
 _GATETERM_LOGIN_WINDOW_TITLE = "Регистрация оператора"
 _GATETERM_USER_EDITOR_TAB_OFFSETS = {
     "key": 40,
@@ -2054,22 +2057,23 @@ def add_vehicle_key_via_gateterm_ui(
 
     user_ptr: int | None = None
     for attempt_index in range(attempts):
+        context = _load_vehicle_ui_provisioning_context(
+            normalized_key_value=normalized_key_value,
+            access_point_ids=validated_points,
+        )
         app: Any | None = None
         try:
-            with _readonly_cursor() as (_, cursor):
-                vehicle_key_type_value = _sample_key_type(cursor, "VehicleNumber", validated_points)
-                existing_user_ptr = _find_existing_user_ptr(
-                    cursor,
-                    "VehicleNumber",
-                    normalized_key_value,
-                    key_type_value=vehicle_key_type_value,
-                )
-
             app = _connect_or_start_gateterm_application()
             _prepare_gateterm_users_workspace(app)
             users_window = _open_gateterm_users_view(app)
 
-            if existing_user_ptr is None:
+            created_via_new_dialog = context["existing_user_ptr"] is None
+            if created_via_new_dialog:
+                # Search with a short dummy value to initialise GateTerm's internal list
+                # object before clicking Add.  Using the real plate number here would be
+                # wrong — the user doesn't exist yet and a long string is unnecessary.
+                # Any non-empty value that triggers the search dialog is sufficient.
+                _search_gateterm_user_by_key_number(app, users_window, _GATETERM_SEARCH_INIT_DUMMY_VALUE)
                 editor_window = _open_gateterm_new_user_window(app, users_window)
                 finalize_save = _finalize_gateterm_new_user_save
             else:
@@ -2082,19 +2086,48 @@ def add_vehicle_key_via_gateterm_ui(
                 normalized_key_value=normalized_key_value,
                 resident_name=resident_name,
                 plot_number=plot_number,
+                phone_number=phone_number,
+                desired_access_labels=set(context["desired_access_labels"]),
+                current_access_labels=set(context.get("current_access_labels") or set()),
             )
             _click_gateterm_control(editor_window, 1, "ThunderRT6CommandButton", "Button")
             time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_DELAY_SECONDS", 0.75))
             finalize_save(app)
 
-            with _readonly_cursor() as (_, cursor):
-                vehicle_key_type_value = _sample_key_type(cursor, "VehicleNumber", validated_points)
             user_ptr = _wait_for_vehicle_user_ptr(
                 normalized_key_value=normalized_key_value,
-                vehicle_key_type_value=vehicle_key_type_value,
+                vehicle_key_type_value=context["vehicle_key_type_value"],
                 timeout_seconds=_env_float("GATE_GATETERM_UI_CREATE_VERIFY_TIMEOUT_SECONDS", 12.0),
             )
 
+            if created_via_new_dialog:
+                refreshed_context = _load_vehicle_ui_provisioning_context(
+                    normalized_key_value=normalized_key_value,
+                    access_point_ids=validated_points,
+                )
+                desired_access_labels = set(refreshed_context["desired_access_labels"])
+                current_access_labels = set(refreshed_context.get("current_access_labels") or set())
+                if current_access_labels != desired_access_labels:
+                    _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
+                    editor_window = _open_gateterm_user_edit_window(app, users_window)
+                    _populate_gateterm_vehicle_pass_editor(
+                        editor_window,
+                        normalized_key_value=normalized_key_value,
+                        resident_name=resident_name,
+                        plot_number=plot_number,
+                        phone_number=phone_number,
+                        desired_access_labels=desired_access_labels,
+                        current_access_labels=current_access_labels,
+                    )
+                    _click_gateterm_control(editor_window, 1, "ThunderRT6CommandButton", "Button")
+                    time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_DELAY_SECONDS", 0.75))
+                    _finalize_gateterm_vehicle_user_edit_save(app)
+
+            _verify_vehicle_identity_persisted(
+                user_ptr,
+                normalized_key_value,
+                None,
+            )
             try:
                 _close_gateterm_users_window_if_open(app)
             except Exception:
@@ -2117,9 +2150,8 @@ def add_vehicle_key_via_gateterm_ui(
     if user_ptr is None:
         raise RuntimeError("GateTerm vehicle provisioning failed unexpectedly")
 
-    # MDB field patch (expiry, phone, name, access permissions) is best-effort.
-    # If it fails the pass is still registered in the app DB under user_ptr and
-    # the background repair will correct the Gate record on the next maintenance pass.
+    # MDB patch: expiry, visitor flag, and status only.
+    # Name, phone, and access permissions are now set via the GateTerm UI above.
     try:
         with _transaction_cursor() as (_, cursor):
             expiry_date, expiry_time = _split_access_expiry(expires_at, key_type="VehicleNumber")
@@ -2141,13 +2173,6 @@ def add_vehicle_key_via_gateterm_ui(
                     user_ptr,
                 ),
             )
-            if phone_number is not None:
-                cursor.execute(
-                    "UPDATE Users SET Phone = ? WHERE UserPtr = ?",
-                    (_normalize_contact_phone(phone_number), user_ptr),
-                )
-            _set_gate_user_name_fields(cursor, user_ptr=user_ptr, resident_name=resident_name)
-            _ensure_access_permissions(cursor, user_ptr, validated_points, key_type="VehicleNumber")
     except Exception as exc:
         import sys as _sys
         print(
@@ -3670,7 +3695,20 @@ def _close_gateterm_user_edit_window_if_open(app: Any) -> None:
 
 
 def _close_gateterm_new_user_window_if_open(app: Any) -> None:
-    _close_gateterm_window_if_open(
+    new_user_window = _find_gateterm_window(app, _GATETERM_NEW_USER_WINDOW_TITLE)
+    if new_user_window is None:
+        return
+    # Click the Cancel button (id=2) so GateTerm's own form-close code runs cleanly.
+    # Sending WM_CLOSE / Alt+F4 bypasses the VB6 Unload handler and triggers Error 91.
+    try:
+        _click_gateterm_control(new_user_window, 2, "ThunderRT6CommandButton", "Button")
+    except Exception:
+        if _window_still_open(app, _GATETERM_NEW_USER_WINDOW_TITLE):
+            _dismiss_gateterm_window_via_escape(app, _GATETERM_NEW_USER_WINDOW_TITLE)
+    _close_gateterm_message_boxes_if_open(app)
+    if not _window_still_open(app, _GATETERM_NEW_USER_WINDOW_TITLE):
+        return
+    _wait_for_gateterm_window_to_close(
         app,
         _GATETERM_NEW_USER_WINDOW_TITLE,
         timeout_seconds=_env_float("GATE_GATETERM_UI_NEW_USER_CLOSE_DELAY_SECONDS", 1.2),
@@ -3972,6 +4010,16 @@ def _open_gateterm_new_user_window(app: Any, users_window: Any) -> Any:
     if new_user_window is not None:
         return new_user_window
 
+    # VB6 runtime errors (e.g. Error 91 "Object variable not set") produce an error
+    # dialog instead of opening the new-user window.  Dismiss it now so the outer
+    # retry loop gets a clean workspace on the next attempt.
+    if _gateterm_dialog_windows(app):
+        _close_gateterm_message_boxes_if_open(app)
+        raise RuntimeError(
+            "GateTerm error dialog appeared instead of new-user window (menu attempt); "
+            f"attempts={attempts!r}; open windows={_list_gateterm_windows(app)!r}"
+        )
+
     users_window.set_focus()
     try:
         users_window.type_keys("^n")
@@ -3985,6 +4033,14 @@ def _open_gateterm_new_user_window(app: Any, users_window: Any) -> Any:
     )
     if new_user_window is not None:
         return new_user_window
+
+    # Same check for the hotkey attempt.
+    if _gateterm_dialog_windows(app):
+        _close_gateterm_message_boxes_if_open(app)
+        raise RuntimeError(
+            "GateTerm error dialog appeared instead of new-user window (hotkey attempt); "
+            f"attempts={attempts!r}; open windows={_list_gateterm_windows(app)!r}"
+        )
 
     raise RuntimeError(
         "GateTerm new-user window did not open; "
@@ -4077,6 +4133,36 @@ def _set_gateterm_text_input(control: Any, value: str, *, field_name: str) -> No
         # GateTerm commits the key-number edit only after the field loses focus.
         if hasattr(control, "type_keys"):
             control.type_keys("{TAB}")
+    except Exception as exc:
+        raise RuntimeError(f"GateTerm {field_name} input failed: {exc}") from exc
+
+
+def _em_replacesel(hwnd: int, value: str) -> None:
+    """Replace all text in a Win32 edit control atomically, firing EN_CHANGE exactly once.
+
+    EM_SETSEL selects all existing text; EM_REPLACESEL replaces it with *value* in one
+    operation.  Unlike Ctrl+V, this does not depend on the clipboard and is reliable in
+    VB6 ThunderRT6TextBox controls where SendMessage is processed synchronously.
+    """
+    import ctypes
+    EM_SETSEL = 0x00B1
+    EM_REPLACESEL = 0x00C2
+    buf = ctypes.create_unicode_buffer(value)
+    ctypes.windll.user32.SendMessageW(hwnd, EM_SETSEL, 0, -1)
+    ctypes.windll.user32.SendMessageW(hwnd, EM_REPLACESEL, 1, ctypes.addressof(buf))
+
+
+def _type_gateterm_field(control: Any, value: str, *, field_name: str) -> None:
+    """Fill a GateTerm VB6 TextBox via EM_REPLACESEL so Change fires exactly once.
+
+    EM_REPLACESEL is more reliable than Ctrl+V in VB6 ThunderRT6TextBox controls and
+    avoids the per-keystroke Change events that cause GateTerm to insert separator
+    characters (e.g. '/' in vehicle plate numbers) mid-input.
+    """
+    try:
+        control.set_focus()
+        _em_replacesel(int(control.handle), value)
+        control.type_keys("{TAB}")
     except Exception as exc:
         raise RuntimeError(f"GateTerm {field_name} input failed: {exc}") from exc
 
@@ -4327,6 +4413,48 @@ def _load_phone_ui_provisioning_context(
     }
 
 
+def _load_vehicle_ui_provisioning_context(
+    *,
+    normalized_key_value: str,
+    access_point_ids: Iterable[int],
+) -> dict[str, Any]:
+    with _readonly_cursor() as (_, cursor):
+        vehicle_key_type_value = _sample_key_type(cursor, "VehicleNumber", access_point_ids)
+        existing_user_ptr = _find_existing_user_ptr(
+            cursor,
+            "VehicleNumber",
+            normalized_key_value,
+            key_type_value=vehicle_key_type_value,
+        )
+        desired_access_labels = _resolve_gateterm_access_labels(cursor, access_point_ids)
+        current_access_labels: set[str] = set()
+        if existing_user_ptr is not None:
+            access_rows = cursor.execute(
+                "SELECT RdrPtr FROM AccessTable WHERE UserPtr = ? ORDER BY RdrPtr",
+                (int(existing_user_ptr),),
+            ).fetchall()
+            current_access_labels = _resolve_gateterm_access_labels(
+                cursor,
+                [int(getattr(r, "RdrPtr", r[0])) for r in access_rows],
+            )
+    return {
+        "existing_user_ptr": existing_user_ptr,
+        "vehicle_key_type_value": vehicle_key_type_value,
+        "desired_access_labels": desired_access_labels,
+        "current_access_labels": current_access_labels,
+    }
+
+
+def _lb_getitemdata(hwnd: int, index: int) -> int:
+    """Return the check state of a VB6 CheckListBox item via Win32 LB_GETITEMDATA.
+
+    Returns 0 (unchecked), 1 (checked), 2 (grayed), or -1 (LB_ERR / error).
+    """
+    import ctypes
+    LB_GETITEMDATA = 0x0199
+    return ctypes.windll.user32.SendMessageW(hwnd, LB_GETITEMDATA, index, 0)
+
+
 def _configure_gateterm_phone_access_permissions(
     window: Any,
     *,
@@ -4351,11 +4479,24 @@ def _configure_gateterm_phone_access_permissions(
             f"{missing_labels!r}; available={sorted(available_labels)!r}"
         )
 
-    checkbox_offset_x = _env_int("GATE_GATETERM_UI_ACCESS_CHECKBOX_X", 8)
-    toggle_labels = desired_access_labels.symmetric_difference(current_access_labels)
+    # Read actual checked state from the UI rather than relying on DB state.
+    # For new users, DB state is empty while GateTerm may start with all items checked —
+    # using DB-based symmetric_difference would produce a wrong toggle set in that case.
+    try:
+        hwnd = int(listbox.handle)
+        actual_checked_labels: set[str] = set()
+        for index, item_text in enumerate(item_texts):
+            data = _lb_getitemdata(hwnd, index)
+            if data == 1:
+                actual_checked_labels.add(_canonical_gateterm_access_label(item_text))
+        toggle_labels = desired_access_labels.symmetric_difference(actual_checked_labels)
+    except Exception:
+        toggle_labels = desired_access_labels.symmetric_difference(current_access_labels)
+
     if not toggle_labels:
         return
 
+    checkbox_offset_x = _env_int("GATE_GATETERM_UI_ACCESS_CHECKBOX_X", 8)
     for index, item_text in enumerate(item_texts):
         current_label = _canonical_gateterm_access_label(item_text)
         if current_label not in toggle_labels:
@@ -4451,6 +4592,9 @@ def _populate_gateterm_vehicle_pass_editor(
     normalized_key_value: str,
     resident_name: str | None,
     plot_number: str | None = None,
+    phone_number: str | None = None,
+    desired_access_labels: set[str] | None = None,
+    current_access_labels: set[str] | None = None,
 ) -> None:
     normalized_resident_name = _compose_gate_user_name(resident_name)
     if normalized_resident_name is not None:
@@ -4492,16 +4636,35 @@ def _populate_gateterm_vehicle_pass_editor(
         False,
         field_name="vehicle key facility embedding",
     )
-    # GateTerm vehicle keys must be typed in the Latin canonical plate form, not Cyrillic lookalikes.
+    # GateTerm vehicle keys must be in the Latin canonical plate form, not Cyrillic lookalikes.
+    # Use type_keys so the VB6 TextBox_Change event fires — set_edit_text (WM_SETTEXT) bypasses it.
     latin_key_value = _normalize_vehicle(normalized_key_value)
-    _set_gateterm_user_key_number(window, latin_key_value)
+    _type_gateterm_field(
+        _visible_gateterm_control_by_id(window, 88, "ThunderRT6TextBox", "Edit"),
+        latin_key_value,
+        field_name="vehicle key number",
+    )
 
-    if plot_number is not None:
+    if plot_number is not None or phone_number is not None:
         _select_gateterm_user_editor_tab(window, "info")
-        _set_gateterm_text_input(
-            _visible_gateterm_control_by_id(window, 68, "ThunderRT6TextBox", "Edit"),
-            str(_normalize_gate_detail(plot_number) or ""),
-            field_name="resident plot number",
+        if plot_number is not None:
+            _set_gateterm_text_input(
+                _visible_gateterm_control_by_id(window, 68, "ThunderRT6TextBox", "Edit"),
+                str(_normalize_gate_detail(plot_number) or ""),
+                field_name="resident plot number",
+            )
+        if phone_number is not None:
+            _set_gateterm_text_input(
+                _visible_gateterm_control_by_id(window, 66, "ThunderRT6TextBox", "Edit"),
+                str(_normalize_contact_phone(phone_number) or ""),
+                field_name="resident contact phone",
+            )
+
+    if desired_access_labels:
+        _configure_gateterm_phone_access_permissions(
+            window,
+            desired_access_labels=desired_access_labels,
+            current_access_labels=current_access_labels or set(),
         )
 
 
