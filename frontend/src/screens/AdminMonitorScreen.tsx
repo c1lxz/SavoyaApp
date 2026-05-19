@@ -15,6 +15,7 @@ import { AdminMonitorEventItem, RequestState } from '@/types';
 import { goBackOrHome } from '@/utils/backNavigation';
 import { formatDateTime } from '@/utils/date';
 import { getLayoutMetrics } from '@/utils/layout';
+import { formatVehicleLabel } from '@/utils/vehicleCountry';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AdminMonitor'>;
 
@@ -65,6 +66,18 @@ const statusLabel = (item: AdminMonitorEventItem): string => {
 const actorName = (item: AdminMonitorEventItem): string =>
   item.actorName || item.actorLogin || item.gateName || 'Не определён';
 
+const monitorKeyValueLabel = (item: AdminMonitorEventItem): string | null => {
+  const value = (item.keyValue ?? '').trim();
+  if (!value) {
+    return null;
+  }
+  // actorName may fall back to gateName, which can already embed the key value.
+  if (actorName(item).includes(value)) {
+    return null;
+  }
+  return item.keyType === 'VehicleNumber' ? formatVehicleLabel(value) : value;
+};
+
 const pointName = (item: AdminMonitorEventItem): string =>
   item.accessPointName || item.gateUnit || (item.accessPointId ? `Точка ${item.accessPointId}` : '-');
 
@@ -103,13 +116,21 @@ const TableCell = ({
   </View>
 );
 
-const MonitorActorCell = ({ item }: { item: AdminMonitorEventItem }) => (
-  <View style={styles.actorCell}>
-    <Text numberOfLines={2} style={styles.actorNameText}>
-      {actorName(item)}
-    </Text>
-  </View>
-);
+const MonitorActorCell = ({ item }: { item: AdminMonitorEventItem }) => {
+  const keyValueLabel = monitorKeyValueLabel(item);
+  return (
+    <View style={styles.actorCell}>
+      <Text numberOfLines={2} style={styles.actorNameText}>
+        {actorName(item)}
+      </Text>
+      {keyValueLabel ? (
+        <Text numberOfLines={1} style={styles.actorKeyText}>
+          {keyValueLabel}
+        </Text>
+      ) : null}
+    </View>
+  );
+};
 
 const MonitorTable = ({ events }: { events: AdminMonitorEventItem[] }) => (
   <ScrollView horizontal showsHorizontalScrollIndicator>
@@ -346,6 +367,12 @@ const styles = StyleSheet.create({
   actorNameText: {
     color: theme.colors.textSecondary,
     fontSize: 14,
+    lineHeight: 18,
+  },
+  actorKeyText: {
+    color: theme.colors.textPrimary,
+    fontSize: 14,
+    fontWeight: '700',
     lineHeight: 18,
   },
 });

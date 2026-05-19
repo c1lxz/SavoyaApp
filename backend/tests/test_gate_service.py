@@ -12,7 +12,9 @@ from backend.app.services import gate
 @pytest.mark.parametrize(
     ("real_integration_enabled", "key_type", "expected_actions"),
     [
-        (True, "VehicleNumber", ["add_permanent_key", "post_sync_vehicle_key"]),
+        # VehicleNumber keys are provisioned entirely inside add_permanent_key's bridge
+        # action (via GateTerm UI in gate_runtime.py); there is no separate post-sync step.
+        (True, "VehicleNumber", ["add_permanent_key"]),
         (True, "Phone", ["add_permanent_key", "post_sync_phone_key"]),
         (False, "VehicleNumber", []),
     ],
@@ -48,51 +50,19 @@ def test_add_permanent_key_vehicle_post_sync_only_for_real_integration(
     assert actions == expected_actions
 
 
-def test_add_permanent_key_removes_created_vehicle_key_when_post_sync_fails(monkeypatch) -> None:
+def test_add_permanent_key_does_not_call_post_sync_for_vehicle_keys(monkeypatch) -> None:
+    """VehicleNumber keys must not trigger any separate post-sync action — provisioning
+    happens fully inside the add_permanent_key bridge action via GateTerm UI."""
     client = gate.GateClient()
     actions: list[str] = []
 
     monkeypatch.setattr(gate.settings, "gate_real_integration_enabled", True)
-    monkeypatch.setattr(gate.settings, "gate_vehicle_post_sync_required", True)
 
     def _fake_run_bridge(action: str, payload=None):
         actions.append(action)
         if action == "add_permanent_key":
             return 321
-        if action == "post_sync_vehicle_key":
-            raise RuntimeError("post-sync failed")
-        if action == "remove_key":
-            return True
-        raise AssertionError(action)
-
-    monkeypatch.setattr(client, "_run_bridge", _fake_run_bridge)
-
-    with pytest.raises(RuntimeError, match="post-sync failed"):
-        client.add_permanent_key(
-            key_type="VehicleNumber",
-            key_value="A123AA77",
-            phone_number="+79991234567",
-            access_point_ids=[1],
-            resident_name="Test User",
-        )
-
-    assert actions == ["add_permanent_key", "post_sync_vehicle_key", "remove_key"]
-
-
-def test_add_permanent_key_keeps_created_vehicle_key_when_post_sync_fails_in_best_effort_mode(monkeypatch) -> None:
-    client = gate.GateClient()
-    actions: list[str] = []
-
-    monkeypatch.setattr(gate.settings, "gate_real_integration_enabled", True)
-    monkeypatch.setattr(gate.settings, "gate_vehicle_post_sync_required", False)
-
-    def _fake_run_bridge(action: str, payload=None):
-        actions.append(action)
-        if action == "add_permanent_key":
-            return 321
-        if action == "post_sync_vehicle_key":
-            raise RuntimeError("post-sync failed")
-        raise AssertionError(action)
+        raise AssertionError(f"unexpected bridge action for vehicle key: {action}")
 
     monkeypatch.setattr(client, "_run_bridge", _fake_run_bridge)
 
@@ -105,7 +75,7 @@ def test_add_permanent_key_keeps_created_vehicle_key_when_post_sync_fails_in_bes
     )
 
     assert result == 321
-    assert actions == ["add_permanent_key", "post_sync_vehicle_key"]
+    assert actions == ["add_permanent_key"]
 
 
 def test_add_permanent_key_keeps_created_phone_key_when_post_sync_fails(monkeypatch) -> None:

@@ -940,6 +940,21 @@ def test_admin_created_user_can_add_vehicle_pass_without_replacing_phone_pass(cl
         'backend.app.services.gate_linking.gate_client.get_key_permissions',
         lambda external_key_id: [],
     )
+    # Vehicle passes are routed to camera-only access points by
+    # compatibility._runtime_vehicle_camera_access_point_ids, which queries
+    # gate_client.get_access_points.  Provide a deterministic camera set.
+    monkeypatch.setattr(
+        'backend.app.routers.compatibility.settings.gate_real_integration_enabled',
+        True,
+    )
+    monkeypatch.setattr(
+        'backend.app.routers.compatibility.gate_client.get_access_points',
+        lambda: [
+            {'id': 19, 'name': 'Камера Въезда'},
+            {'id': 20, 'name': 'Камера Выезда'},
+            {'id': 15, 'name': 'Считыватель Северная калитка'},
+        ],
+    )
 
     def _fake_add_permanent_key(**kwargs):
         captured_gate_calls.append(dict(kwargs))
@@ -1019,7 +1034,8 @@ def test_admin_created_user_can_add_vehicle_pass_without_replacing_phone_pass(cl
         'key_type': 'VehicleNumber',
         'key_value': vehicle_number,
         'phone_number': phone_number,
-        'access_point_ids': list(get_settings().default_access_point_ids),
+        # Vehicle passes are restricted to the entry/exit cameras only.
+        'access_point_ids': [19, 20],
         'resident_name': 'Resident Vehicle',
         'plot_number': plot_number,
     }
