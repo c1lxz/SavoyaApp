@@ -4137,35 +4137,6 @@ def _set_gateterm_text_input(control: Any, value: str, *, field_name: str) -> No
         raise RuntimeError(f"GateTerm {field_name} input failed: {exc}") from exc
 
 
-def _em_replacesel(hwnd: int, value: str) -> None:
-    """Replace all text in a Win32 edit control atomically, firing EN_CHANGE exactly once.
-
-    EM_SETSEL selects all existing text; EM_REPLACESEL replaces it with *value* in one
-    operation.  Unlike Ctrl+V, this does not depend on the clipboard and is reliable in
-    VB6 ThunderRT6TextBox controls where SendMessage is processed synchronously.
-    """
-    import ctypes
-    EM_SETSEL = 0x00B1
-    EM_REPLACESEL = 0x00C2
-    buf = ctypes.create_unicode_buffer(value)
-    ctypes.windll.user32.SendMessageW(hwnd, EM_SETSEL, 0, -1)
-    ctypes.windll.user32.SendMessageW(hwnd, EM_REPLACESEL, 1, ctypes.addressof(buf))
-
-
-def _type_gateterm_field(control: Any, value: str, *, field_name: str) -> None:
-    """Fill a GateTerm VB6 TextBox via EM_REPLACESEL so Change fires exactly once.
-
-    EM_REPLACESEL is more reliable than Ctrl+V in VB6 ThunderRT6TextBox controls and
-    avoids the per-keystroke Change events that cause GateTerm to insert separator
-    characters (e.g. '/' in vehicle plate numbers) mid-input.
-    """
-    try:
-        control.set_focus()
-        _em_replacesel(int(control.handle), value)
-        control.type_keys("{TAB}")
-    except Exception as exc:
-        raise RuntimeError(f"GateTerm {field_name} input failed: {exc}") from exc
-
 
 def _set_gateterm_combo_value(control: Any, value: str, *, field_name: str) -> None:
     try:
@@ -4636,10 +4607,8 @@ def _populate_gateterm_vehicle_pass_editor(
         False,
         field_name="vehicle key facility embedding",
     )
-    # GateTerm vehicle keys must be in the Latin canonical plate form, not Cyrillic lookalikes.
-    # Use type_keys so the VB6 TextBox_Change event fires — set_edit_text (WM_SETTEXT) bypasses it.
     latin_key_value = _normalize_vehicle(normalized_key_value)
-    _type_gateterm_field(
+    _set_gateterm_text_input(
         _visible_gateterm_control_by_id(window, 88, "ThunderRT6TextBox", "Edit"),
         latin_key_value,
         field_name="vehicle key number",

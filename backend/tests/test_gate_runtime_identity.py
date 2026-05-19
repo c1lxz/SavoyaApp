@@ -3058,12 +3058,6 @@ def test_populate_gateterm_vehicle_pass_editor_types_latin_plate(monkeypatch):
         lambda _window, tab_name: calls.append(("tab", tab_name)),
     )
 
-    monkeypatch.setattr(
-        gate_runtime,
-        "_type_gateterm_field",
-        lambda control, value, *, field_name: calls.append(("type_keys", control, value, field_name)),
-    )
-
     gate_runtime._populate_gateterm_vehicle_pass_editor(
         object(),
         normalized_key_value="\u0420 234 \u041e\u041a 77",
@@ -3075,8 +3069,8 @@ def test_populate_gateterm_vehicle_pass_editor_types_latin_plate(monkeypatch):
     assert ("tab", "key") in calls
     assert ("combo", ("control", 83, ("ThunderRT6ComboBox", "ComboBox")), "Номер ТС", "vehicle key type") in calls
     assert ("checkbox", ("control", 81, ("ThunderRT6CheckBox", "Button")), False, "vehicle key facility embedding") in calls
-    # key number filled via type_keys so VB6 TextBox_Change event fires
-    assert ("type_keys", ("control", 88, ("ThunderRT6TextBox", "Edit")), "P234OK77", "vehicle key number") in calls
+    # key number filled the same way as FIO via _set_gateterm_text_input (WM_SETTEXT)
+    assert ("text", ("control", 88, ("ThunderRT6TextBox", "Edit")), "P234OK77", "vehicle key number") in calls
     assert ("tab", "info") in calls
     assert ("text", ("control", 68, ("ThunderRT6TextBox", "Edit")), "15", "resident plot number") in calls
 
@@ -3110,11 +3104,6 @@ def test_populate_gateterm_vehicle_pass_editor_skips_info_tab_without_plot_numbe
         gate_runtime,
         "_select_gateterm_user_editor_tab",
         lambda _window, tab_name: calls.append(("tab", tab_name)),
-    )
-    monkeypatch.setattr(
-        gate_runtime,
-        "_type_gateterm_field",
-        lambda control, value, *, field_name: calls.append(("type_keys", control, value, field_name)),
     )
 
     gate_runtime._populate_gateterm_vehicle_pass_editor(
@@ -4217,43 +4206,6 @@ def test_close_gateterm_new_user_window_skips_when_not_open(monkeypatch):
 # ---------------------------------------------------------------------------
 # _type_gateterm_field — clipboard paste, not char-by-char type_keys
 # ---------------------------------------------------------------------------
-
-
-def test_type_gateterm_field_uses_em_replacesel_not_clipboard(monkeypatch):
-    """_type_gateterm_field must use EM_REPLACESEL, not clipboard paste or char-by-char typing.
-
-    EM_REPLACESEL fires EN_CHANGE exactly once with the full value.  Ctrl+V is unreliable
-    in VB6 ThunderRT6TextBox; typing char-by-char triggers Change on every keystroke and
-    causes GateTerm to insert separator '/' into vehicle plate numbers mid-input.
-    """
-    keys_sent: list[str] = []
-    em_replacesel_calls: list[tuple] = []
-
-    class _FakeControl:
-        handle = 12345
-
-        def set_focus(self):
-            pass
-
-        def type_keys(self, keys, **kwargs):
-            keys_sent.append(keys)
-
-    monkeypatch.setattr(gate_runtime, "_em_replacesel", lambda hwnd, value: em_replacesel_calls.append((hwnd, value)))
-
-    gate_runtime._type_gateterm_field(_FakeControl(), "A123BB77", field_name="vehicle key number")
-
-    assert em_replacesel_calls == [(12345, "A123BB77")], "_em_replacesel must be called with hwnd and value"
-    assert "{TAB}" in keys_sent, "must send TAB to commit"
-    assert "A123BB77" not in keys_sent, "plate must not be typed char-by-char via type_keys"
-    assert "^v" not in keys_sent, "must not use Ctrl+V clipboard paste"
-    assert "^a" not in keys_sent, "must not use Ctrl+A (EM_SETSEL is used inside _em_replacesel)"
-
-
-# ---------------------------------------------------------------------------
-# add_vehicle_key_via_gateterm_ui — fully UI-based, search-first
-# ---------------------------------------------------------------------------
-
-
 def _fake_noop_cursor():
     """Cursor that silently accepts any execute() call."""
 
