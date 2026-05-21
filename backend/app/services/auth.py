@@ -13,6 +13,41 @@ from .user_accounts import set_user_password, should_show_password_change_prompt
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 settings = get_settings()
 
+# Generated logins mix Cyrillic prefix (``с``), Cyrillic surnames and digits.
+# Mobile keyboards autocapitalize the first character, and Latin look-alike
+# letters (``c``/``С``, ``a``/``А`` …) are visually indistinguishable from
+# their Cyrillic counterparts.  Both issues silently break a case-sensitive
+# exact-match lookup on ``User.login``.  ``_login_lookup_candidates`` produces
+# the small set of equivalence-class variants worth probing on the server so
+# the user can sign in without having to fight their keyboard.
+_LATIN_TO_CYRILLIC_LOOKALIKES = str.maketrans(
+    {
+        "A": "А", "a": "а",
+        "B": "В",
+        "C": "С", "c": "с",
+        "E": "Е", "e": "е",
+        "H": "Н",
+        "K": "К", "k": "к",
+        "M": "М",
+        "O": "О", "o": "о",
+        "P": "Р", "p": "р",
+        "T": "Т",
+        "X": "Х", "x": "х",
+        "Y": "У", "y": "у",
+    }
+)
+
+
+def _canonical_login_form(login: str) -> str:
+    """Reduce *login* to a single canonical form for case-insensitive,
+    Cyrillic/Latin-look-alike-tolerant comparison.
+
+    Every confusable Latin letter is mapped to its Cyrillic counterpart and
+    the result is casefolded.  Comparing two values by this form matches when
+    they differ only in case or in interchangeable look-alike letters.
+    """
+    return login.translate(_LATIN_TO_CYRILLIC_LOOKALIKES).casefold()
+
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
@@ -94,19 +129,43 @@ async def ensure_bootstrap_test_users(session: AsyncSession) -> None:
 
 
 async def login_with_password(session: AsyncSession, login: str, password: str) -> tuple[User | None, str | None, str | None]:
+    # Fast path: stored login matches the typed input character-for-character.
     query = await session.execute(select(User).where(User.login == login))
-    user = query.scalar_one_or_none()
-    if user is None or not user.password_hash:
+    matched_users: list[User] = [u for u in query.scalars().all() if u.password_hash]
+
+    if not matched_users:
+        # Slow path: tolerate mobile autocapitalize + Cyrillic/Latin look-alikes.
+        # SQLite's LOWER() is ASCII-only, so the comparison has to happen in
+        # Python.  User counts on this deployment are small (hundreds at most),
+        # so a single scan is acceptable for the failure case.
+        target_canonical = _canonical_login_form(login)
+        scan = await session.execute(
+            select(User).where(User.password_hash.is_not(None), User.login.is_not(None))
+        )
+        matched_users = [
+            candidate
+            for candidate in scan.scalars().all()
+            if _canonical_login_form(candidate.login or "") == target_canonical
+        ]
+
+    if not matched_users:
         return None, None, "invalid_credentials"
 
-    if not verify_password(password, user.password_hash):
+    # If several rows share a casefold collision, prefer active users and the one
+    # whose password actually verifies.
+    matched_users.sort(key=lambda candidate: (not candidate.is_active, candidate.id))
+    verified = next(
+        (candidate for candidate in matched_users if verify_password(password, candidate.password_hash)),
+        None,
+    )
+    if verified is None:
         return None, None, "invalid_credentials"
 
-    if not user.is_active:
+    if not verified.is_active:
         return None, None, "inactive_user"
 
-    token = create_access_token(subject=str(user.id))
-    return user, token, None
+    token = create_access_token(subject=str(verified.id))
+    return verified, token, None
 
 
 async def consume_password_change_prompt(session: AsyncSession, user: User) -> bool:
