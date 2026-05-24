@@ -9,6 +9,7 @@ from sqlalchemy import select
 from backend.app.config import get_settings
 from backend.app.database import SessionLocal
 from backend.app.models import AccessEventLog, AccessKey, AccessPermission, AccessPoint, Request, User
+from backend.app.services import gate_event_worker
 from backend.app.services.access import process_courier_gate_entry_events
 from backend.app.services.auth import hash_password
 from backend.app.services.gate import GateOpenResult, gate_client
@@ -419,6 +420,79 @@ def test_cleanup_expired_courier_request_removes_gate_key_after_entry_ttl(client
             assert all(permission.is_allowed is False for permission in permissions_query.scalars().all())
 
     asyncio.run(_assert_request_expired())
+
+
+def test_sweep_expired_requests_once_removes_gate_key_after_ttl(client):
+    """The background sweep must delete the Gate key once a courier pass expires.
+
+    Regression: courier passes had their expiry set after the entry barrier opened
+    but were never actually removed because cleanup ran only at server startup.
+    """
+    headers, user_id = _create_user_and_login(client)
+    entry_point_id = get_settings().gate_action_map["entry"]
+    request_id = asyncio.run(_insert_active_courier_request(user_id, entry_point_id, 200751))
+
+    async def _expire() -> None:
+        async with SessionLocal() as session:
+            row = await session.get(Request, request_id)
+            assert row is not None
+            row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            await session.commit()
+
+    asyncio.run(_expire())
+
+    removed_key_ids: list[int] = []
+    original_remove_key = gate_client.remove_key
+    original_integration = gate_event_worker.settings.gate_real_integration_enabled
+    gate_client.remove_key = lambda key_id: removed_key_ids.append(int(key_id)) or True
+    gate_event_worker.settings.gate_real_integration_enabled = True
+    try:
+        removed = asyncio.run(gate_event_worker.sweep_expired_requests_once())
+    finally:
+        gate_client.remove_key = original_remove_key
+        gate_event_worker.settings.gate_real_integration_enabled = original_integration
+
+    assert removed == 1
+    assert removed_key_ids == [200751]
+
+    async def _assert_expired() -> None:
+        async with SessionLocal() as session:
+            row = await session.get(Request, request_id)
+            assert row is not None
+            assert row.status == "expired"
+
+    asyncio.run(_assert_expired())
+
+
+def test_sweep_expired_requests_once_noop_when_integration_disabled(client):
+    headers, user_id = _create_user_and_login(client)
+    entry_point_id = get_settings().gate_action_map["entry"]
+    request_id = asyncio.run(_insert_active_courier_request(user_id, entry_point_id, 200761))
+
+    async def _expire() -> None:
+        async with SessionLocal() as session:
+            row = await session.get(Request, request_id)
+            row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            await session.commit()
+
+    asyncio.run(_expire())
+
+    original_integration = gate_event_worker.settings.gate_real_integration_enabled
+    gate_event_worker.settings.gate_real_integration_enabled = False
+    try:
+        removed = asyncio.run(gate_event_worker.sweep_expired_requests_once())
+    finally:
+        gate_event_worker.settings.gate_real_integration_enabled = original_integration
+
+    assert removed == 0
+
+    async def _assert_still_active() -> None:
+        async with SessionLocal() as session:
+            row = await session.get(Request, request_id)
+            assert row is not None
+            assert row.status == "active"
+
+    asyncio.run(_assert_still_active())
 
 
 def test_access_open_exit_does_not_complete_courier_request(client):

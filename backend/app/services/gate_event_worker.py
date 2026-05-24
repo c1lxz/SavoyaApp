@@ -8,6 +8,7 @@ from ..config import get_settings
 from ..database import SessionLocal
 from .access import process_courier_gate_entry_events
 from .gate import gate_client
+from .requests import cleanup_expired_requests
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -21,6 +22,22 @@ async def poll_courier_gate_entry_events_once() -> int:
     events = await asyncio.to_thread(gate_client.get_recent_events, limit)
     async with SessionLocal() as session:
         return await process_courier_gate_entry_events(session, events)
+
+
+async def sweep_expired_requests_once() -> int:
+    """Remove temporary passes whose expiry has elapsed from the Gate and the app.
+
+    Courier passes have their expiry reset to ``entry_time + courier_default_hours``
+    when the entry barrier opens (see ``process_courier_gate_entry_event``).  Setting
+    that expiry only schedules removal — this sweep is what actually deletes the Gate
+    key and marks the request expired once the window passes.  Without a periodic
+    sweep the pass lingered until the next server restart.
+    """
+    if not settings.gate_real_integration_enabled:
+        return 0
+
+    async with SessionLocal() as session:
+        return await cleanup_expired_requests(session, remove_gate_keys=True)
 
 
 async def run_gate_maintenance_pass_once() -> None:
@@ -81,6 +98,9 @@ async def courier_gate_event_worker() -> None:
             scheduled_count = await poll_courier_gate_entry_events_once()
             if scheduled_count:
                 logger.info("Scheduled %s courier request(s) for cleanup from Gate entry events", scheduled_count)
+            removed_count = await sweep_expired_requests_once()
+            if removed_count:
+                logger.info("Removed %s expired request(s) from Gate after expiry", removed_count)
         except asyncio.CancelledError:
             raise
         except Exception:
