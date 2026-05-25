@@ -23,7 +23,7 @@ from ..schemas import (
 from ..services.admin_monitor import list_admin_monitor_events
 from ..services.gate_linking import link_existing_gate_passes_by_phone
 from ..services.requests import (
-    cleanup_expired_requests,
+    delete_expired_requests,
     delete_request_for_admin,
     list_requests_for_admin,
     resolve_request_status,
@@ -79,7 +79,9 @@ async def admin_list_requests(
     session: AsyncSession = Depends(get_db_session),
     _admin: User = Depends(get_current_admin_user),
 ) -> AdminRequestListResponse:
-    await cleanup_expired_requests(session, remove_gate_keys=False)
+    # Expired temporary passes are deleted outright (Gate key + app row), not flagged
+    # "expired", so they disappear from the admin panel just like a manual deletion.
+    await delete_expired_requests(session)
     total, rows = await list_requests_for_admin(
         session,
         search=search,

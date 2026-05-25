@@ -335,6 +335,50 @@ def test_admin_requests_endpoint_returns_timezone_aware_timestamps(client):
     assert expires_at.tzinfo is not None
 
 
+def test_admin_request_list_deletes_expired_pass_instead_of_flagging_it(client):
+    """An expired temporary pass must be fully deleted (not shown as "Истёк") when the
+    admin opens the requests list — same outcome as a manual deletion."""
+    admin_login = f'admin_exp_{uuid4().hex[:6]}'
+    resident_login = f'resident_exp_{uuid4().hex[:6]}'
+    password = 'demo123'
+    asyncio.run(_ensure_user(admin_login, password, full_name='Admin Exp', plot_number='903', is_admin=True))
+    asyncio.run(_ensure_user(resident_login, password, full_name='Resident Exp', plot_number='417'))
+
+    request_id = asyncio.run(
+        _create_request_for_user(
+            resident_login,
+            key_type='VehicleNumber',
+            key_value=f'EXP{uuid4().hex[:5]}',
+            access_point_ids=[get_settings().gate_action_map['entry']],
+            is_permanent=True,
+        )
+    )
+
+    async def _make_expired() -> None:
+        async with SessionLocal() as session:
+            row = await session.get(Request, request_id)
+            assert row is not None
+            row.is_permanent = False
+            row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            await session.commit()
+
+    asyncio.run(_make_expired())
+
+    admin_token = _api_login(client, admin_login, password)
+    response = client.get('/api/admin/requests', headers={'Authorization': f'Bearer {admin_token}'})
+    assert response.status_code == 200
+    body = response.json()
+    assert all(int(item['id']) != request_id for item in body['items']), (
+        "expired pass must be deleted from the admin list, not shown as expired"
+    )
+
+    async def _assert_deleted() -> None:
+        async with SessionLocal() as session:
+            assert await session.get(Request, request_id) is None
+
+    asyncio.run(_assert_deleted())
+
+
 def test_admin_can_delete_request_without_deleting_user(client):
     admin_login = f'admin_delete_request_{uuid4().hex[:6]}'
     resident_login = f'resident_delete_request_{uuid4().hex[:6]}'

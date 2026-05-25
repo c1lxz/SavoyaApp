@@ -4,15 +4,11 @@ import asyncio
 import logging
 import time
 
-from sqlalchemy import select
-
 from ..config import get_settings
 from ..database import SessionLocal
-from ..models import Request
-from ..utils.datetime import utcnow
 from .access import process_courier_gate_entry_events
 from .gate import gate_client
-from .requests import delete_request_for_admin
+from .requests import delete_expired_requests
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -43,26 +39,7 @@ async def sweep_expired_requests_once() -> int:
         return 0
 
     async with SessionLocal() as session:
-        now = utcnow()
-        query = await session.execute(
-            select(Request.id).where(
-                Request.is_permanent.is_(False),
-                Request.expires_at.is_not(None),
-                Request.expires_at <= now,
-                Request.status.in_(("active", "expired")),
-            )
-        )
-        expired_ids = [int(request_id) for request_id in query.scalars().all()]
-
-    deleted = 0
-    for request_id in expired_ids:
-        try:
-            async with SessionLocal() as session:
-                if await delete_request_for_admin(session, request_id) is not None:
-                    deleted += 1
-        except Exception:
-            logger.exception("Failed to delete expired request %s during sweep", request_id)
-    return deleted
+        return await delete_expired_requests(session)
 
 
 async def run_gate_maintenance_pass_once() -> None:

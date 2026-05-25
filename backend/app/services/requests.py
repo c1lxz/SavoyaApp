@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -16,6 +17,7 @@ from ..utils.input_safety import normalize_phone_key
 from .gate import gate_client
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 _ACTIVE_REQUEST_STATUSES = ("active",)
 
@@ -499,6 +501,36 @@ async def delete_request_for_admin(session: AsyncSession, request_id: int) -> Re
 
     await session.commit()
     return request
+
+
+async def delete_expired_requests(session: AsyncSession) -> int:
+    """Delete temporary passes whose expiry has elapsed — app row and Gate key alike.
+
+    Uses the same path as a manual admin deletion (``delete_request_for_admin``) so an
+    expired pass disappears from the admin panel entirely instead of lingering as
+    "expired". Rows already flagged "expired" (e.g. by ``cleanup_expired_requests``)
+    are picked up too, so a Gate key can no longer outlive the app's view of the pass.
+    """
+    now = utcnow()
+    query = await session.execute(
+        select(Request.id).where(
+            Request.is_permanent.is_(False),
+            Request.expires_at.is_not(None),
+            Request.expires_at <= now,
+            Request.status.in_(("active", "expired")),
+        )
+    )
+    expired_ids = [int(request_id) for request_id in query.scalars().all()]
+
+    deleted = 0
+    for request_id in expired_ids:
+        try:
+            if await delete_request_for_admin(session, request_id) is not None:
+                deleted += 1
+        except Exception:
+            await session.rollback()
+            logger.exception("Failed to delete expired request %s", request_id)
+    return deleted
 
 
 async def has_access_to_point(session: AsyncSession, user_id: int, access_point_id: int) -> bool:
