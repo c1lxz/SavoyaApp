@@ -661,6 +661,141 @@ def test_gate_entry_event_schedules_vehicle_only_courier_pass(client):
     asyncio.run(_assert_courier_event_schedule())
 
 
+def test_gate_entry_event_schedules_courier_on_passage_completed_code_8(client):
+    """A camera entry emits code 2 (granted) and code 8 (passage completed).
+    Code 8 alone must still start the courier TTL countdown."""
+    headers, user_id = _create_user_and_login(client)
+    entry_point_id = get_settings().gate_action_map["entry"]
+    create_response = client.post(
+        "/passes",
+        headers=headers,
+        json={
+            "carNumber": f"C8{uuid4().hex[:5]}",
+            "plotNumber": "81",
+            "phoneNumber": f"7944{str(uuid4().int)[:7]}",
+            "expiresAt": (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(),
+            "isPermanent": False,
+            "isCourier": True,
+        },
+    )
+    assert create_response.status_code == 200
+
+    async def _courier_row() -> Request:
+        async with SessionLocal() as session:
+            query = await session.execute(
+                select(Request).where(
+                    Request.resident_id == user_id, Request.status == "active", Request.is_courier.is_(True)
+                )
+            )
+            rows = list(query.scalars().all())
+            assert len(rows) == 1
+            return rows[0]
+
+    courier_row = asyncio.run(_courier_row())
+
+    async def _process() -> int:
+        async with SessionLocal() as session:
+            return await process_courier_gate_entry_events(
+                session,
+                [
+                    {
+                        "index": 910008,
+                        "event_type": 1,
+                        "event_code": 8,
+                        "access_point_id": entry_point_id,
+                        "unit": "Камера Въезда",
+                        "message": "Проход совершен",
+                        "name": courier_row.key_value,
+                        "user_ptr": courier_row.gate_key_id,
+                    },
+                ],
+            )
+
+    event_at = datetime.now(timezone.utc)
+    assert asyncio.run(_process()) == 1
+
+    async def _assert_scheduled() -> None:
+        async with SessionLocal() as session:
+            row = await session.get(Request, courier_row.id)
+            assert row is not None
+            assert row.expires_at is not None
+            normalized = row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at.tzinfo is None else row.expires_at
+            remaining = normalized - event_at
+            assert timedelta(hours=1, minutes=59) <= remaining <= timedelta(hours=2, minutes=1)
+
+    asyncio.run(_assert_scheduled())
+
+
+def test_gate_entry_event_matches_courier_by_plate_when_user_ptr_drifted(client):
+    """If the stored gate_key_id no longer matches the camera event's user_ptr
+    (the vehicle user was recreated), the courier pass must still be matched by
+    its vehicle plate."""
+    headers, user_id = _create_user_and_login(client)
+    entry_point_id = get_settings().gate_action_map["entry"]
+    plate = f"P{uuid4().hex[:6].upper()}"
+    create_response = client.post(
+        "/passes",
+        headers=headers,
+        json={
+            "carNumber": plate,
+            "plotNumber": "82",
+            "phoneNumber": f"7955{str(uuid4().int)[:7]}",
+            "expiresAt": (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(),
+            "isPermanent": False,
+            "isCourier": True,
+        },
+    )
+    assert create_response.status_code == 200
+
+    async def _courier_row() -> Request:
+        async with SessionLocal() as session:
+            query = await session.execute(
+                select(Request).where(
+                    Request.resident_id == user_id, Request.status == "active", Request.is_courier.is_(True)
+                )
+            )
+            rows = list(query.scalars().all())
+            assert len(rows) == 1
+            return rows[0]
+
+    courier_row = asyncio.run(_courier_row())
+    drifted_user_ptr = int(courier_row.gate_key_id or 0) + 777777
+
+    async def _process() -> int:
+        async with SessionLocal() as session:
+            return await process_courier_gate_entry_events(
+                session,
+                [
+                    {
+                        "index": 910009,
+                        "event_type": 1,
+                        "event_code": 2,
+                        "access_point_id": entry_point_id,
+                        "unit": "Камера Въезда",
+                        "message": "Проход по ключу разрешен",
+                        # Gate reports the plate (key_value) but a different user_ptr.
+                        "key_value": courier_row.key_value,
+                        "name": f"{courier_row.key_value}   Гость",
+                        "user_ptr": drifted_user_ptr,
+                    },
+                ],
+            )
+
+    event_at = datetime.now(timezone.utc)
+    assert asyncio.run(_process()) == 1
+
+    async def _assert_scheduled() -> None:
+        async with SessionLocal() as session:
+            row = await session.get(Request, courier_row.id)
+            assert row is not None
+            assert row.expires_at is not None
+            normalized = row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at.tzinfo is None else row.expires_at
+            remaining = normalized - event_at
+            assert timedelta(hours=1, minutes=59) <= remaining <= timedelta(hours=2, minutes=1)
+
+    asyncio.run(_assert_scheduled())
+
+
 def test_gate_entry_event_schedules_vehicle_only_courier_pass_when_reader_looks_like_entry(client):
     headers, user_id = _create_user_and_login(client)
     wicket_point_id = get_settings().gate_action_map["wicket_admin"]

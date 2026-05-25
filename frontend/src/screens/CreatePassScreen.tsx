@@ -33,9 +33,6 @@ export const CreatePassScreen = ({ navigation }: Props) => {
   const metrics = getLayoutMetrics(width, height);
 
   const user = useAuthStore((state) => state.user);
-  const updateProfile = useAuthStore((state) => state.updateProfile);
-  const profileState = useAuthStore((state) => state.profileState);
-  const authError = useAuthStore((state) => state.error);
   const createPass = usePassesStore((state) => state.createPass);
   const createState = usePassesStore((state) => state.createState);
   const createError = usePassesStore((state) => state.createError);
@@ -147,14 +144,9 @@ export const CreatePassScreen = ({ navigation }: Props) => {
 
     setFormError(null);
 
-    if (user && (normalizedFullName !== user.fullName || normalizedPlotNumber !== user.plotNumber)) {
-      const saved = await updateProfile(normalizedFullName, normalizedPlotNumber);
-      if (!saved) {
-        setFormError(authError ?? 'Не удалось сохранить ФИО');
-        return;
-      }
-    }
-
+    // ФИО на форме — это имя гостя/владельца ТС для пропуска, а не имя владельца
+    // аккаунта. Раньше тут вызывался updateProfile, из-за чего создание пропуска на
+    // другого человека перезаписывало профиль текущего пользователя.
     const success = await createPass({
       carNumber: normalizedCarNumber,
       residentName: normalizedFullName || undefined,
@@ -289,7 +281,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
                 title="Создать пропуск"
                 loadingLabel="Создаём пропуск..."
                 onPress={onCreate}
-                loading={createState === 'loading' || profileState === 'loading'}
+                loading={createState === 'loading'}
               />
             </View>
           </View>

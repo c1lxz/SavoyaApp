@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..models import AccessEventLog, AccessKey, AccessPermission, AccessPoint, Request, User
 from ..utils.datetime import ensure_utc_datetime, utcnow
+from ..utils.vehicle_number import compact_vehicle_number
 from .gate import GateOpenResult, gate_client
 
 settings = get_settings()
@@ -29,7 +30,11 @@ _RATE_MAX_EVENTS = 12
 _DUPLICATE_WINDOW_SECONDS = 5
 _BARRIER_COOLDOWN_SECONDS = 15
 _WICKET_COOLDOWN_SECONDS = 15
-_GATE_PASS_GRANTED_CODE = 2
+# Gate event codes that mean a cardholder was let through.  A camera/LPR entry emits
+# both 2 ("Проход по ключу разрешен" — access granted) and 8 ("Проход совершен" —
+# passage completed); accept either so a courier driving in via the camera is detected
+# even if only one of the two events is in the polled window.
+_GATE_PASS_GRANTED_CODES = frozenset({2, 8})
 _GATE_EVENT_TIMEZONE = ZoneInfo("Europe/Moscow")
 _SYNC_ACCESS_POINTS_LOCK = asyncio.Lock()
 
@@ -463,7 +468,60 @@ def _is_gate_pass_granted_event(event: dict) -> bool:
     user_ptr = _gate_event_int(event, "user_ptr")
     if event_type is not None and event_type != 1:
         return False
-    return event_code == _GATE_PASS_GRANTED_CODE and user_ptr is not None and user_ptr > 0
+    return event_code in _GATE_PASS_GRANTED_CODES and user_ptr is not None and user_ptr > 0
+
+
+def _gate_event_vehicle_plate(event: dict) -> str:
+    """Best-effort canonical plate for a gate event.
+
+    Prefers the resolved ``key_value``; falls back to the leading token of the
+    event ``name`` (which gate formats as ``"PLATE   FIO"``).
+    """
+    raw = str(event.get("key_value") or "").strip()
+    if not raw:
+        name = str(event.get("name") or "").strip()
+        raw = name.split()[0] if name.split() else ""
+    return compact_vehicle_number(raw)
+
+
+async def _find_courier_request_for_gate_event(
+    session: AsyncSession,
+    *,
+    gate_key_id: int,
+    event: dict,
+) -> Request | None:
+    """Find the active courier request a gate entry event belongs to.
+
+    Primary match is the gate user pointer recorded at provisioning time.  The
+    pointer can drift (e.g. the vehicle user gets recreated during provisioning or
+    a maintenance repair), so fall back to matching the camera event to the courier
+    pass by its vehicle plate, which is stable.
+    """
+    query = await session.execute(
+        select(Request).where(
+            Request.status == "active",
+            Request.is_courier.is_(True),
+            Request.gate_key_id == gate_key_id,
+        )
+    )
+    request_item = query.scalars().first()
+    if request_item is not None:
+        return request_item
+
+    event_plate = _gate_event_vehicle_plate(event)
+    if not event_plate:
+        return None
+    plate_query = await session.execute(
+        select(Request).where(
+            Request.status == "active",
+            Request.is_courier.is_(True),
+            Request.key_type == "VehicleNumber",
+        )
+    )
+    for candidate in plate_query.scalars().all():
+        if compact_vehicle_number(candidate.key_value) == event_plate:
+            return candidate
+    return None
 
 
 def _configured_access_point_type(access_point_id: int | None) -> str | None:
@@ -530,6 +588,7 @@ async def process_courier_gate_entry_event(
     event: dict,
     *,
     sync_points: bool = True,
+    already_scheduled: set[int] | None = None,
 ) -> list[int]:
     access_point_id = _gate_event_int(event, "access_point_id")
     gate_key_id = _gate_event_int(event, "user_ptr")
@@ -544,15 +603,16 @@ async def process_courier_gate_entry_event(
     if not _is_gate_pass_event_for_type(event, access_point, "barrier_entry"):
         return []
 
-    query = await session.execute(
-        select(Request).where(
-            Request.status == "active",
-            Request.is_courier.is_(True),
-            Request.gate_key_id == gate_key_id,
-        )
+    request_item = await _find_courier_request_for_gate_event(
+        session,
+        gate_key_id=gate_key_id,
+        event=event,
     )
-    request_item = query.scalar_one_or_none()
     if request_item is None or access_point_id not in (request_item.access_point_ids or []):
+        return []
+    # A single camera entry emits both code 2 and code 8 for the same courier; only
+    # schedule the first one seen within a poll batch.
+    if already_scheduled is not None and request_item.id in already_scheduled:
         return []
     if not _is_request_active(request_item, _utcnow()):
         return []
@@ -609,8 +669,12 @@ async def process_courier_gate_entry_events(session: AsyncSession, events: list[
             "continuing with configured/local access point data",
             exc_info=True,
         )
+    already_scheduled: set[int] = set()
     for event in sorted(candidate_events, key=lambda item: _gate_event_int(item, "index") or 0):
-        scheduled_request_ids = await process_courier_gate_entry_event(session, event, sync_points=False)
+        scheduled_request_ids = await process_courier_gate_entry_event(
+            session, event, sync_points=False, already_scheduled=already_scheduled
+        )
+        already_scheduled.update(scheduled_request_ids)
         scheduled_count += len(scheduled_request_ids)
     return scheduled_count
 
