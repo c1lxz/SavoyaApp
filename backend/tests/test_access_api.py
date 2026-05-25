@@ -422,11 +422,9 @@ def test_cleanup_expired_courier_request_removes_gate_key_after_entry_ttl(client
     asyncio.run(_assert_request_expired())
 
 
-def test_sweep_expired_requests_once_removes_gate_key_after_ttl(client):
-    """The background sweep must delete the Gate key once a courier pass expires.
-
-    Regression: courier passes had their expiry set after the entry barrier opened
-    but were never actually removed because cleanup ran only at server startup.
+def test_sweep_expired_requests_once_deletes_pass_and_removes_gate_key_after_ttl(client):
+    """The background sweep must DELETE an expired pass (Gate key + app row), exactly
+    like a manual admin deletion — not merely flag it "expired".
     """
     headers, user_id = _create_user_and_login(client)
     entry_point_id = get_settings().gate_action_map["entry"]
@@ -455,13 +453,51 @@ def test_sweep_expired_requests_once_removes_gate_key_after_ttl(client):
     assert removed == 1
     assert removed_key_ids == [200751]
 
-    async def _assert_expired() -> None:
+    async def _assert_deleted() -> None:
+        async with SessionLocal() as session:
+            row = await session.get(Request, request_id)
+            assert row is None, "expired pass must be deleted, not just flagged expired"
+
+    asyncio.run(_assert_deleted())
+
+
+def test_sweep_expired_requests_once_deletes_already_expired_pass_with_lingering_key(client):
+    """Rows already marked "expired" whose Gate key was never removed (e.g. flagged by
+    the startup cleanup) must still be deleted and have the Gate key removed."""
+    headers, user_id = _create_user_and_login(client)
+    entry_point_id = get_settings().gate_action_map["entry"]
+    request_id = asyncio.run(_insert_active_courier_request(user_id, entry_point_id, 200771))
+
+    async def _expire_and_flag() -> None:
         async with SessionLocal() as session:
             row = await session.get(Request, request_id)
             assert row is not None
-            assert row.status == "expired"
+            row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            row.status = "expired"  # already flagged, but Gate key still present
+            await session.commit()
 
-    asyncio.run(_assert_expired())
+    asyncio.run(_expire_and_flag())
+
+    removed_key_ids: list[int] = []
+    original_remove_key = gate_client.remove_key
+    original_integration = gate_event_worker.settings.gate_real_integration_enabled
+    gate_client.remove_key = lambda key_id: removed_key_ids.append(int(key_id)) or True
+    gate_event_worker.settings.gate_real_integration_enabled = True
+    try:
+        removed = asyncio.run(gate_event_worker.sweep_expired_requests_once())
+    finally:
+        gate_client.remove_key = original_remove_key
+        gate_event_worker.settings.gate_real_integration_enabled = original_integration
+
+    assert removed == 1
+    assert removed_key_ids == [200771]
+
+    async def _assert_deleted() -> None:
+        async with SessionLocal() as session:
+            row = await session.get(Request, request_id)
+            assert row is None
+
+    asyncio.run(_assert_deleted())
 
 
 def test_sweep_expired_requests_once_noop_when_integration_disabled(client):
