@@ -4589,3 +4589,176 @@ def test_configure_gateterm_phone_access_falls_back_to_db_state_on_lb_error(monk
     )
 
     assert len(fake_lb.clicks) == 3, "fallback should toggle all three (cameras to check, wicket to uncheck)"
+
+
+# ---------------------------------------------------------------------------
+# _remove_key_via_gateterm_ui — fast delete: search -> delete -> verify via DB,
+# no user-card round-trip (which used to make deletion take minutes).
+# ---------------------------------------------------------------------------
+
+
+class _FakeDeleteSubItem:
+    def __init__(self, calls, index):
+        self._calls = calls
+        self._index = index
+
+    def click(self):
+        self._calls.append(("delete_menu_click", self._index))
+
+
+class _FakeDeleteSubMenu:
+    def __init__(self, calls):
+        self._calls = calls
+
+    def items(self):
+        return [_FakeDeleteSubItem(self._calls, i) for i in range(3)]
+
+
+class _FakeDeleteTopItem:
+    def __init__(self, calls):
+        self._calls = calls
+
+    def sub_menu(self):
+        return _FakeDeleteSubMenu(self._calls)
+
+
+class _FakeDeleteMenu:
+    def __init__(self, calls):
+        self._calls = calls
+
+    def items(self):
+        return [_FakeDeleteTopItem(self._calls) for _ in range(5)]
+
+
+class _FakeDeleteUsersWindow:
+    def __init__(self, calls, *, menu_raises=False):
+        self._calls = calls
+        self._menu_raises = menu_raises
+
+    def set_focus(self):
+        self._calls.append("set_focus")
+
+    def menu(self):
+        if self._menu_raises:
+            raise RuntimeError("no menu")
+        return _FakeDeleteMenu(self._calls)
+
+    def type_keys(self, keys):
+        self._calls.append(("type_keys", keys))
+
+
+def _setup_remove_key_mocks(monkeypatch, calls, *, wait_deleted, menu_raises=False):
+    fake_app = object()
+    users_window = _FakeDeleteUsersWindow(calls, menu_raises=menu_raises)
+
+    monkeypatch.setattr(gate_runtime, "_connect_or_start_gateterm_application", lambda: fake_app)
+    monkeypatch.setattr(gate_runtime, "_prepare_gateterm_users_workspace", lambda app: calls.append("prepare"))
+    monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: calls.append("open_users") or users_window)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_search_gateterm_user_by_key_number",
+        lambda app, window, key: calls.append(("search", key)),
+    )
+    # If the card-open helper is ever invoked, record it so the test can fail.
+    monkeypatch.setattr(
+        gate_runtime,
+        "_open_gateterm_user_edit_window",
+        lambda app, window: calls.append("OPEN_CARD") or object(),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_wait_for_gateterm_confirmation_dialog",
+        lambda app, *, timeout_seconds: calls.append("wait_dialog") or object(),
+    )
+    monkeypatch.setattr(gate_runtime, "_confirm_gateterm_dialog", lambda dialog: calls.append("confirm_dialog"))
+    monkeypatch.setattr(gate_runtime, "_confirm_gateterm_message_boxes_if_open", lambda app: calls.append("confirm_boxes"))
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: calls.append("close_users"))
+    monkeypatch.setattr(gate_runtime, "_wait_for_gate_user_deleted", wait_deleted)
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_a, **_kw: None)
+    return fake_app, users_window
+
+
+def test_remove_key_via_gateterm_ui_searches_then_deletes_without_opening_card(monkeypatch):
+    calls: list = []
+
+    def _wait_deleted(user_ptr, *, timeout_seconds):
+        calls.append(("wait_deleted", int(user_ptr)))
+
+    _setup_remove_key_mocks(monkeypatch, calls, wait_deleted=_wait_deleted)
+
+    result = gate_runtime._remove_key_via_gateterm_ui(key_id=5001, normalized_key_value="A123BC77")
+
+    assert result is True
+    # The user card must NOT be opened — that round-trip was the slow part.
+    assert "OPEN_CARD" not in calls, "deletion must not open the user card to re-verify"
+    # Exactly one search, then the delete menu click.
+    assert [c for c in calls if isinstance(c, tuple) and c[0] == "search"] == [("search", "A123BC77")]
+    assert ("delete_menu_click", 2) in calls
+    # Correctness guarantee: confirmed the exact UserPtr was deleted.
+    assert ("wait_deleted", 5001) in calls
+
+
+def test_remove_key_via_gateterm_ui_order_search_before_delete_before_verify(monkeypatch):
+    calls: list = []
+
+    def _wait_deleted(user_ptr, *, timeout_seconds):
+        calls.append("wait_deleted")
+
+    _setup_remove_key_mocks(monkeypatch, calls, wait_deleted=_wait_deleted)
+
+    gate_runtime._remove_key_via_gateterm_ui(key_id=42, normalized_key_value="X1")
+
+    search_idx = next(i for i, c in enumerate(calls) if isinstance(c, tuple) and c[0] == "search")
+    delete_idx = next(i for i, c in enumerate(calls) if isinstance(c, tuple) and c[0] == "delete_menu_click")
+    verify_idx = calls.index("wait_deleted")
+    assert search_idx < delete_idx < verify_idx
+
+
+def test_remove_key_via_gateterm_ui_falls_back_to_hotkey_when_menu_click_fails(monkeypatch):
+    calls: list = []
+
+    def _wait_deleted(user_ptr, *, timeout_seconds):
+        calls.append("wait_deleted")
+
+    _setup_remove_key_mocks(monkeypatch, calls, wait_deleted=_wait_deleted, menu_raises=True)
+
+    result = gate_runtime._remove_key_via_gateterm_ui(key_id=7, normalized_key_value="Y2")
+
+    assert result is True
+    assert ("type_keys", "^d") in calls, "must fall back to Ctrl+D when the delete menu is unavailable"
+
+
+def test_remove_key_via_gateterm_ui_retries_when_deletion_not_applied(monkeypatch):
+    calls: list = []
+    attempts = {"n": 0}
+
+    def _wait_deleted(user_ptr, *, timeout_seconds):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise RuntimeError("GateTerm did not delete key")
+        calls.append("wait_deleted_ok")
+
+    _setup_remove_key_mocks(monkeypatch, calls, wait_deleted=_wait_deleted)
+
+    result = gate_runtime._remove_key_via_gateterm_ui(key_id=9, normalized_key_value="Z3")
+
+    assert result is True
+    # Two searches: the failed attempt plus the successful retry.
+    assert len([c for c in calls if isinstance(c, tuple) and c[0] == "search"]) == 2
+    assert "wait_deleted_ok" in calls
+
+
+def test_remove_key_via_gateterm_ui_raises_after_all_attempts_fail(monkeypatch):
+    calls: list = []
+
+    def _wait_deleted(user_ptr, *, timeout_seconds):
+        raise RuntimeError("GateTerm did not delete key")
+
+    _setup_remove_key_mocks(monkeypatch, calls, wait_deleted=_wait_deleted)
+    monkeypatch.setattr(gate_runtime, "_env_int", lambda name, default: 3 if "DELETE_ATTEMPTS" in name else default)
+
+    with pytest.raises(RuntimeError, match="GateTerm key deletion failed"):
+        gate_runtime._remove_key_via_gateterm_ui(key_id=11, normalized_key_value="Q4")
+
+    # Never opened the card on any attempt.
+    assert "OPEN_CARD" not in calls

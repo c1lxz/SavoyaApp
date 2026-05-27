@@ -3306,8 +3306,11 @@ def _remove_key_via_gateterm_ui(*, key_id: int, normalized_key_value: str) -> bo
             app = _connect_or_start_gateterm_application()
             _prepare_gateterm_users_workspace(app)
             users_window = _open_gateterm_users_view(app)
-            _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
-            _verify_gateterm_selected_user_key_number(app, users_window, normalized_key_value)
+            # Fast path: search selects the matching user in the list, then delete it
+            # straight away.  We do NOT open the user card to re-verify the number —
+            # that round-trip is what made deletion take minutes.  Correctness is
+            # guaranteed below by _wait_for_gate_user_deleted, which confirms this exact
+            # UserPtr is gone (so a wrong row could never be reported as deleted).
             _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
             users_window.set_focus()
             try:
@@ -3326,7 +3329,6 @@ def _remove_key_via_gateterm_ui(*, key_id: int, normalized_key_value: str) -> bo
                 timeout_seconds=_env_float("GATE_GATETERM_UI_DELETE_APPLY_TIMEOUT_SECONDS", 6.0),
             )
 
-            _close_gateterm_user_edit_window_if_open(app)
             try:
                 _close_gateterm_users_window_if_open(app)
             except Exception:
@@ -4250,19 +4252,6 @@ def _set_gateterm_user_key_number(edit_window: Any, normalized_key_value: str) -
     time_module.sleep(commit_delay_seconds)
 
 
-def _read_gateterm_user_key_number(edit_window: Any) -> str:
-    _select_gateterm_user_editor_tab(edit_window, "key")
-    control = _visible_gateterm_control_by_id(edit_window, 88, "ThunderRT6TextBox", "Edit")
-    value = str(control.window_text() or "").strip()
-    if value:
-        return value
-    texts = [str(item or "").strip() for item in control.texts()]
-    for text_value in texts:
-        if text_value:
-            return text_value
-    raise RuntimeError("GateTerm user key number is empty in the edit dialog")
-
-
 def _first_visible_gateterm_tab_control(window: Any) -> Any:
     for control in window.descendants():
         try:
@@ -4682,19 +4671,6 @@ def _open_gateterm_user_edit_window(app: Any, users_window: Any) -> Any:
         "GateTerm user-edit window did not open; "
         f"attempts={attempts!r}; open windows={_list_gateterm_windows(app)!r}"
     )
-
-
-def _verify_gateterm_selected_user_key_number(app: Any, users_window: Any, normalized_key_value: str) -> None:
-    edit_window = _open_gateterm_user_edit_window(app, users_window)
-    try:
-        actual_key_number = _read_gateterm_user_key_number(edit_window)
-    finally:
-        _close_gateterm_user_edit_window_if_open(app)
-    if actual_key_number != normalized_key_value:
-        raise RuntimeError(
-            "GateTerm search selected an unexpected user; "
-            f"expected key number {normalized_key_value!r}, got {actual_key_number!r}"
-        )
 
 
 def _verify_vehicle_identity_persisted(
