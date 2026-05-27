@@ -717,3 +717,72 @@ def test_resident_cannot_delete_another_residents_pass(client):
             return await session.get(Request, pass_id) is not None
 
     assert asyncio.run(_row_exists()) is True, "another resident's delete must not remove the pass"
+
+
+def test_phone_pass_not_visible_in_my_passes(client):
+    """Phone passes (system-provisioned by admin) must not appear in the resident list."""
+    phone = f"+7999{str(uuid4().int)[-7:]}"
+    login, password = asyncio.run(_create_admin_managed_resident('Тест Скрытый', phone, '70'))
+    token = client.post('/auth/login', json={'login': login, 'password': password}).json()['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+
+    async def _inject_phone_pass(user_login: str) -> int:
+        async with SessionLocal() as session:
+            row = await session.execute(select(User).where(User.login == user_login))
+            user = row.scalar_one()
+            req = Request(
+                resident_id=user.id,
+                key_type='Phone',
+                key_value=phone,
+                access_point_ids=[],
+                is_permanent=True,
+                status='active',
+            )
+            session.add(req)
+            await session.commit()
+            await session.refresh(req)
+            return req.id
+
+    phone_pass_id = asyncio.run(_inject_phone_pass(login))
+
+    rows = client.get('/passes/my', headers=headers).json()
+    assert all(int(item['id']) != phone_pass_id for item in rows), \
+        "phone pass must not appear in resident My Passes list"
+    assert all(item['keyType'] != 'Phone' for item in rows), \
+        "no Phone-type pass should be visible to resident"
+
+
+def test_resident_cannot_delete_phone_pass(client):
+    """A resident must not be able to delete a system phone pass via the API."""
+    phone = f"+7999{str(uuid4().int)[-7:]}"
+    login, password = asyncio.run(_create_admin_managed_resident('Тест Удал Phone', phone, '71'))
+    token = client.post('/auth/login', json={'login': login, 'password': password}).json()['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+
+    async def _inject_phone_pass(user_login: str) -> int:
+        async with SessionLocal() as session:
+            row = await session.execute(select(User).where(User.login == user_login))
+            user = row.scalar_one()
+            req = Request(
+                resident_id=user.id,
+                key_type='Phone',
+                key_value=phone,
+                access_point_ids=[],
+                is_permanent=True,
+                status='active',
+            )
+            session.add(req)
+            await session.commit()
+            await session.refresh(req)
+            return req.id
+
+    phone_pass_id = asyncio.run(_inject_phone_pass(login))
+
+    response = client.delete(f'/passes/{phone_pass_id}', headers=headers)
+    assert response.status_code == 404, "resident delete of a phone pass must return 404"
+
+    async def _row_exists() -> bool:
+        async with SessionLocal() as session:
+            return await session.get(Request, phone_pass_id) is not None
+
+    assert asyncio.run(_row_exists()) is True, "phone pass must not be deleted by a resident"

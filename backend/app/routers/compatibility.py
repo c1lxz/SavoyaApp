@@ -352,7 +352,12 @@ async def compat_list_passes(
     user: User = Depends(get_current_user),
 ) -> list[CompatPassItem]:
     rows = await list_my_requests(session, user.id)
-    visible = [row for row in rows if row.status in {"active", "expired"}]
+    # Phone passes are system-provisioned (created by admin during account setup) and are
+    # not shown to or managed by the resident — only vehicle passes appear in "My Passes".
+    visible = [
+        row for row in rows
+        if row.key_type == "VehicleNumber" and row.status in {"active", "expired"}
+    ]
     return [_to_compat_pass(item) for item in visible]
 
 

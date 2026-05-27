@@ -455,10 +455,14 @@ async def cancel_request(session: AsyncSession, user_id: int, request_id: int) -
 
 async def delete_own_request(session: AsyncSession, user_id: int, request_id: int) -> Request | None:
     """Resident-facing delete: same full removal as the admin path, but scoped to the
-    caller's own passes so a resident can only delete a request they created.
+    caller's own vehicle passes. Phone passes are system-managed (admin-only).
     """
     ownership_query = await session.execute(
-        select(Request.id).where(Request.id == request_id, Request.resident_id == user_id)
+        select(Request.id).where(
+            Request.id == request_id,
+            Request.resident_id == user_id,
+            Request.key_type == "VehicleNumber",
+        )
     )
     if ownership_query.scalar_one_or_none() is None:
         return None
