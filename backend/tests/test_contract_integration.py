@@ -510,6 +510,56 @@ def test_compat_update_profile_persists_full_name(client):
     assert me_body['plotNumber'] == '77'
 
 
+def test_creating_pass_with_other_resident_name_does_not_change_account_name(client):
+    """Creating a pass for another person must NOT overwrite the account holder's ФИО.
+
+    The ФИО on the pass form is the guest/vehicle-owner name; the account name is set
+    by the admin and must stay stable. POST /passes only stores residentName on the
+    pass (used for the Gate user) — it must never touch the account profile.
+    """
+    account_name = 'Иванов Иван Иванович'
+    phone_number = f"+7999{str(uuid4().int)[-7:]}"
+    plot_number = str(700 + (uuid4().int % 90))
+    login, password = asyncio.run(
+        _create_admin_managed_resident(account_name, phone_number, plot_number)
+    )
+
+    auth = client.post('/auth/login', json={'login': login, 'password': password})
+    assert auth.status_code == 200
+    token = auth.json()['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+
+    create_response = client.post(
+        '/passes',
+        headers=headers,
+        json={
+            'carNumber': f'V{uuid4().hex[:5]}'.upper(),
+            'residentName': 'Петров Пётр Петрович',  # a different person
+            'plotNumber': plot_number,
+            'phoneNumber': phone_number,
+            'expiresAt': None,
+            'isPermanent': True,
+            'isCourier': False,
+        },
+    )
+    assert create_response.status_code == 200
+
+    me = client.get('/user/me', headers=headers)
+    assert me.status_code == 200
+    assert me.json()['fullName'] == account_name, (
+        "account ФИО must not change when a pass is created for a different person"
+    )
+
+    # And the persisted user row is unchanged too.
+    async def _stored_name() -> str | None:
+        async with SessionLocal() as session:
+            row = await session.execute(select(User).where(User.login == login))
+            user = row.scalar_one()
+            return user.name
+
+    assert asyncio.run(_stored_name()) == account_name
+
+
 def test_passes_create_returns_502_when_gate_returns_invalid_key_id(client):
     login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
     token = login['access_token']
