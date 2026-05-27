@@ -51,6 +51,15 @@ def test_canonical_login_form_preserves_non_lookalike_characters():
     assert _canonical_login_form("c1Тестabc123") == _canonical_login_form("с1Тестabc123")
 
 
+def test_canonical_login_form_is_case_symmetric_for_uppercase_only_lookalikes():
+    # Regression: the map once held uppercase-only look-alikes (B/H/M/T) and translated
+    # BEFORE casefold, so "...b..." and "...B..." canonicalized differently. Folding case
+    # first must make every login compare equal to its uppercased form — including hex
+    # suffixes that contain b/d/f.
+    for login in ("с1тестbdf123", "c1ЖительBDF", "savoya.root.2026", "admin"):
+        assert _canonical_login_form(login) == _canonical_login_form(login.upper()), login
+
+
 # ---------------------------------------------------------------------------
 # login_with_password — integration with the DB
 # ---------------------------------------------------------------------------

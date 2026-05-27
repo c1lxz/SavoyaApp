@@ -13,27 +13,26 @@ from .user_accounts import set_user_password, should_show_password_change_prompt
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 settings = get_settings()
 
-# Generated logins mix Cyrillic prefix (``с``), Cyrillic surnames and digits.
-# Mobile keyboards autocapitalize the first character, and Latin look-alike
-# letters (``c``/``С``, ``a``/``А`` …) are visually indistinguishable from
-# their Cyrillic counterparts.  Both issues silently break a case-sensitive
-# exact-match lookup on ``User.login``.  ``_login_lookup_candidates`` produces
-# the small set of equivalence-class variants worth probing on the server so
-# the user can sign in without having to fight their keyboard.
+# Generated logins mix a Cyrillic prefix (``с``), Cyrillic surnames and digits.
+# Mobile keyboards autocapitalize the first character, and Latin look-alike letters
+# (``c``/``с``, ``a``/``а`` …) are visually indistinguishable from their Cyrillic
+# counterparts.  Both issues silently break a case-sensitive exact-match lookup on
+# ``User.login``.  ``_canonical_login_form`` folds them away for comparison.
+#
+# The map is keyed on *lowercase* Latin letters whose lowercase glyph is identical to a
+# Cyrillic lowercase letter, and it is applied AFTER casefold.  Folding case first keeps
+# the result symmetric — translating before casefold was asymmetric for letters whose
+# only confusable form is uppercase (e.g. "B"→"В" but "b" left as-is).
 _LATIN_TO_CYRILLIC_LOOKALIKES = str.maketrans(
     {
-        "A": "А", "a": "а",
-        "B": "В",
-        "C": "С", "c": "с",
-        "E": "Е", "e": "е",
-        "H": "Н",
-        "K": "К", "k": "к",
-        "M": "М",
-        "O": "О", "o": "о",
-        "P": "Р", "p": "р",
-        "T": "Т",
-        "X": "Х", "x": "х",
-        "Y": "У", "y": "у",
+        "a": "а",
+        "c": "с",
+        "e": "е",
+        "k": "к",
+        "o": "о",
+        "p": "р",
+        "x": "х",
+        "y": "у",
     }
 )
 
@@ -42,11 +41,11 @@ def _canonical_login_form(login: str) -> str:
     """Reduce *login* to a single canonical form for case-insensitive,
     Cyrillic/Latin-look-alike-tolerant comparison.
 
-    Every confusable Latin letter is mapped to its Cyrillic counterpart and
-    the result is casefolded.  Comparing two values by this form matches when
-    they differ only in case or in interchangeable look-alike letters.
+    Casefold first (so case never affects the result), then map the look-alike Latin
+    letters to their Cyrillic equivalents.  Two logins that differ only in case or in
+    interchangeable look-alike letters collapse to the same form.
     """
-    return login.translate(_LATIN_TO_CYRILLIC_LOOKALIKES).casefold()
+    return login.casefold().translate(_LATIN_TO_CYRILLIC_LOOKALIKES)
 
 
 def hash_password(password: str) -> str:
