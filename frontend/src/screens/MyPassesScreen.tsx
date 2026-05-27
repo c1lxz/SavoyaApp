@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo } from 'react';
-import { FlatList, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Alert, FlatList, Platform, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,6 +14,7 @@ import { usePassesStore } from '@/store/passesStore';
 import { theme } from '@/theme';
 import { PassItem } from '@/types';
 import { goBackOrHome } from '@/utils/backNavigation';
+import { formatVehicleLabel } from '@/utils/vehicleCountry';
 import { getLayoutMetrics } from '@/utils/layout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'MyPasses'>;
@@ -26,9 +27,35 @@ export const MyPassesScreen = ({ navigation }: Props) => {
   const loadMyPasses = usePassesStore((state) => state.loadMyPasses);
   const loadState = usePassesStore((state) => state.loadState);
   const loadError = usePassesStore((state) => state.loadError);
+  const cancelPass = usePassesStore((state) => state.cancelPass);
+  const cancelState = usePassesStore((state) => state.cancelState);
+  const cancelError = usePassesStore((state) => state.cancelError);
+
+  const onDeletePass = useCallback(
+    (item: PassItem) => {
+      const label =
+        item.keyType === 'VehicleNumber' ? formatVehicleLabel(item.keyValue) : item.keyValue;
+      if (Platform.OS === 'web' && typeof globalThis.confirm === 'function') {
+        if (globalThis.confirm(`Удалить пропуск?\n${label}`)) {
+          void cancelPass(item.id);
+        }
+        return;
+      }
+      Alert.alert('Удалить пропуск?', label, [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Удалить', style: 'destructive', onPress: () => void cancelPass(item.id) },
+      ]);
+    },
+    [cancelPass],
+  );
 
   const keyExtractor = useCallback((item: PassItem) => item.id, []);
-  const renderItem = useCallback(({ item }: { item: PassItem }) => <PassCard item={item} />, []);
+  const renderItem = useCallback(
+    ({ item }: { item: PassItem }) => (
+      <PassCard item={item} onDelete={onDeletePass} deleting={cancelState === 'loading'} />
+    ),
+    [onDeletePass, cancelState],
+  );
   const emptyState = useMemo(() => <EmptyState text="Нет активных пропусков" />, []);
 
   useFocusEffect(
@@ -61,8 +88,9 @@ export const MyPassesScreen = ({ navigation }: Props) => {
             overScrollMode="never"
           />
 
-          <LoadingOverlay visible={loadState === 'loading'} />
+          <LoadingOverlay visible={loadState === 'loading' || cancelState === 'loading'} />
           {loadError ? <Text style={styles.error}>{loadError}</Text> : null}
+          {cancelError ? <Text style={styles.error}>{cancelError}</Text> : null}
         </View>
       </SafeAreaView>
     </AppBackground>

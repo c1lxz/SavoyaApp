@@ -641,3 +641,79 @@ def test_passes_create_courier_flow_sets_flag(client):
     body = response.json()
     assert body['isCourier'] is True
     assert body['isPermanent'] is False
+
+
+def test_resident_can_delete_own_pass(client):
+    """A resident can delete a pass they created — fully removed (Gate key + app row)."""
+    login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
+    token = login['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    car_number = f'D{uuid4().hex[:5]}'.upper()
+
+    create = client.post(
+        '/passes',
+        headers=headers,
+        json={
+            'carNumber': car_number,
+            'plotNumber': '25',
+            'phoneNumber': '+79991234567',
+            'expiresAt': None,
+            'isPermanent': True,
+            'isCourier': False,
+        },
+    )
+    assert create.status_code == 200
+    pass_id = int(create.json()['id'])
+
+    deleted = client.delete(f'/passes/{pass_id}', headers=headers)
+    assert deleted.status_code == 200
+
+    rows = client.get('/passes/my', headers=headers).json()
+    assert all(int(item['id']) != pass_id for item in rows)
+
+    async def _row_exists() -> bool:
+        async with SessionLocal() as session:
+            return await session.get(Request, pass_id) is not None
+
+    assert asyncio.run(_row_exists()) is False, "resident delete must remove the app row, not just cancel it"
+
+
+def test_resident_cannot_delete_another_residents_pass(client):
+    """A resident must not be able to delete a pass that belongs to someone else."""
+    phone_a = f"+7999{str(uuid4().int)[-7:]}"
+    login_a, password_a = asyncio.run(
+        _create_admin_managed_resident('Алиса Аличева', phone_a, '61')
+    )
+    token_a = client.post('/auth/login', json={'login': login_a, 'password': password_a}).json()['access_token']
+    headers_a = {'Authorization': f'Bearer {token_a}'}
+
+    create = client.post(
+        '/passes',
+        headers=headers_a,
+        json={
+            'carNumber': f'O{uuid4().hex[:5]}'.upper(),
+            'plotNumber': '61',
+            'phoneNumber': phone_a,
+            'expiresAt': None,
+            'isPermanent': True,
+            'isCourier': False,
+        },
+    )
+    assert create.status_code == 200
+    pass_id = int(create.json()['id'])
+
+    phone_b = f"+7999{str(uuid4().int)[-7:]}"
+    login_b, password_b = asyncio.run(
+        _create_admin_managed_resident('Борис Борисов', phone_b, '62')
+    )
+    token_b = client.post('/auth/login', json={'login': login_b, 'password': password_b}).json()['access_token']
+    headers_b = {'Authorization': f'Bearer {token_b}'}
+
+    forbidden = client.delete(f'/passes/{pass_id}', headers=headers_b)
+    assert forbidden.status_code == 404
+
+    async def _row_exists() -> bool:
+        async with SessionLocal() as session:
+            return await session.get(Request, pass_id) is not None
+
+    assert asyncio.run(_row_exists()) is True, "another resident's delete must not remove the pass"

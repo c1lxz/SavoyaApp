@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     gate_event_poll_enabled: bool = True
     gate_event_poll_interval_seconds: float = 10.0
     gate_event_poll_limit: int = 200
+    # Total attempts to provision the Gate phone pass when creating a resident before
+    # giving up and rolling the new account back. The bridge also retries internally,
+    # so this guards against an intermittent GateTerm UI hiccup losing the whole user.
+    gate_phone_link_attempts: int = 3
     gate_background_maintenance_enabled: bool = False
     gate_maintenance_interval_seconds: float = 300.0
     login_rate_limit_attempts: int = 5

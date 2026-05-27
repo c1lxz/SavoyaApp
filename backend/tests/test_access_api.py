@@ -1051,3 +1051,26 @@ def test_vehicle_only_courier_passes_do_not_create_phone_rows(client):
             assert log.details["courier_cleanup"] == "scheduled_after_entry"
 
     asyncio.run(_assert_gsm_event_schedule())
+
+
+# ---------------------------------------------------------------------------
+# _cooldown_message — gender agreement of the demonstrative pronoun
+# ---------------------------------------------------------------------------
+
+
+def test_cooldown_message_uses_feminine_pronoun_for_wicket():
+    from backend.app.services.access import _cooldown_message
+
+    wicket = AccessPoint(id=9101, name="Калитка Север", code="w-9101", type="wicket", is_active=True)
+    message = _cooldown_message(wicket, 7)
+    assert "этой калитки" in message
+    assert "этого" not in message
+
+
+def test_cooldown_message_uses_masculine_pronoun_for_barrier():
+    from backend.app.services.access import _cooldown_message
+
+    barrier = AccessPoint(id=9102, name="Шлагбаум Въезд", code="b-9102", type="barrier_entry", is_active=True)
+    message = _cooldown_message(barrier, 5)
+    assert "этого шлагбаума" in message
+    assert "этой" not in message

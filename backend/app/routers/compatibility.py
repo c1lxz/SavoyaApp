@@ -362,17 +362,19 @@ async def compat_cancel_pass(
     session: AsyncSession = Depends(get_db_session),
     user: User = Depends(get_current_user),
 ) -> MessageResponse:
-    from ..services.requests import cancel_request
+    from ..services.requests import delete_own_request
 
     try:
         numeric_id = int(pass_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid pass id") from exc
 
-    row = await cancel_request(session, user.id, numeric_id)
+    # Residents fully delete their own passes (Gate key + app row), the same removal as
+    # the admin panel — just scoped to the passes they created.
+    row = await delete_own_request(session, user.id, numeric_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pass not found")
-    return MessageResponse(message="Pass cancelled")
+    return MessageResponse(message="Pass deleted")
 
 
 @router.post("/gates/open-action", response_model=CompatGateActionResult)

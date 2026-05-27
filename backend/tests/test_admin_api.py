@@ -1647,3 +1647,83 @@ def test_compat_login_rate_limit_returns_error_after_repeated_failures(client):
     assert blocked.status_code == 200
     assert blocked.json()['success'] is False
     assert blocked.json()['error'] == 'Too many login attempts'
+
+
+def test_admin_create_user_retries_gate_phone_link_then_succeeds(client, monkeypatch):
+    """A transient GateTerm phone-provisioning hiccup must be retried, not roll the
+    whole new account back on the first failure."""
+    from backend.app.routers import admin as admin_router
+    from backend.app.services.gate_linking import GatePhoneLinkResult
+
+    monkeypatch.setattr(admin_router.settings, 'gate_real_integration_enabled', True)
+
+    calls = {'n': 0}
+
+    async def _fake_link(session, user):
+        calls['n'] += 1
+        if calls['n'] < 2:
+            return GatePhoneLinkResult(error='transient GateTerm reset')
+        return GatePhoneLinkResult(linked_request_ids=[4242], access_point_count=2)
+
+    monkeypatch.setattr(admin_router, 'link_existing_gate_passes_by_phone', _fake_link)
+
+    admin_login = f'admin_link_retry_{uuid4().hex[:6]}'
+    asyncio.run(_ensure_user(admin_login, 'demo123', full_name='Admin Link Retry', plot_number='900', is_admin=True))
+    token = _api_login(client, admin_login, 'demo123')
+
+    response = client.post(
+        '/api/admin/users',
+        headers={'Authorization': f'Bearer {token}'},
+        json={'full_name': 'Новый Житель', 'phone': f'+7999{str(uuid4().int)[-7:]}', 'plot_number': '15'},
+    )
+
+    assert response.status_code == 200
+    assert calls['n'] == 2, 'should retry once and succeed on the second attempt'
+    created_login = response.json()['login']
+
+    async def _user_exists() -> bool:
+        async with SessionLocal() as session:
+            row = await session.execute(select(User).where(User.login == created_login))
+            return row.scalar_one_or_none() is not None
+
+    assert asyncio.run(_user_exists()) is True, 'user must be kept after a successful retry'
+
+
+def test_admin_create_user_rolls_back_only_after_all_gate_link_attempts_fail(client, monkeypatch):
+    from backend.app.routers import admin as admin_router
+    from backend.app.services.gate_linking import GatePhoneLinkResult
+    from backend.app.utils.input_safety import normalize_account_phone
+
+    monkeypatch.setattr(admin_router.settings, 'gate_real_integration_enabled', True)
+
+    calls = {'n': 0}
+
+    async def _fake_link(session, user):
+        calls['n'] += 1
+        return GatePhoneLinkResult(error='GateTerm unavailable')
+
+    monkeypatch.setattr(admin_router, 'link_existing_gate_passes_by_phone', _fake_link)
+
+    admin_login = f'admin_link_fail_{uuid4().hex[:6]}'
+    asyncio.run(_ensure_user(admin_login, 'demo123', full_name='Admin Link Fail', plot_number='900', is_admin=True))
+    token = _api_login(client, admin_login, 'demo123')
+
+    phone = f'+7999{str(uuid4().int)[-7:]}'
+    response = client.post(
+        '/api/admin/users',
+        headers={'Authorization': f'Bearer {token}'},
+        json={'full_name': 'Откатный Житель', 'phone': phone, 'plot_number': '16'},
+    )
+
+    assert response.status_code == 502
+    assert response.json()['detail']['code'] == 'gate_phone_access_failed'
+    assert calls['n'] == admin_router.settings.gate_phone_link_attempts, 'must exhaust all attempts before rollback'
+
+    normalized_phone = normalize_account_phone(phone)
+
+    async def _user_exists() -> bool:
+        async with SessionLocal() as session:
+            row = await session.execute(select(User).where(User.phone == normalized_phone))
+            return row.scalar_one_or_none() is not None
+
+    assert asyncio.run(_user_exists()) is False, 'user must be rolled back after all attempts fail'

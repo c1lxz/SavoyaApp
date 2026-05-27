@@ -756,13 +756,24 @@ def _cooldown_seconds_for_access_point(access_point: AccessPoint) -> int:
     return _BARRIER_COOLDOWN_SECONDS
 
 
+def _is_wicket_access_point(access_point: AccessPoint) -> bool:
+    if access_point.type == "wicket":
+        return True
+    if access_point.type in {"barrier_entry", "barrier_exit"}:
+        return False
+    normalized_name = (access_point.name or "").lower()
+    return "wicket" in normalized_name or "калит" in normalized_name
+
+
 def _cooldown_message(access_point: AccessPoint, remaining_seconds: int) -> str:
-    point_label = (
-        "калитки"
-        if _cooldown_seconds_for_access_point(access_point) == _WICKET_COOLDOWN_SECONDS
-        else "шлагбаума"
-    )
-    return f"Подождите {remaining_seconds} сек. перед повторным открытием этого {point_label}."
+    # Distinguish wicket vs barrier by type/name (the cooldown durations are equal, so
+    # comparing seconds cannot tell them apart) and make the demonstrative pronoun agree
+    # in gender: "этой калитки" (fem.) vs "этого шлагбаума" (masc.).
+    if _is_wicket_access_point(access_point):
+        pronoun, point_label = "этой", "калитки"
+    else:
+        pronoun, point_label = "этого", "шлагбаума"
+    return f"Подождите {remaining_seconds} сек. перед повторным открытием {pronoun} {point_label}."
 
 
 async def _check_open_cooldown(session: AsyncSession, *, user: User | None, access_point: AccessPoint) -> None:

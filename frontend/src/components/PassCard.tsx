@@ -1,6 +1,6 @@
 import React from 'react';
-import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { theme } from '@/theme';
 import { PassItem } from '@/types';
@@ -11,9 +11,11 @@ import { StatusBadge } from './StatusBadge';
 
 type PassCardProps = {
   item: PassItem;
+  onDelete?: (item: PassItem) => void;
+  deleting?: boolean;
 };
 
-const PassCardComponent = ({ item }: PassCardProps) => {
+const PassCardComponent = ({ item, onDelete, deleting = false }: PassCardProps) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
   const displayDate = item.expiresAt ? addDays(item.expiresAt, 1) : null;
@@ -50,6 +52,19 @@ const PassCardComponent = ({ item }: PassCardProps) => {
           <StatusBadge status={item.status} />
         </View>
       </View>
+
+      {onDelete ? (
+        <Pressable
+          style={[styles.deleteButton, deleting && styles.deleteButtonDisabled]}
+          onPress={() => onDelete(item)}
+          disabled={deleting}
+          accessibilityRole="button"
+          accessibilityLabel="Удалить пропуск"
+        >
+          <MaterialCommunityIcons name="trash-can-outline" size={18} color={theme.colors.danger} />
+          <Text style={styles.deleteButtonText}>{deleting ? 'Удаление…' : 'Удалить пропуск'}</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 };
@@ -96,5 +111,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
     marginTop: 12,
+  },
+  deleteButton: {
+    marginTop: theme.spacing.md,
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(225, 132, 132, 0.45)',
+    backgroundColor: 'rgba(88, 41, 41, 0.32)',
+  },
+  deleteButtonDisabled: {
+    opacity: 0.6,
+  },
+  deleteButtonText: {
+    color: theme.colors.danger,
+    fontSize: 15,
+    fontWeight: '700',
   },
 });

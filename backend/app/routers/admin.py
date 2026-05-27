@@ -170,9 +170,17 @@ async def admin_create_user(
             detail={"code": exc.code, "message": exc.message},
         ) from exc
 
-    gate_link = await link_existing_gate_passes_by_phone(session, user)
     if settings.gate_real_integration_enabled and user.phone and not user.is_admin:
-        if gate_link.error or gate_link.linked_count < 1:
+        # The GateTerm UI phone provisioning can fail with a transient hiccup ("entered
+        # data then reset"). Retry a few times with fresh attempts before giving up, so a
+        # single flake does not roll the whole new account back and force a full re-entry.
+        attempts = max(1, settings.gate_phone_link_attempts)
+        gate_link = None
+        for _attempt in range(attempts):
+            gate_link = await link_existing_gate_passes_by_phone(session, user)
+            if not gate_link.error and gate_link.linked_count >= 1:
+                break
+        if gate_link is None or gate_link.error or gate_link.linked_count < 1:
             try:
                 await delete_user_account(session, user=user, strict_gate_cleanup=False)
             except Exception:
@@ -181,7 +189,7 @@ async def admin_create_user(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
                     "code": "gate_phone_access_failed",
-                    "message": gate_link.error or "Gate phone pass was not provisioned for the created user",
+                    "message": (gate_link.error if gate_link else None) or "Gate phone pass was not provisioned for the created user",
                 },
             )
     return AdminUserItem(**build_admin_user_payload(user, visible_password_override=generated_password))

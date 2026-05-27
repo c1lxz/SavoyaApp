@@ -453,6 +453,18 @@ async def cancel_request(session: AsyncSession, user_id: int, request_id: int) -
     return request
 
 
+async def delete_own_request(session: AsyncSession, user_id: int, request_id: int) -> Request | None:
+    """Resident-facing delete: same full removal as the admin path, but scoped to the
+    caller's own passes so a resident can only delete a request they created.
+    """
+    ownership_query = await session.execute(
+        select(Request.id).where(Request.id == request_id, Request.resident_id == user_id)
+    )
+    if ownership_query.scalar_one_or_none() is None:
+        return None
+    return await delete_request_for_admin(session, request_id)
+
+
 async def delete_request_for_admin(session: AsyncSession, request_id: int) -> Request | None:
     query = await session.execute(select(Request).where(Request.id == request_id))
     request = query.scalar_one_or_none()
