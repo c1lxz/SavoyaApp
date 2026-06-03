@@ -3200,20 +3200,23 @@ def test_wait_for_gate_user_deleted_accepts_deleted_tombstone_without_access(mon
     gate_runtime._wait_for_gate_user_deleted(42, timeout_seconds=0)
 
 
-def test_wait_for_gate_user_deleted_rejects_deleted_tombstone_with_access(monkeypatch):
+def test_wait_for_gate_user_deleted_cleans_deleted_tombstone_with_access(monkeypatch):
     cursor = _GateDeleteWaitCursor(
         user_row=SimpleNamespace(UserPtr=42, Deleted=True),
         access_row=SimpleNamespace(UserPtr=42),
     )
+    calls: list[tuple[str, int]] = []
 
     @contextmanager
     def fake_readonly_cursor():
         yield None, cursor
 
     monkeypatch.setattr(gate_runtime, "_readonly_cursor", fake_readonly_cursor)
+    monkeypatch.setattr(gate_runtime, "_mark_gate_user_deleted", lambda user_ptr: calls.append(("cleanup", int(user_ptr))) or True)
 
-    with pytest.raises(RuntimeError, match="did not delete key 42"):
-        gate_runtime._wait_for_gate_user_deleted(42, timeout_seconds=0)
+    gate_runtime._wait_for_gate_user_deleted(42, timeout_seconds=0)
+
+    assert calls == [("cleanup", 42)]
 
 
 def test_sample_key_type_prefers_phone_reader_device_key_type(monkeypatch):
@@ -4799,6 +4802,37 @@ def test_remove_key_via_gateterm_ui_retries_when_deletion_not_applied(monkeypatc
     # Two searches: the failed attempt plus the successful retry.
     assert len([c for c in calls if isinstance(c, tuple) and c[0] == "search"]) == 2
     assert "wait_deleted_ok" in calls
+
+
+def test_wait_for_gate_user_deleted_treats_deleted_user_as_success_and_cleans_permissions(monkeypatch):
+    calls: list = []
+
+    class _DeletedUserCursor:
+        def __init__(self) -> None:
+            self._last_sql = ""
+
+        def execute(self, sql: str, params=None):
+            self._last_sql = sql
+            calls.append(("execute", sql, tuple(params) if params is not None else None))
+            return self
+
+        def fetchone(self):
+            if "FROM Users" in self._last_sql:
+                return SimpleNamespace(UserPtr=42, Deleted=True)
+            if "FROM AccessTable" in self._last_sql:
+                return SimpleNamespace(UserPtr=42)
+            raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
+
+    @contextmanager
+    def _fake_readonly_cursor():
+        yield object(), _DeletedUserCursor()
+
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", _fake_readonly_cursor)
+    monkeypatch.setattr(gate_runtime, "_mark_gate_user_deleted", lambda user_ptr: calls.append(("cleanup", int(user_ptr))) or True)
+
+    gate_runtime._wait_for_gate_user_deleted(42, timeout_seconds=0.0)
+
+    assert ("cleanup", 42) in calls
 
 
 def test_remove_key_via_gateterm_ui_raises_after_all_attempts_fail(monkeypatch):

@@ -4058,7 +4058,11 @@ def _wait_for_gate_user_deleted(user_ptr: int, *, timeout_seconds: float) -> Non
                 "SELECT TOP 1 UserPtr FROM AccessTable WHERE UserPtr = ?",
                 (int(user_ptr),),
             ).fetchone()
-        if row is None or (bool(getattr(row, "Deleted", False)) and access_row is None):
+        if row is None:
+            return
+        if bool(getattr(row, "Deleted", False)):
+            if access_row is not None:
+                _mark_gate_user_deleted(int(user_ptr))
             return
         if time_module.monotonic() >= deadline:
             raise RuntimeError(f"GateTerm did not delete key {int(user_ptr)}")
