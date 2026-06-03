@@ -68,6 +68,10 @@ def _call(action: str, payload: dict) -> object:
         return gate_runtime.repair_vehicle_visual_numbers(limit=int(payload.get("limit") or 50))
     if action == "get_key_permissions":
         return gate_runtime.get_key_permissions(str(payload["external_key_id"]))
+    if action == "list_vehicle_keys_by_phone":
+        return gate_runtime.list_vehicle_keys_by_phone(str(payload["phone_number"]))
+    if action == "list_keys_by_phone":
+        return gate_runtime.list_keys_by_phone(str(payload["phone_number"]))
     if action == "get_wiegand_credentials":
         return gate_runtime.get_wiegand_credentials(str(payload["external_key_id"]))
     if action == "post_sync_phone_key":

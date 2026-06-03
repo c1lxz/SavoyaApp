@@ -9,6 +9,19 @@ export const formatAdminRequestKey = (item: AdminRequestItem): string => {
   return item.keyValue;
 };
 
+export const formatPassPurpose = (purpose: AdminRequestItem['passPurpose'], isCourier?: boolean): string | null => {
+  if (purpose === 'courier') {
+    return 'Курьер';
+  }
+  if (purpose === 'taxi') {
+    return 'Такси';
+  }
+  if (purpose === 'other') {
+    return 'Другое';
+  }
+  return isCourier ? 'Курьер' : null;
+};
+
 export const formatRequestForCopy = (item: AdminRequestItem): string => {
   const lines = [
     `Заявка #${item.id}`,
@@ -25,7 +38,7 @@ export const formatRequestForCopy = (item: AdminRequestItem): string => {
     `Точки доступа: ${item.accessPointIds.length ? item.accessPointIds.join(', ') : '-'}`,
     `Gate key ID: ${item.gateKeyId ?? '-'}`,
     `Постоянный: ${item.isPermanent ? 'Да' : 'Нет'}`,
-    `Курьер: ${item.isCourier ? 'Да' : 'Нет'}`,
+    `Тип пропуска: ${formatPassPurpose(item.passPurpose, item.isCourier) ?? '-'}`,
   ];
 
   if (item.expiresAt) {

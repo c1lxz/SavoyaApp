@@ -389,6 +389,18 @@ class GateClient:
             return [dict(item) for item in result]
         return []
 
+    def list_vehicle_keys_by_phone(self, phone_number: str) -> list[dict[str, Any]]:
+        if settings.gate_real_integration_enabled:
+            result = self._run_bridge("list_vehicle_keys_by_phone", {"phone_number": phone_number})
+            return [dict(item) for item in result]
+        return []
+
+    def list_keys_by_phone(self, phone_number: str) -> list[dict[str, Any]]:
+        if settings.gate_real_integration_enabled:
+            result = self._run_bridge("list_keys_by_phone", {"phone_number": phone_number})
+            return [dict(item) for item in result]
+        return []
+
     def open_access_point(self, access_point_id: int, key_external_id: str | None = None) -> GateOpenResult:
         if settings.gate_real_integration_enabled:
             response = self._run_bridge(

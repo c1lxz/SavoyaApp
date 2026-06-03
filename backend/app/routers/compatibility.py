@@ -193,6 +193,8 @@ def _build_compat_create_payloads(
             hours = 24
 
     vehicle_camera_access_point_ids = _runtime_vehicle_camera_access_point_ids()
+    pass_kind = payload.passPurpose or ("courier" if payload.isCourier else None)
+    uses_entry_ttl = pass_kind is not None or payload.isCourier
     requests: list[CreateRequestRequest] = []
     if payload.carNumber:
         requests.append(
@@ -203,7 +205,8 @@ def _build_compat_create_payloads(
                 resident_name=payload.residentName,
                 access_point_ids=vehicle_camera_access_point_ids,
                 is_permanent=payload.isPermanent,
-                is_courier=payload.isCourier,
+                is_courier=uses_entry_ttl,
+                pass_kind=pass_kind,
                 expires_at=None if payload.isPermanent else expires_at,
                 hours=None if payload.isPermanent else (None if expires_at is not None else (hours or 24)),
                 plot_number=payload.plotNumber,
@@ -294,6 +297,7 @@ def _to_compat_pass(item) -> CompatPassItem:
         expiresAt=expires,
         isPermanent=item.is_permanent,
         isCourier=bool(getattr(item, "is_courier", False)),
+        passPurpose=getattr(item, "pass_kind", None),
         status=status,
         createdAt=created,
     )

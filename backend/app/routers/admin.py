@@ -56,6 +56,7 @@ def _to_admin_request_item(item: Request, resident: User) -> AdminRequestItem:
         gate_key_id=item.gate_key_id,
         is_permanent=item.is_permanent,
         is_courier=item.is_courier,
+        pass_kind=item.pass_kind,
         expires_at=ensure_utc_datetime(item.expires_at),
         status=resolve_request_status(item.is_permanent, item.expires_at) if item.status == "active" else item.status,
         created_at=ensure_utc_datetime(item.created_at),

@@ -4,6 +4,7 @@ import asyncio
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..models import Request, User
+from ..utils.datetime import ensure_utc_datetime
 from ..utils.input_safety import normalize_phone_key
 from .gate import gate_client
 
@@ -95,6 +97,23 @@ async def _recover_gate_phone_key_id(*, phone_key: str, context: str) -> int | N
     return resolved_key_id
 
 
+async def _resolve_gate_phone_key_id(*, phone_key: str, context: str) -> int | None:
+    try:
+        resolved_key_id = await asyncio.to_thread(gate_client.resolve_key_id, phone_key)
+    except Exception as exc:  # pragma: no cover - depends on local Gate bridge/runtime.
+        logger.warning(
+            "Gate phone key lookup failed for %s phone=%s: %s",
+            context,
+            phone_key,
+            exc,
+        )
+        return None
+
+    if resolved_key_id is None or int(resolved_key_id) <= 0:
+        return None
+    return int(resolved_key_id)
+
+
 async def _provision_gate_phone_key(
     *,
     phone_key: str,
@@ -133,6 +152,148 @@ async def _upsert_gate_phone_access(user: User, request: Request, access_point_i
         plot_number=request.plot_number or user.plot_number or user.apartment,
         recovery_context=f"request_id={request.id} user_id={user.id}",
     )
+
+
+async def _link_existing_gate_vehicle_passes_by_phone(session: AsyncSession, user: User, phone_key: str) -> list[int]:
+    try:
+        vehicle_rows = await asyncio.to_thread(gate_client.list_vehicle_keys_by_phone, phone_key)
+    except Exception as exc:  # pragma: no cover - depends on local Gate bridge/runtime.
+        logger.warning("Gate vehicle auto-link lookup failed for user_id=%s phone=%s: %s", user.id, phone_key, exc)
+        return []
+
+    linked_ids: list[int] = []
+    for item in vehicle_rows:
+        key_value = str(item.get("key_value") or "").strip()
+        if not key_value:
+            continue
+
+        existing_query = await session.execute(
+            select(Request.id).where(
+                Request.key_type == "VehicleNumber",
+                Request.key_value == key_value,
+                Request.status == "active",
+            )
+        )
+        if existing_query.scalar_one_or_none() is not None:
+            continue
+
+        try:
+            gate_key_id = int(item.get("gate_key_id") or 0)
+        except (TypeError, ValueError):
+            gate_key_id = 0
+        access_point_ids = _permission_access_point_ids(
+            [{"access_point_id": point_id} for point_id in (item.get("access_point_ids") or [])]
+        )
+        if not access_point_ids:
+            continue
+
+        raw_expires_at = item.get("expires_at")
+        expires_at = raw_expires_at
+        if isinstance(raw_expires_at, str):
+            try:
+                expires_at = datetime.fromisoformat(raw_expires_at.replace("Z", "+00:00"))
+            except ValueError:
+                expires_at = None
+
+        request = Request(
+            resident_id=user.id,
+            key_type="VehicleNumber",
+            key_value=key_value,
+            gate_key_id=gate_key_id if gate_key_id > 0 else None,
+            access_point_ids=access_point_ids,
+            is_permanent=bool(item.get("is_permanent", True)),
+            is_courier=False,
+            contact_phone=phone_key,
+            expires_at=ensure_utc_datetime(expires_at),
+            status="active",
+            plot_number=user.plot_number or user.apartment,
+        )
+        session.add(request)
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            continue
+        linked_ids.append(int(request.id))
+
+    return linked_ids
+
+
+async def _link_existing_gate_keys_by_phone(session: AsyncSession, user: User, phone_key: str) -> list[int]:
+    try:
+        gate_rows = await asyncio.to_thread(gate_client.list_keys_by_phone, phone_key)
+    except Exception as exc:  # pragma: no cover - depends on local Gate bridge/runtime.
+        logger.warning("Gate key auto-link lookup failed for user_id=%s phone=%s: %s", user.id, phone_key, exc)
+        return []
+
+    linked_ids: list[int] = []
+    for item in gate_rows:
+        key_type = str(item.get("key_type") or "").strip()
+        if key_type not in {"Phone", "VehicleNumber"}:
+            continue
+
+        key_value = str(item.get("key_value") or "").strip()
+        if not key_value:
+            continue
+
+        existing_query = await session.execute(
+            select(Request.id).where(
+                Request.key_type == key_type,
+                Request.key_value == key_value,
+                Request.status == "active",
+            )
+        )
+        if existing_query.scalar_one_or_none() is not None:
+            continue
+
+        try:
+            gate_key_id = int(item.get("gate_key_id") or 0)
+        except (TypeError, ValueError):
+            gate_key_id = 0
+
+        access_point_ids = _permission_access_point_ids(
+            [{"access_point_id": point_id} for point_id in (item.get("access_point_ids") or [])]
+        )
+        if key_type == "Phone":
+            access_point_ids = _configured_phone_access_point_ids(access_point_ids)
+        elif not access_point_ids:
+            access_point_ids = list(settings.default_access_point_ids)
+        if not access_point_ids:
+            continue
+
+        raw_expires_at = item.get("expires_at")
+        expires_at = raw_expires_at
+        if isinstance(raw_expires_at, str):
+            try:
+                expires_at = datetime.fromisoformat(raw_expires_at.replace("Z", "+00:00"))
+            except ValueError:
+                expires_at = None
+
+        request = Request(
+            resident_id=user.id,
+            key_type=key_type,
+            key_value=key_value,
+            gate_key_id=gate_key_id if gate_key_id > 0 else None,
+            access_point_ids=access_point_ids,
+            is_permanent=bool(item.get("is_permanent", True)),
+            is_courier=False,
+            contact_phone=phone_key,
+            expires_at=ensure_utc_datetime(expires_at),
+            status="active",
+            plot_number=user.plot_number or user.apartment,
+        )
+        if key_type == "Phone" and gate_key_id > 0:
+            user.gate_user_id = gate_key_id
+            session.add(user)
+        session.add(request)
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            continue
+        linked_ids.append(int(request.id))
+
+    return linked_ids
 
 
 async def ensure_existing_phone_requests_have_configured_access(session: AsyncSession) -> int:
@@ -264,21 +425,62 @@ async def link_existing_gate_passes_by_phone(session: AsyncSession, user: User) 
 
     existing_access_point_ids = _permission_access_point_ids(permissions)
     access_point_ids = _configured_phone_access_point_ids(existing_access_point_ids)
+
+    existing_gate_request_ids: list[int] = []
+    try:
+        existing_gate_request_ids = await _link_existing_gate_keys_by_phone(session, user, phone_key)
+    except IntegrityError as exc:
+        await session.rollback()
+        logger.info("Skipped Gate key auto-link for user_id=%s after duplicate request race", user.id)
+        return GatePhoneLinkResult(error=str(exc))
+
+    linked_phone_request_id: int | None = None
+    if existing_gate_request_ids:
+        linked_phone_query = await session.execute(
+            select(Request.id).where(
+                Request.id.in_(existing_gate_request_ids),
+                Request.key_type == "Phone",
+                Request.status == "active",
+            )
+        )
+        linked_phone_request_id = linked_phone_query.scalar_one_or_none()
+        if linked_phone_request_id is not None:
+            await session.commit()
+            return GatePhoneLinkResult(
+                linked_request_ids=existing_gate_request_ids,
+                access_point_count=len(access_point_ids),
+            )
+
+    gate_key_id = await _resolve_gate_phone_key_id(phone_key=phone_key, context=f"user_id={user.id}")
+    if gate_key_id is not None:
+        if existing_access_point_ids:
+            access_point_ids = existing_access_point_ids
+    else:
+        if existing_gate_request_ids:
+            await session.commit()
+            return GatePhoneLinkResult(
+                linked_request_ids=existing_gate_request_ids,
+                access_point_count=len(access_point_ids),
+            )
+
+        if not access_point_ids:
+            return GatePhoneLinkResult()
+
+        try:
+            gate_key_id = await _provision_gate_phone_key(
+                phone_key=phone_key,
+                phone_number=phone_key,
+                access_point_ids=access_point_ids,
+                resident_name=user.name or user.login or "Resident",
+                plot_number=user.plot_number or user.apartment,
+                recovery_context=f"user_id={user.id}",
+            )
+        except Exception as exc:  # pragma: no cover - depends on local Gate bridge/runtime.
+            logger.warning("Gate phone auto-link write failed for user_id=%s: %s", user.id, exc)
+            return GatePhoneLinkResult(error=str(exc))
+
     if not access_point_ids:
         return GatePhoneLinkResult()
-
-    try:
-        gate_key_id = await _provision_gate_phone_key(
-            phone_key=phone_key,
-            phone_number=phone_key,
-            access_point_ids=access_point_ids,
-            resident_name=user.name or user.login or "Resident",
-            plot_number=user.plot_number or user.apartment,
-            recovery_context=f"user_id={user.id}",
-        )
-    except Exception as exc:  # pragma: no cover - depends on local Gate bridge/runtime.
-        logger.warning("Gate phone auto-link write failed for user_id=%s: %s", user.id, exc)
-        return GatePhoneLinkResult(error=str(exc))
 
     if gate_key_id <= 0:
         message = f"Gate returned invalid key id: {gate_key_id}"
@@ -303,6 +505,7 @@ async def link_existing_gate_passes_by_phone(session: AsyncSession, user: User) 
     session.add(request)
 
     try:
+        vehicle_request_ids = await _link_existing_gate_vehicle_passes_by_phone(session, user, phone_key)
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
@@ -311,7 +514,7 @@ async def link_existing_gate_passes_by_phone(session: AsyncSession, user: User) 
 
     await session.refresh(request)
     return GatePhoneLinkResult(
-        linked_request_ids=[int(request.id)],
+        linked_request_ids=[int(request.id), *vehicle_request_ids],
         access_point_count=len(access_point_ids),
     )
 

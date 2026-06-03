@@ -640,7 +640,37 @@ def test_passes_create_courier_flow_sets_flag(client):
     assert response.status_code == 200
     body = response.json()
     assert body['isCourier'] is True
+    assert body['passPurpose'] == 'courier'
     assert body['isPermanent'] is False
+
+
+def test_passes_create_taxi_flow_sets_entry_ttl_marker(client):
+    login = client.post('/auth/login', json={'login': 'demo', 'password': 'demo123'}).json()
+    token = login['access_token']
+    headers = {'Authorization': f'Bearer {token}'}
+    selected_expires_at = datetime.now(timezone.utc) + timedelta(days=18)
+
+    response = client.post(
+        '/passes',
+        headers=headers,
+        json={
+            'carNumber': f'T{uuid4().hex[:5]}'.upper(),
+            'plotNumber': '25',
+            'phoneNumber': '+79994443322',
+            'expiresAt': selected_expires_at.isoformat(),
+            'isPermanent': False,
+            'isCourier': True,
+            'passPurpose': 'taxi',
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body['isCourier'] is True
+    assert body['passPurpose'] == 'taxi'
+    assert body['isPermanent'] is False
+    returned_expires_at = datetime.fromisoformat(body['expiresAt'].replace('Z', '+00:00'))
+    assert abs((returned_expires_at - selected_expires_at).total_seconds()) < 2
 
 
 def test_resident_can_delete_own_pass(client):

@@ -4,7 +4,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { theme } from '@/theme';
 import { AdminRequestItem } from '@/types';
-import { formatAdminRequestKey } from '@/utils/adminRequests';
+import { formatAdminRequestKey, formatPassPurpose } from '@/utils/adminRequests';
 import { formatDateTime } from '@/utils/date';
 import { getLayoutMetrics } from '@/utils/layout';
 
@@ -76,6 +76,7 @@ const AdminRequestCardComponent = ({ item, onCopyRequest, onCopyText, onDeleteRe
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
   const resolvedKey = formatAdminRequestKey(item);
+  const passPurposeLabel = formatPassPurpose(item.passPurpose, item.isCourier);
   const status = statusMeta[item.status];
   const residentName = item.resident.fullName || 'Без имени';
 
@@ -110,7 +111,7 @@ const AdminRequestCardComponent = ({ item, onCopyRequest, onCopyText, onDeleteRe
           label="Точки доступа"
           value={item.accessPointIds.length ? item.accessPointIds.join(', ') : 'Не заданы'}
         />
-        {item.isCourier ? <MetaLine label="Тип" value="Курьерский пропуск" /> : null}
+        {passPurposeLabel ? <MetaLine label="Тип" value={passPurposeLabel} /> : null}
       </View>
 
       <View style={styles.actionsRow}>

@@ -61,6 +61,9 @@ class OpenGateResponse(BaseModel):
     message: str
 
 
+PassKind = Literal["courier", "taxi", "other"]
+
+
 class CreateRequestRequest(BaseModel):
     key_type: Literal["Phone", "VehicleNumber"]
     key_value: str
@@ -69,6 +72,7 @@ class CreateRequestRequest(BaseModel):
     access_point_ids: list[int] = Field(min_length=1)
     is_permanent: bool = False
     is_courier: bool = False
+    pass_kind: PassKind | None = None
     expires_at: datetime | None = None
     hours: int | None = Field(default=None, ge=1, le=24 * 365)
     plot_number: str | None = None
@@ -199,6 +203,7 @@ class CompatCreatePassPayload(BaseModel):
     expiresAt: str | None
     isPermanent: bool
     isCourier: bool = False
+    passPurpose: PassKind | None = None
 
     @field_validator("carNumber", mode="before")
     @classmethod
@@ -270,6 +275,7 @@ class CompatPassItem(BaseModel):
     expiresAt: str | None
     isPermanent: bool
     isCourier: bool = False
+    passPurpose: PassKind | None = None
     status: Literal["active", "expired", "permanent"]
     createdAt: str
 
@@ -339,6 +345,7 @@ class AdminRequestItem(BaseModel):
     gate_key_id: int | None = None
     is_permanent: bool
     is_courier: bool
+    pass_kind: PassKind | None = None
     expires_at: datetime | None = None
     status: str
     created_at: datetime

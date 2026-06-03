@@ -30,6 +30,8 @@ export type ChangePasswordPayload = {
   repeatPassword: string;
 };
 
+export type PassPurpose = 'courier' | 'taxi' | 'other';
+
 export type CreatePassPayload = {
   carNumber?: string;
   residentName?: string;
@@ -38,6 +40,7 @@ export type CreatePassPayload = {
   expiresAt: string | null;
   isPermanent: boolean;
   isCourier: boolean;
+  passPurpose?: PassPurpose | null;
 };
 
 export type PassStatus = 'active' | 'expired' | 'permanent';
@@ -52,6 +55,7 @@ export type PassItem = {
   expiresAt: string | null;
   isPermanent: boolean;
   isCourier?: boolean;
+  passPurpose?: PassPurpose | null;
   status: PassStatus;
   createdAt: string;
 };
@@ -88,6 +92,7 @@ export type AdminRequestItem = {
   gateKeyId?: number | null;
   isPermanent: boolean;
   isCourier: boolean;
+  passPurpose?: PassPurpose | null;
   expiresAt: string | null;
   status: AdminRequestStatus;
   createdAt: string;

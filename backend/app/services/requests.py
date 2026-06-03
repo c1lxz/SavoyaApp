@@ -89,6 +89,9 @@ async def ensure_requests_schema(session: AsyncSession) -> None:
     if "is_courier" not in columns:
         await session.execute(text("ALTER TABLE requests ADD COLUMN is_courier BOOLEAN NOT NULL DEFAULT 0"))
         await session.commit()
+    if "pass_kind" not in columns:
+        await session.execute(text("ALTER TABLE requests ADD COLUMN pass_kind VARCHAR(20) NULL"))
+        await session.commit()
     if "contact_phone" not in columns:
         await session.execute(text("ALTER TABLE requests ADD COLUMN contact_phone VARCHAR(32) NULL"))
         await session.commit()
@@ -141,6 +144,7 @@ async def ensure_admin_permanent_request(session: AsyncSession) -> Request | Non
             access_point_ids=access_point_ids,
             is_permanent=True,
             is_courier=False,
+            pass_kind=None,
             contact_phone=key_value,
             expires_at=None,
             status="active",
@@ -152,6 +156,7 @@ async def ensure_admin_permanent_request(session: AsyncSession) -> Request | Non
         existing.access_point_ids = access_point_ids
         existing.is_permanent = True
         existing.is_courier = False
+        existing.pass_kind = None
         existing.contact_phone = key_value
         existing.expires_at = None
         existing.plot_number = admin.plot_number or admin.apartment or settings.admin_plot_number
@@ -268,10 +273,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
 
     if payload.is_courier and settings.courier_ttl_only_enabled:
         is_permanent = False
-        if requested_expires_at is not None:
-            max_expires_at = now + timedelta(hours=settings.courier_max_hours)
-            requested_expires_at = min(requested_expires_at, max_expires_at)
-        else:
+        if requested_expires_at is None:
             base_hours = request_hours if request_hours is not None else settings.courier_default_hours
             request_hours = min(base_hours, settings.courier_max_hours)
 
@@ -329,6 +331,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
         access_point_ids=resolved_access_point_ids,
         is_permanent=is_permanent,
         is_courier=payload.is_courier,
+        pass_kind=payload.pass_kind if payload.is_courier else None,
         contact_phone=payload.phone_number,
         expires_at=expires_at,
         status="active",

@@ -8,6 +8,7 @@ import {
   AdminCreateUserPayload,
   AdminUserItem,
   AdminUserList,
+  PassPurpose,
 } from '@/types';
 
 type BackendAdminResident = {
@@ -29,6 +30,7 @@ type BackendAdminRequestItem = {
   gate_key_id?: number | null;
   is_permanent: boolean;
   is_courier: boolean;
+  pass_kind?: PassPurpose | null;
   expires_at?: string | null;
   status: AdminRequestStatus;
   created_at: string;
@@ -130,6 +132,7 @@ const mapAdminRequest = (item: BackendAdminRequestItem): AdminRequestItem => ({
   gateKeyId: item.gate_key_id ?? null,
   isPermanent: item.is_permanent,
   isCourier: item.is_courier,
+  passPurpose: item.pass_kind ?? null,
   expiresAt: item.expires_at ?? null,
   status: item.status,
   createdAt: item.created_at,

@@ -200,7 +200,7 @@ class _ResolveUserPtrCursor:
         raise AssertionError(f"Unexpected fetchone() for SQL: {self._last_sql}")
 
     def fetchall(self):
-        if "SELECT UserPtr, Phone, Number, NumberU, Deleted" in self._last_sql:
+        if "SELECT UserPtr, Phone, Number, NumberU" in self._last_sql and "FROM Users" in self._last_sql:
             return list(self._rows)
         raise AssertionError(f"Unexpected fetchall() for SQL: {self._last_sql}")
 
@@ -3004,10 +3004,62 @@ def test_resolve_user_ptr_prefers_phone_identity_over_vehicle_contact_phone():
     assert user_ptr == 7661
 
 
+def test_resolve_user_ptr_matches_gate_phone_field_when_key_numbers_are_not_phone(monkeypatch):
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda cursor, key_type, access_point_ids=None: 6)
+    cursor = _ResolveUserPtrCursor(
+        [
+            SimpleNamespace(
+                UserPtr=7663,
+                Phone="89111253128\n",
+                Number="resident-legacy",
+                NumberU="resident-legacy",
+                KeyType=6,
+                Deleted=False,
+            )
+        ]
+    )
+
+    user_ptr = gate_runtime._resolve_user_ptr(cursor, "+79111253128")
+
+    assert user_ptr == 7663
+
+
+def test_resolve_user_ptr_matches_phone_field_without_phone_key_type_sample(monkeypatch):
+    def _sample_key_type(_cursor, key_type, access_point_ids=None):
+        return 3 if key_type == "VehicleNumber" else None
+
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", _sample_key_type)
+    cursor = _ResolveUserPtrCursor(
+        [
+            SimpleNamespace(
+                UserPtr=7664,
+                Phone="89111253128\n",
+                Number="A182DC178",
+                NumberU="A182DC178",
+                KeyType=3,
+                Deleted=False,
+            ),
+            SimpleNamespace(
+                UserPtr=7665,
+                Phone="89111253128\n",
+                Number="resident",
+                NumberU="resident",
+                KeyType=6,
+                Deleted=False,
+            ),
+        ]
+    )
+
+    user_ptr = gate_runtime._resolve_user_ptr(cursor, "+79111253128")
+
+    assert user_ptr == 7665
+
+
 def test_normalize_phone_keeps_legacy_formats_compatible():
     assert gate_runtime._normalize_phone("8 (999) 123-45-67") == "009991234567"
     assert gate_runtime._normalize_phone("+7 999 123-45-67") == "009991234567"
     assert gate_runtime._normalize_phone("0079991234567") == "009991234567"
+    assert gate_runtime._normalize_phone("079819586186") == "009819586186"
     assert gate_runtime._normalize_phone("9991234567") == "009991234567"
 
 
@@ -3015,6 +3067,7 @@ def test_looks_like_phone_identity_number_rejects_numeric_wiegand_codes():
     assert gate_runtime._looks_like_phone_identity_number("000000458293") is False
     assert gate_runtime._looks_like_phone_identity_number("000000C8E183") is False
     assert gate_runtime._looks_like_phone_identity_number("009111253128") is True
+    assert gate_runtime._looks_like_phone_identity_number("079819586186") is True
 
 
 def test_normalize_vehicle_canonicalizes_lookalikes_and_separators():

@@ -47,6 +47,7 @@ class Request(Base):
     access_point_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
     is_permanent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_courier: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    pass_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
     contact_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)

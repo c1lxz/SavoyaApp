@@ -252,6 +252,8 @@ def _normalize_phone(value: str) -> str:
         raise ValueError("Phone key_value must contain digits")
     if digits.startswith("00"):
         digits = digits[2:]
+    if len(digits) == 12 and digits[0] == "0" and digits[1] in {"7", "8"}:
+        digits = digits[1:]
     if len(digits) == 11 and digits.startswith(("7", "8")):
         return f"00{digits[1:]}"
     if len(digits) == 10 and digits.startswith("9"):
@@ -861,9 +863,22 @@ def _looks_like_phone_identity_number(value: Any) -> bool:
         return True
     if len(digits) == 11 and digits[0] in {"7", "8"} and digits[1] == "9":
         return True
+    if len(digits) == 12 and digits[0] == "0" and digits[1] in {"7", "8"} and digits[2] == "9":
+        return True
     if len(digits) == 12 and digits.startswith("00") and digits[2] == "9":
         return True
     return len(digits) == 13 and digits.startswith("007") and digits[3] == "9"
+
+
+def _looks_like_vehicle_identity_number(value: Any) -> bool:
+    normalized = _normalize_optional_text(value)
+    if not normalized or _looks_like_phone_identity_number(normalized):
+        return False
+    return (
+        any(ch.isalpha() for ch in normalized)
+        and any(ch.isdigit() for ch in normalized)
+        and all(ch.isalnum() for ch in normalized)
+    )
 
 
 def _phone_identity_values(row: Any, *, phone_key_type_value: Any | None = None) -> set[str]:
@@ -2696,12 +2711,22 @@ def _resolve_user_ptr(cursor: pyodbc.Cursor, external_key_id: str | None) -> int
                     return resolved_user_ptr
 
     normalized_phone = ""
+    phone_key_type_value = None
+    vehicle_key_type_value = None
     if _looks_like_phone_identity_number(value):
         normalized_phone = _normalize_phone(value)
+        try:
+            phone_key_type_value = _sample_key_type(cursor, "Phone")
+        except Exception:
+            phone_key_type_value = None
+        try:
+            vehicle_key_type_value = _sample_key_type(cursor, "VehicleNumber")
+        except Exception:
+            vehicle_key_type_value = None
     normalized_text = _normalize_optional_text(value)
     rows = cursor.execute(
         """
-        SELECT UserPtr, Phone, Number, NumberU, Deleted
+        SELECT UserPtr, Phone, Number, NumberU, KeyType, Deleted
         FROM Users
         ORDER BY UserPtr DESC
         """
@@ -2714,9 +2739,17 @@ def _resolve_user_ptr(cursor: pyodbc.Cursor, external_key_id: str | None) -> int
         if normalized_phone and _is_phone_user_match(
             row,
             normalized_key_value=normalized_phone,
-            phone_key_type_value=None,
+            phone_key_type_value=phone_key_type_value,
         ):
             return int(row.UserPtr)
+        if normalized_phone and _normalize_optional_phone(getattr(row, "Phone", None)) == normalized_phone:
+            row_key_type = getattr(row, "KeyType", None)
+            if phone_key_type_value is not None and row_key_type == phone_key_type_value:
+                return int(row.UserPtr)
+            if vehicle_key_type_value is not None and row_key_type == vehicle_key_type_value:
+                continue
+            if not _looks_like_vehicle_identity_number(getattr(row, "Number", None)):
+                return int(row.UserPtr)
         if normalized_text and (
             _normalize_optional_text(row.Number) == normalized_text
             or _normalize_optional_text(getattr(row, "NumberU", None)) == normalized_text
@@ -3140,6 +3173,179 @@ def get_key_permissions(external_key_id: str) -> list[dict[str, Any]]:
             (user_ptr,),
         ).fetchall()
         return [{"access_point_id": int(row.RdrPtr), "access_point_name": str(row.Name or "")} for row in rows]
+
+
+def _get_user_permissions(cursor: pyodbc.Cursor, user_ptr: int) -> list[dict[str, Any]]:
+    rows = cursor.execute(
+        """
+        SELECT a.RdrPtr, r.Name
+        FROM AccessTable AS a
+        LEFT JOIN Readers AS r ON r.RdrPtr = a.RdrPtr
+        WHERE a.UserPtr = ?
+        ORDER BY r.Name
+        """,
+        (int(user_ptr),),
+    ).fetchall()
+    return [{"access_point_id": int(row.RdrPtr), "access_point_name": str(row.Name or "")} for row in rows]
+
+
+def _permission_access_point_ids(permissions: list[dict[str, Any]]) -> list[int]:
+    ids: list[int] = []
+    seen: set[int] = set()
+    for item in permissions:
+        raw_id = item.get("access_point_id") if isinstance(item, dict) else None
+        try:
+            point_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if point_id <= 0 or point_id in seen:
+            continue
+        seen.add(point_id)
+        ids.append(point_id)
+    return ids
+
+
+def list_keys_by_phone(phone_number: str) -> list[dict[str, Any]]:
+    normalized_phone = _normalize_phone(phone_number)
+    with _readonly_cursor() as (_, cursor):
+        try:
+            phone_key_type_value = _sample_key_type(cursor, "Phone")
+        except Exception:
+            phone_key_type_value = None
+        try:
+            vehicle_key_type_value = _sample_key_type(cursor, "VehicleNumber")
+        except Exception:
+            vehicle_key_type_value = None
+        rows = cursor.execute(
+            """
+            SELECT
+                UserPtr,
+                KeyType,
+                [Number],
+                NumberU,
+                Phone,
+                Deleted,
+                Status,
+                UseExpiry,
+                ExpiryDate,
+                ExpiryTime
+            FROM Users
+            ORDER BY UserPtr DESC
+            """
+        ).fetchall()
+
+        keys: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for row in rows:
+            user_ptr = int(getattr(row, "UserPtr", 0) or 0)
+            if user_ptr <= 0 or bool(getattr(row, "Deleted", False)):
+                continue
+            if not _is_active_user_status(getattr(row, "Status", None)):
+                continue
+
+            row_phone = _normalize_optional_phone(getattr(row, "Phone", None))
+            phone_identity_matches = _is_phone_user_match(
+                row,
+                normalized_key_value=normalized_phone,
+                phone_key_type_value=phone_key_type_value,
+            )
+            if row_phone != normalized_phone and not phone_identity_matches:
+                continue
+
+            key_type = "Phone"
+            key_value = normalized_phone
+            if _is_vehicle_identity_row(row, vehicle_key_type_value=vehicle_key_type_value):
+                vehicle_value = _normalize_optional_text(getattr(row, "Number", None))
+                if not vehicle_value and _vehicle_number_u_mode() != "random":
+                    vehicle_value = _normalize_optional_text(getattr(row, "NumberU", None))
+                if vehicle_value:
+                    key_type = "VehicleNumber"
+                    key_value = vehicle_value
+
+            dedupe_key = (key_type, key_value)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+
+            expires_at = None
+            if bool(getattr(row, "UseExpiry", False)):
+                expires_at = _combine_expiry(getattr(row, "ExpiryDate", None), getattr(row, "ExpiryTime", None))
+
+            keys.append(
+                {
+                    "gate_key_id": user_ptr,
+                    "key_type": key_type,
+                    "key_value": key_value,
+                    "phone_number": normalized_phone,
+                    "access_point_ids": _permission_access_point_ids(_get_user_permissions(cursor, user_ptr)),
+                    "is_permanent": not bool(getattr(row, "UseExpiry", False)),
+                    "expires_at": expires_at,
+                }
+            )
+        return keys
+
+
+def list_vehicle_keys_by_phone(phone_number: str) -> list[dict[str, Any]]:
+    normalized_phone = _normalize_phone(phone_number)
+    with _readonly_cursor() as (_, cursor):
+        try:
+            vehicle_key_type_value = _sample_key_type(cursor, "VehicleNumber")
+        except Exception:
+            vehicle_key_type_value = None
+        rows = cursor.execute(
+            """
+            SELECT
+                UserPtr,
+                KeyType,
+                [Number],
+                NumberU,
+                Phone,
+                Deleted,
+                Status,
+                UseExpiry,
+                ExpiryDate,
+                ExpiryTime
+            FROM Users
+            ORDER BY UserPtr DESC
+            """
+        ).fetchall()
+
+        vehicles: list[dict[str, Any]] = []
+        seen_numbers: set[str] = set()
+        for row in rows:
+            user_ptr = int(getattr(row, "UserPtr", 0) or 0)
+            if user_ptr <= 0:
+                continue
+            if not _is_vehicle_identity_row(row, vehicle_key_type_value=vehicle_key_type_value):
+                continue
+            if not _is_active_user_status(getattr(row, "Status", None)):
+                continue
+            if _normalize_optional_phone(getattr(row, "Phone", None)) != normalized_phone:
+                continue
+
+            key_value = _normalize_optional_text(getattr(row, "Number", None))
+            if not key_value and _vehicle_number_u_mode() != "random":
+                key_value = _normalize_optional_text(getattr(row, "NumberU", None))
+            if not key_value or key_value in seen_numbers:
+                continue
+            seen_numbers.add(key_value)
+
+            expires_at = None
+            if bool(getattr(row, "UseExpiry", False)):
+                expires_at = _combine_expiry(getattr(row, "ExpiryDate", None), getattr(row, "ExpiryTime", None))
+
+            vehicles.append(
+                {
+                    "gate_key_id": user_ptr,
+                    "key_type": "VehicleNumber",
+                    "key_value": key_value,
+                    "phone_number": normalized_phone,
+                    "access_point_ids": _permission_access_point_ids(_get_user_permissions(cursor, user_ptr)),
+                    "is_permanent": not bool(getattr(row, "UseExpiry", False)),
+                    "expires_at": expires_at,
+                }
+            )
+        return vehicles
 
 
 def _parity_bit_even(value: int) -> int:

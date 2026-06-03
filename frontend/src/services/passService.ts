@@ -44,6 +44,7 @@ export const mockPassService: PassService = {
       expiresAt: payload.expiresAt,
       isPermanent: payload.isPermanent,
       isCourier: payload.isCourier,
+      passPurpose: payload.passPurpose ?? null,
       createdAt: new Date().toISOString(),
     };
 

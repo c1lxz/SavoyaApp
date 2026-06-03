@@ -149,6 +149,25 @@ def test_resolve_key_id_routes_through_bridge(monkeypatch) -> None:
     assert actions == ["resolve_key_id"]
 
 
+def test_list_keys_by_phone_routes_through_bridge(monkeypatch) -> None:
+    client = gate.GateClient()
+    actions: list[str] = []
+
+    monkeypatch.setattr(gate.settings, "gate_real_integration_enabled", True)
+
+    def _fake_run_bridge(action: str, payload=None):
+        actions.append(action)
+        assert payload == {"phone_number": "+79991234567"}
+        return [{"gate_key_id": 987, "key_type": "Phone", "key_value": "009991234567"}]
+
+    monkeypatch.setattr(client, "_run_bridge", _fake_run_bridge)
+
+    result = client.list_keys_by_phone("+79991234567")
+
+    assert result == [{"gate_key_id": 987, "key_type": "Phone", "key_value": "009991234567"}]
+    assert actions == ["list_keys_by_phone"]
+
+
 def test_run_bridge_retries_transient_access_lock(monkeypatch) -> None:
     client = gate.GateClient()
     calls: list[object] = []

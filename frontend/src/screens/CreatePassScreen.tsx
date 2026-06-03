@@ -14,6 +14,7 @@ import { loadCreatePassDraft, saveCreatePassDraft } from '@/services/formMemory'
 import { useAuthStore } from '@/store/authStore';
 import { usePassesStore } from '@/store/passesStore';
 import { theme } from '@/theme';
+import { PassPurpose } from '@/types';
 import { goBackOrHome } from '@/utils/backNavigation';
 import { addDays, endOfDay, formatDate, formatDateInput, formatDateTime, parseDateInput, toIsoDate } from '@/utils/date';
 import { getLayoutMetrics } from '@/utils/layout';
@@ -21,6 +22,12 @@ import { getLayoutMetrics } from '@/utils/layout';
 type Props = NativeStackScreenProps<RootStackParamList, 'CreatePass'>;
 
 const hasAtLeastTwoWords = (value: string) => value.trim().split(/\s+/).filter(Boolean).length >= 2;
+
+const PASS_PURPOSE_OPTIONS: { value: PassPurpose; label: string }[] = [
+  { value: 'courier', label: 'Курьер' },
+  { value: 'taxi', label: 'Такси' },
+  { value: 'other', label: 'Другое' },
+];
 
 const renderClearButton = (onPress: () => void) => (
   <Pressable onPress={onPress} hitSlop={12}>
@@ -41,9 +48,10 @@ export const CreatePassScreen = ({ navigation }: Props) => {
   const [carNumber, setCarNumber] = useState('');
   const [plotNumber, setPlotNumber] = useState(user?.plotNumber ?? '');
   const [isPermanent, setIsPermanent] = useState(false);
-  const [isCourier, setIsCourier] = useState(false);
+  const [passPurpose, setPassPurpose] = useState<PassPurpose | null>(null);
   const [expiresAtInput, setExpiresAtInput] = useState('');
   const [showPicker, setShowPicker] = useState(false);
+  const [pickerValue, setPickerValue] = useState(() => new Date());
   const [formError, setFormError] = useState<string | null>(null);
   const [draftLoaded, setDraftLoaded] = useState(false);
 
@@ -62,7 +70,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
 
       setFullName(draft.residentName || user?.fullName || '');
       setCarNumber(draft.carNumber);
-      setIsCourier(Boolean(draft.isCourier));
+      setPassPurpose(draft.passPurpose);
       setDraftLoaded(true);
     };
 
@@ -81,9 +89,9 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     void saveCreatePassDraft(user?.id, {
       residentName: fullName,
       carNumber,
-      isCourier,
+      passPurpose,
     });
-  }, [carNumber, draftLoaded, fullName, isCourier, user?.id]);
+  }, [carNumber, draftLoaded, fullName, passPurpose, user?.id]);
 
   const onExpiresAtChange = (value: string) => {
     setExpiresAtInput(formatDateInput(value));
@@ -98,6 +106,11 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     if (formError) {
       setFormError(null);
     }
+  };
+
+  const openDatePicker = () => {
+    setPickerValue(parsedExpiresAt ?? new Date());
+    setShowPicker(true);
   };
 
   const onCreate = async () => {
@@ -153,7 +166,8 @@ export const CreatePassScreen = ({ navigation }: Props) => {
       plotNumber: normalizedPlotNumber,
       expiresAt: isPermanent ? null : toIsoDate(normalizedExpiresAt as Date),
       isPermanent,
-      isCourier,
+      isCourier: passPurpose !== null,
+      passPurpose,
     });
 
     if (success) {
@@ -217,7 +231,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
                     <>
                       {expiresAtInput ? renderClearButton(() => setExpiresAtInput('')) : null}
                       <Pressable
-                        onPress={() => setShowPicker(true)}
+                        onPress={openDatePicker}
                         hitSlop={12}
                         disabled={isPermanent}
                         accessibilityRole="button"
@@ -247,7 +261,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
                   setIsPermanent((previous) => {
                     const next = !previous;
                     if (next) {
-                      setIsCourier(false);
+                      setPassPurpose(null);
                       setShowPicker(false);
                     }
                     return next;
@@ -258,21 +272,26 @@ export const CreatePassScreen = ({ navigation }: Props) => {
                 <Text style={[styles.checkboxText, { fontSize: metrics.bodyFontSize }]}>Постоянный пропуск</Text>
               </Pressable>
 
-              <Pressable
-                style={styles.checkboxRow}
-                onPress={() =>
-                  setIsCourier((previous) => {
-                    const next = !previous;
-                    if (next) {
-                      setIsPermanent(false);
+              <View style={styles.purposeGroup}>
+                {PASS_PURPOSE_OPTIONS.map((option) => (
+                  <Pressable
+                    key={option.value}
+                    style={styles.checkboxRow}
+                    onPress={() =>
+                      setPassPurpose((previous) => {
+                        const next = previous === option.value ? null : option.value;
+                        if (next) {
+                          setIsPermanent(false);
+                        }
+                        return next;
+                      })
                     }
-                    return next;
-                  })
-                }
-              >
-                <View style={[styles.checkbox, isCourier && styles.checkboxChecked]} />
-                <Text style={[styles.checkboxText, { fontSize: metrics.bodyFontSize }]}>Курьер / Такси</Text>
-              </Pressable>
+                  >
+                    <View style={[styles.checkbox, passPurpose === option.value && styles.checkboxChecked]} />
+                    <Text style={[styles.checkboxText, { fontSize: metrics.bodyFontSize }]}>{option.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
 
               {formError ? <Text style={styles.error}>{formError}</Text> : null}
               {createError ? <Text style={styles.error}>{createError}</Text> : null}
@@ -289,7 +308,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
 
         <DatePickerModal
           visible={showPicker}
-          value={parsedExpiresAt ?? new Date()}
+          value={pickerValue}
           onChange={onDatePicked}
           onClose={() => setShowPicker(false)}
         />
@@ -343,6 +362,9 @@ const styles = StyleSheet.create({
   },
   checkboxText: {
     color: theme.colors.textSecondary,
+  },
+  purposeGroup: {
+    gap: 10,
   },
   error: {
     color: theme.colors.danger,

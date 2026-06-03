@@ -233,6 +233,43 @@ def test_admin_requests_endpoint_returns_requests_from_multiple_users(client):
     assert 'password_hash' not in by_login[user_a]['resident']
 
 
+def test_admin_requests_endpoint_returns_pass_purpose(client):
+    admin_login = f'admin_purpose_{uuid4().hex[:8]}'
+    resident_login = f'resident_purpose_{uuid4().hex[:8]}'
+    password = 'demo123'
+    selected_expires_at = datetime.now(timezone.utc) + timedelta(days=18)
+
+    asyncio.run(_ensure_user(admin_login, password, full_name='Admin Purpose', plot_number='911', is_admin=True))
+    asyncio.run(_ensure_user(resident_login, password, full_name='Resident Purpose', plot_number='404'))
+
+    resident_token = _api_login(client, resident_login, password)
+    create_response = client.post(
+        '/passes',
+        headers={'Authorization': f'Bearer {resident_token}'},
+        json={
+            'carNumber': f'O{uuid4().hex[:5]}'.upper(),
+            'plotNumber': '404',
+            'phoneNumber': '+79990001122',
+            'expiresAt': selected_expires_at.isoformat(),
+            'isPermanent': False,
+            'isCourier': True,
+            'passPurpose': 'other',
+        },
+    )
+    assert create_response.status_code == 200
+
+    admin_token = _api_login(client, admin_login, password)
+    response = client.get('/api/admin/requests', headers={'Authorization': f'Bearer {admin_token}'})
+
+    assert response.status_code == 200
+    items = response.json()['items']
+    created = next(item for item in items if item['resident']['login'] == resident_login)
+    assert created['is_courier'] is True
+    assert created['pass_kind'] == 'other'
+    returned_expires_at = datetime.fromisoformat(created['expires_at'].replace('Z', '+00:00'))
+    assert abs((returned_expires_at - selected_expires_at).total_seconds()) < 2
+
+
 def test_admin_requests_endpoint_detects_azerbaijan_plate_country(client):
     admin_login = f'admin_plate_{uuid4().hex[:8]}'
     resident_login = f'resident_plate_{uuid4().hex[:8]}'
@@ -712,13 +749,25 @@ def test_admin_create_user_links_existing_gate_access_by_phone(client, monkeypat
     monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.get_key_permissions',
         lambda external_key_id: [
-            {"access_point_id": 6, "access_point_name": "GSM entry"},
             {"access_point_id": 5, "access_point_name": "GSM exit"},
+            {"access_point_id": 6, "access_point_name": "GSM entry"},
         ],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.resolve_key_id',
+        lambda external_key_id: None,
     )
     monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.add_account_phone_key',
         lambda **kwargs: captured_gate_calls.append(dict(kwargs)) or 88002,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_phone',
+        lambda phone: [],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
+        lambda phone: [],
     )
 
     admin_token = _api_login(client, admin_login, admin_password)
@@ -757,6 +806,333 @@ def test_admin_create_user_links_existing_gate_access_by_phone(client, monkeypat
     assert captured_gate_calls[0]["access_point_ids"] == expected_access_point_ids
 
 
+def test_admin_create_user_reuses_existing_gate_phone_key_without_creating_default_pass(client, monkeypatch):
+    admin_login = f'admin_reuse_{uuid4().hex[:6]}'
+    admin_password = 'demo123'
+    asyncio.run(_ensure_user(admin_login, admin_password, full_name='Admin Reuse', plot_number='950', is_admin=True))
+
+    phone_number = f"+7999{str(uuid4().int)[-7:]}"
+    plot_number = str(700 + (uuid4().int % 200))
+    existing_gate_key_id = 88123
+    existing_access_point_ids = [6, 5]
+    captured_gate_calls = []
+
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.default_access_point_ids_json',
+        '[15,17,19,20,21,23]',
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.gsm_access_point_ids_json',
+        '[5,6]',
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.gate_real_integration_enabled',
+        True,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.get_key_permissions',
+        lambda external_key_id: [
+            {"access_point_id": 6, "access_point_name": "GSM entry"},
+            {"access_point_id": 5, "access_point_name": "GSM exit"},
+        ],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.resolve_key_id',
+        lambda external_key_id: existing_gate_key_id if external_key_id == phone_number else None,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.add_account_phone_key',
+        lambda **kwargs: captured_gate_calls.append(dict(kwargs)) or 88002,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_phone',
+        lambda phone: [
+            {
+                'gate_key_id': 88124,
+                'key_type': 'VehicleNumber',
+                'key_value': 'A123AA77',
+                'phone_number': phone,
+                'access_point_ids': [19, 20],
+                'is_permanent': True,
+                'expires_at': None,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
+        lambda phone: [
+            {
+                'gate_key_id': 88124,
+                'key_type': 'VehicleNumber',
+                'key_value': 'A123AA77',
+                'phone_number': phone,
+                'access_point_ids': [19, 20],
+                'is_permanent': True,
+                'expires_at': None,
+            }
+        ],
+    )
+
+    admin_token = _api_login(client, admin_login, admin_password)
+    create_response = client.post(
+        '/api/admin/users',
+        headers={'Authorization': f'Bearer {admin_token}'},
+        json={
+            'full_name': 'Admin Reused',
+            'phone': phone_number,
+            'plot_number': plot_number,
+        },
+    )
+
+    assert create_response.status_code == 200
+    created = create_response.json()
+
+    async def _load_linked_request() -> tuple[Request, User]:
+        async with SessionLocal() as session:
+            user = await session.get(User, int(created['id']))
+            assert user is not None
+            request_query = await session.execute(
+                select(Request).where(
+                    Request.resident_id == user.id,
+                    Request.key_type == "Phone",
+                    Request.status == "active",
+                )
+            )
+            request = request_query.scalar_one()
+            return request, user
+
+    linked_request, linked_user = asyncio.run(_load_linked_request())
+    assert linked_user.gate_user_id == existing_gate_key_id
+    assert linked_request.gate_key_id == existing_gate_key_id
+    assert linked_request.key_value == phone_number
+    assert linked_request.access_point_ids == existing_access_point_ids
+    assert captured_gate_calls == []
+
+    user_login = client.post('/auth/login', json={'login': created['login'], 'password': created['password']})
+    assert user_login.status_code == 200
+    token = user_login.json()['access_token']
+    my_passes = client.get('/passes/my', headers={'Authorization': f'Bearer {token}'})
+    assert my_passes.status_code == 200
+    vehicle_passes = [item for item in my_passes.json() if item['keyType'] == 'VehicleNumber']
+    assert len(vehicle_passes) == 1
+    assert vehicle_passes[0]['keyValue'] == 'A123AA77'
+    assert vehicle_passes[0]['isPermanent'] is True
+
+    async def _load_vehicle_request() -> Request:
+        async with SessionLocal() as session:
+            request_query = await session.execute(
+                select(Request).where(
+                    Request.resident_id == int(created['id']),
+                    Request.key_type == "VehicleNumber",
+                    Request.key_value == "A123AA77",
+                    Request.status == "active",
+                )
+            )
+            return request_query.scalar_one()
+
+    vehicle_request = asyncio.run(_load_vehicle_request())
+    assert vehicle_request.gate_key_id == 88124
+    assert vehicle_request.contact_phone == phone_number
+    assert vehicle_request.access_point_ids == [19, 20]
+
+
+def test_admin_create_user_links_existing_vehicle_pass_without_creating_duplicate_gate_phone_user(client, monkeypatch):
+    admin_login = f'admin_vehicle_reuse_{uuid4().hex[:6]}'
+    admin_password = 'demo123'
+    asyncio.run(_ensure_user(admin_login, admin_password, full_name='Admin Vehicle Reuse', plot_number='950', is_admin=True))
+
+    phone_number = f"+7999{str(uuid4().int)[-7:]}"
+    plot_number = str(700 + (uuid4().int % 200))
+    vehicle_number = f"A{100 + (uuid4().int % 900)}BB77"
+    captured_gate_calls = []
+
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.default_access_point_ids_json',
+        '[15,17,19,20,21,23]',
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.gsm_access_point_ids_json',
+        '[5,6]',
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.gate_real_integration_enabled',
+        True,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.get_key_permissions',
+        lambda external_key_id: [],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.resolve_key_id',
+        lambda external_key_id: None,
+    )
+
+    def _fail_duplicate_phone_user(**kwargs):
+        captured_gate_calls.append(dict(kwargs))
+        raise RuntimeError('Gate: данный пользователь уже есть в базе данных')
+
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.add_account_phone_key',
+        _fail_duplicate_phone_user,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_phone',
+        lambda phone: [
+            {
+                'gate_key_id': 88125,
+                'key_type': 'VehicleNumber',
+                'key_value': vehicle_number,
+                'phone_number': phone,
+                'access_point_ids': [19, 20],
+                'is_permanent': True,
+                'expires_at': None,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
+        lambda phone: [
+            {
+                'gate_key_id': 88125,
+                'key_type': 'VehicleNumber',
+                'key_value': vehicle_number,
+                'phone_number': phone,
+                'access_point_ids': [19, 20],
+                'is_permanent': True,
+                'expires_at': None,
+            }
+        ],
+    )
+
+    admin_token = _api_login(client, admin_login, admin_password)
+    create_response = client.post(
+        '/api/admin/users',
+        headers={'Authorization': f'Bearer {admin_token}'},
+        json={
+            'full_name': 'Admin Vehicle Existing',
+            'phone': phone_number,
+            'plot_number': plot_number,
+        },
+    )
+
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert captured_gate_calls == []
+
+    resident_token = _api_login(client, created['login'], created['password'])
+    my_passes = client.get('/passes/my', headers={'Authorization': f'Bearer {resident_token}'})
+    assert my_passes.status_code == 200
+    vehicle_passes = [item for item in my_passes.json() if item['keyType'] == 'VehicleNumber']
+    assert len(vehicle_passes) == 1
+    assert vehicle_passes[0]['keyValue'] == vehicle_number
+
+    async def _load_vehicle_request() -> Request:
+        async with SessionLocal() as session:
+            request_query = await session.execute(
+                select(Request).where(
+                    Request.resident_id == int(created['id']),
+                    Request.key_type == "VehicleNumber",
+                    Request.key_value == vehicle_number,
+                    Request.status == "active",
+                )
+            )
+            return request_query.scalar_one()
+
+    vehicle_request = asyncio.run(_load_vehicle_request())
+    assert vehicle_request.gate_key_id == 88125
+    assert vehicle_request.contact_phone == phone_number
+
+
+def test_admin_create_user_does_not_create_gate_phone_when_existing_gate_row_has_no_permissions(client, monkeypatch):
+    admin_login = f'admin_gate_row_{uuid4().hex[:6]}'
+    admin_password = 'demo123'
+    asyncio.run(_ensure_user(admin_login, admin_password, full_name='Admin Gate Row', plot_number='950', is_admin=True))
+
+    phone_number = f"+7999{str(uuid4().int)[-7:]}"
+    plot_number = str(700 + (uuid4().int % 200))
+    vehicle_number = f"B{100 + (uuid4().int % 900)}CC77"
+    captured_gate_calls = []
+
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.default_access_point_ids_json',
+        '[15,17,19,20,21,23]',
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.gsm_access_point_ids_json',
+        '[5,6]',
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.gate_real_integration_enabled',
+        True,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.get_key_permissions',
+        lambda external_key_id: [],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.resolve_key_id',
+        lambda external_key_id: None,
+    )
+
+    def _fail_duplicate_phone_user(**kwargs):
+        captured_gate_calls.append(dict(kwargs))
+        raise RuntimeError('Gate: данный пользователь уже есть в базе данных')
+
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.add_account_phone_key',
+        _fail_duplicate_phone_user,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_phone',
+        lambda phone: [],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
+        lambda phone: [
+            {
+                'gate_key_id': 88126,
+                'key_type': 'VehicleNumber',
+                'key_value': vehicle_number,
+                'phone_number': phone,
+                'access_point_ids': [],
+                'is_permanent': True,
+                'expires_at': None,
+            }
+        ],
+    )
+
+    admin_token = _api_login(client, admin_login, admin_password)
+    create_response = client.post(
+        '/api/admin/users',
+        headers={'Authorization': f'Bearer {admin_token}'},
+        json={
+            'full_name': 'Admin Gate Existing',
+            'phone': phone_number,
+            'plot_number': plot_number,
+        },
+    )
+
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert captured_gate_calls == []
+
+    async def _load_vehicle_request() -> Request:
+        async with SessionLocal() as session:
+            request_query = await session.execute(
+                select(Request).where(
+                    Request.resident_id == int(created['id']),
+                    Request.key_type == "VehicleNumber",
+                    Request.key_value == vehicle_number,
+                    Request.status == "active",
+                )
+            )
+            return request_query.scalar_one()
+
+    vehicle_request = asyncio.run(_load_vehicle_request())
+    assert vehicle_request.gate_key_id == 88126
+    assert vehicle_request.access_point_ids == [15, 17, 19, 20, 21, 23]
+
+
 def test_admin_create_user_provisions_gate_phone_access_when_missing(client, monkeypatch):
     admin_login = f'admin_provision_{uuid4().hex[:6]}'
     admin_password = 'demo123'
@@ -784,8 +1160,20 @@ def test_admin_create_user_provisions_gate_phone_access_when_missing(client, mon
         lambda external_key_id: (_ for _ in ()).throw(RuntimeError('lookup failed')),
     )
     monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.resolve_key_id',
+        lambda external_key_id: None,
+    )
+    monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.add_account_phone_key',
         lambda **kwargs: captured_gate_calls.append(dict(kwargs)) or 88004,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_phone',
+        lambda phone: [],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
+        lambda phone: [],
     )
 
     admin_token = _api_login(client, admin_login, admin_password)
@@ -858,6 +1246,13 @@ def test_admin_create_user_recovers_gate_phone_key_after_ui_timeout(client, monk
         'backend.app.services.gate_linking.gate_client.get_key_permissions',
         lambda external_key_id: [],
     )
+    resolve_calls = {'n': 0}
+
+    def _resolve_after_timeout(external_key_id):
+        resolve_calls['n'] += 1
+        if resolve_calls['n'] == 1:
+            return None
+        return 88008 if external_key_id == phone_number else None
 
     def _raise_timeout(**_kwargs):
         raise RuntimeError('Gate bridge action add_phone_permanent_key_via_ui timed out after 60 seconds')
@@ -866,9 +1261,14 @@ def test_admin_create_user_recovers_gate_phone_key_after_ui_timeout(client, monk
         'backend.app.services.gate_linking.gate_client.add_account_phone_key',
         _raise_timeout,
     )
+    monkeypatch.setattr('backend.app.services.gate_linking.gate_client.resolve_key_id', _resolve_after_timeout)
     monkeypatch.setattr(
-        'backend.app.services.gate_linking.gate_client.resolve_key_id',
-        lambda external_key_id: 88008 if external_key_id == phone_number else None,
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_phone',
+        lambda phone: [],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
+        lambda phone: [],
     )
 
     admin_token = _api_login(client, admin_login, admin_password)
@@ -984,6 +1384,10 @@ def test_admin_created_user_can_add_vehicle_pass_without_replacing_phone_pass(cl
         'backend.app.services.gate_linking.gate_client.get_key_permissions',
         lambda external_key_id: [],
     )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.resolve_key_id',
+        lambda external_key_id: None,
+    )
     # Vehicle passes are routed to camera-only access points by
     # compatibility._runtime_vehicle_camera_access_point_ids, which queries
     # gate_client.get_access_points.  Provide a deterministic camera set.
@@ -1011,6 +1415,14 @@ def test_admin_created_user_can_add_vehicle_pass_without_replacing_phone_pass(cl
     monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.add_account_phone_key',
         _fake_add_permanent_key,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_phone',
+        lambda phone: [],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
+        lambda phone: [],
     )
     monkeypatch.setattr(
         'backend.app.services.requests.gate_client.add_permanent_key',
@@ -1109,8 +1521,20 @@ def test_startup_backfills_missing_gate_phone_requests(monkeypatch):
         lambda external_key_id: [],
     )
     monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.resolve_key_id',
+        lambda external_key_id: None,
+    )
+    monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.add_account_phone_key',
         lambda **kwargs: captured_gate_calls.append(dict(kwargs)) or 88005,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_phone',
+        lambda phone: [],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
+        lambda phone: [],
     )
 
     async def _create_user_without_phone_request() -> int:

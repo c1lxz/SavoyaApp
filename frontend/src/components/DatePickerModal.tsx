@@ -81,6 +81,7 @@ export const DatePickerModal = ({ visible, value, onChange, onClose }: DatePicke
   const metrics = getLayoutMetrics(width, height);
   const [draftDate, setDraftDate] = useState(value);
   const [visibleMonth, setVisibleMonth] = useState(getMonthStart(value));
+  const draftDateRef = useRef(value);
 
   useEffect(() => {
     if (!visible) {
@@ -88,6 +89,7 @@ export const DatePickerModal = ({ visible, value, onChange, onClose }: DatePicke
     }
 
     setDraftDate(value);
+    draftDateRef.current = value;
     setVisibleMonth(getMonthStart(value));
   }, [value, visible]);
 
@@ -107,12 +109,16 @@ export const DatePickerModal = ({ visible, value, onChange, onClose }: DatePicke
   ).current;
 
   const handleSelectDay = (selectedDay: Date) => {
-    setDraftDate((current) => mergeCalendarDate(current, selectedDay));
+    setDraftDate((current) => {
+      const next = mergeCalendarDate(current, selectedDay);
+      draftDateRef.current = next;
+      return next;
+    });
     setVisibleMonth(getMonthStart(selectedDay));
   };
 
   const applyDraft = () => {
-    onChange(draftDate);
+    onChange(draftDateRef.current);
     onClose();
   };
 

@@ -1,15 +1,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { PassPurpose } from '@/types';
 
 export type CreatePassDraft = {
   residentName: string;
   carNumber: string;
-  isCourier: boolean;
+  passPurpose: PassPurpose | null;
 };
 
 const EMPTY_DRAFT: CreatePassDraft = {
   residentName: '',
   carNumber: '',
-  isCourier: false,
+  passPurpose: null,
 };
 
 const buildCreatePassDraftKey = (userId?: string | null) => `create-pass-draft:v1:${userId ?? 'anonymous'}`;
@@ -19,7 +20,7 @@ const normalizeDraft = (draft: Partial<CreatePassDraft>): CreatePassDraft => ({
   carNumber: String(draft.carNumber ?? '')
     .trim()
     .toUpperCase(),
-  isCourier: Boolean(draft.isCourier),
+  passPurpose: draft.passPurpose ?? (Boolean((draft as { isCourier?: boolean }).isCourier) ? 'courier' : null),
 });
 
 export const loadCreatePassDraft = async (userId?: string | null): Promise<CreatePassDraft> => {

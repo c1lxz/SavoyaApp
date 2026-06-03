@@ -9,6 +9,12 @@ import { getLayoutMetrics } from '@/utils/layout';
 import { formatVehicleLabel } from '@/utils/vehicleCountry';
 import { StatusBadge } from './StatusBadge';
 
+const passPurposeLabels: Record<NonNullable<PassItem['passPurpose']>, string> = {
+  courier: 'Курьер',
+  taxi: 'Такси',
+  other: 'Другое',
+};
+
 type PassCardProps = {
   item: PassItem;
   onDelete?: (item: PassItem) => void;
@@ -19,6 +25,7 @@ const PassCardComponent = ({ item, onDelete, deleting = false }: PassCardProps) 
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
   const displayDate = item.expiresAt ? addDays(item.expiresAt, 1) : null;
+  const passPurposeLabel = item.passPurpose ? passPurposeLabels[item.passPurpose] : item.isCourier ? 'Курьер' : null;
 
   return (
     <View style={styles.card}>
@@ -31,8 +38,8 @@ const PassCardComponent = ({ item, onDelete, deleting = false }: PassCardProps) 
             {item.keyType === 'Phone' ? 'Телефонный пропуск' : 'Пропуск по номеру ТС'}
           </Text>
           <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>{`Участок №${item.plotNumber}`}</Text>
-          {item.isCourier ? (
-            <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>Курьерский пропуск</Text>
+          {passPurposeLabel ? (
+            <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>{passPurposeLabel}</Text>
           ) : null}
           {item.phoneNumber && item.keyType !== 'Phone' ? (
             <Text style={[styles.meta, { fontSize: metrics.bodyFontSize }]}>{`Телефон: ${item.phoneNumber}`}</Text>
