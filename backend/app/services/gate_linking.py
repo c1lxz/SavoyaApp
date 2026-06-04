@@ -219,14 +219,15 @@ async def _link_existing_gate_vehicle_passes_by_phone(session: AsyncSession, use
     return linked_ids
 
 
-async def _link_existing_gate_keys_by_phone(session: AsyncSession, user: User, phone_key: str) -> list[int]:
+async def _link_existing_gate_keys_by_phone(session: AsyncSession, user: User, phone_key: str) -> tuple[list[int], bool]:
     try:
         gate_rows = await asyncio.to_thread(gate_client.list_keys_by_phone, phone_key)
     except Exception as exc:  # pragma: no cover - depends on local Gate bridge/runtime.
         logger.warning("Gate key auto-link lookup failed for user_id=%s phone=%s: %s", user.id, phone_key, exc)
-        return []
+        return [], False
 
     linked_ids: list[int] = []
+    found_gate_rows = False
     for item in gate_rows:
         key_type = str(item.get("key_type") or "").strip()
         if key_type not in {"Phone", "VehicleNumber"}:
@@ -235,6 +236,7 @@ async def _link_existing_gate_keys_by_phone(session: AsyncSession, user: User, p
         key_value = str(item.get("key_value") or "").strip()
         if not key_value:
             continue
+        found_gate_rows = True
 
         existing_query = await session.execute(
             select(Request.id).where(
@@ -256,8 +258,6 @@ async def _link_existing_gate_keys_by_phone(session: AsyncSession, user: User, p
         )
         if key_type == "Phone":
             access_point_ids = _configured_phone_access_point_ids(access_point_ids)
-        elif not access_point_ids:
-            access_point_ids = list(settings.default_access_point_ids)
         if not access_point_ids:
             continue
 
@@ -293,7 +293,7 @@ async def _link_existing_gate_keys_by_phone(session: AsyncSession, user: User, p
             continue
         linked_ids.append(int(request.id))
 
-    return linked_ids
+    return linked_ids, found_gate_rows
 
 
 async def ensure_existing_phone_requests_have_configured_access(session: AsyncSession) -> int:
@@ -427,12 +427,22 @@ async def link_existing_gate_passes_by_phone(session: AsyncSession, user: User) 
     access_point_ids = _configured_phone_access_point_ids(existing_access_point_ids)
 
     existing_gate_request_ids: list[int] = []
+    found_existing_gate_rows = False
     try:
-        existing_gate_request_ids = await _link_existing_gate_keys_by_phone(session, user, phone_key)
+        existing_gate_request_ids, found_existing_gate_rows = await _link_existing_gate_keys_by_phone(
+            session,
+            user,
+            phone_key,
+        )
     except IntegrityError as exc:
         await session.rollback()
         logger.info("Skipped Gate key auto-link for user_id=%s after duplicate request race", user.id)
         return GatePhoneLinkResult(error=str(exc))
+
+    if found_existing_gate_rows and not existing_gate_request_ids:
+        return GatePhoneLinkResult(
+            error="Gate user exists for this phone, but has no active access permissions to link",
+        )
 
     linked_phone_request_id: int | None = None
     if existing_gate_request_ids:

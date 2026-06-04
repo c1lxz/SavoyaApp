@@ -1043,7 +1043,7 @@ def test_admin_create_user_links_existing_vehicle_pass_without_creating_duplicat
     assert vehicle_request.contact_phone == phone_number
 
 
-def test_admin_create_user_does_not_create_gate_phone_when_existing_gate_row_has_no_permissions(client, monkeypatch):
+def test_admin_create_user_rolls_back_when_existing_gate_row_has_no_permissions(client, monkeypatch):
     admin_login = f'admin_gate_row_{uuid4().hex[:6]}'
     admin_password = 'demo123'
     asyncio.run(_ensure_user(admin_login, admin_password, full_name='Admin Gate Row', plot_number='950', is_admin=True))
@@ -1112,25 +1112,26 @@ def test_admin_create_user_does_not_create_gate_phone_when_existing_gate_row_has
         },
     )
 
-    assert create_response.status_code == 200
-    created = create_response.json()
+    assert create_response.status_code == 502
+    assert create_response.json()['detail']['code'] == 'gate_phone_access_failed'
     assert captured_gate_calls == []
 
-    async def _load_vehicle_request() -> Request:
+    async def _load_created_user_and_request() -> tuple[User | None, Request | None]:
         async with SessionLocal() as session:
+            user_query = await session.execute(select(User).where(User.phone == phone_number))
+            user = user_query.scalar_one_or_none()
             request_query = await session.execute(
                 select(Request).where(
-                    Request.resident_id == int(created['id']),
                     Request.key_type == "VehicleNumber",
                     Request.key_value == vehicle_number,
                     Request.status == "active",
                 )
             )
-            return request_query.scalar_one()
+            return user, request_query.scalar_one_or_none()
 
-    vehicle_request = asyncio.run(_load_vehicle_request())
-    assert vehicle_request.gate_key_id == 88126
-    assert vehicle_request.access_point_ids == [15, 17, 19, 20, 21, 23]
+    created_user, vehicle_request = asyncio.run(_load_created_user_and_request())
+    assert created_user is None
+    assert vehicle_request is None
 
 
 def test_admin_create_user_provisions_gate_phone_access_when_missing(client, monkeypatch):
