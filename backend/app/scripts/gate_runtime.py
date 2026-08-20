@@ -2103,7 +2103,7 @@ def add_phone_permanent_key_via_gateterm_ui(
                     _click_gateterm_control(editor_window, 1, "ThunderRT6CommandButton", "Button")
                     time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_DELAY_SECONDS", 0.75))
                     _finalize_gateterm_user_edit_save(app)
-            _verify_phone_identity_persisted(
+            _ensure_phone_identity_and_access_persisted(
                 user_ptr,
                 normalized_key_value,
                 context["phone_key_type_value"],
@@ -5439,6 +5439,38 @@ def _verify_phone_identity_persisted(
             normalized_key_value=normalized_key_value,
             phone_key_type_value=phone_key_type_value,
             access_point_ids=access_point_ids,
+        )
+
+
+def _ensure_phone_identity_and_access_persisted(
+    user_ptr: int,
+    normalized_key_value: str,
+    phone_key_type_value: Any | None,
+    access_point_ids: Iterable[int],
+) -> None:
+    """Persist required readers after GateTerm's unreliable VB6 listbox save.
+
+    The UI interaction remains the primary path, but live GateTerm 1.22.99 can
+    close the editor without writing checked listbox items to AccessTable. Add
+    only the required readers after the editor closes, preserving optional
+    existing readers, then verify the full phone identity and permission set in
+    the same transaction.
+    """
+
+    required_access_point_ids = [int(item) for item in access_point_ids]
+    with _transaction_cursor() as (_, cursor):
+        _ensure_access_permissions(
+            cursor,
+            int(user_ptr),
+            required_access_point_ids,
+            key_type="Phone",
+        )
+        _verify_phone_user_state(
+            cursor,
+            user_ptr=int(user_ptr),
+            normalized_key_value=normalized_key_value,
+            phone_key_type_value=phone_key_type_value,
+            access_point_ids=required_access_point_ids,
         )
 
 

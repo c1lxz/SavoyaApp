@@ -1365,7 +1365,7 @@ def test_add_phone_permanent_key_via_gateterm_ui_creates_new_user(monkeypatch):
     )
     monkeypatch.setattr(
         gate_runtime,
-        "_verify_phone_identity_persisted",
+        "_ensure_phone_identity_and_access_persisted",
         lambda user_ptr, normalized_key_value, phone_key_type_value, access_point_ids: calls.append(
             ("verify", user_ptr, normalized_key_value, phone_key_type_value, list(access_point_ids))
         ),
@@ -1481,7 +1481,7 @@ def test_add_phone_permanent_key_via_gateterm_ui_updates_existing_user(monkeypat
     )
     monkeypatch.setattr(
         gate_runtime,
-        "_verify_phone_identity_persisted",
+        "_ensure_phone_identity_and_access_persisted",
         lambda user_ptr, normalized_key_value, phone_key_type_value, access_point_ids: calls.append(
             ("verify", user_ptr, normalized_key_value, phone_key_type_value, list(access_point_ids))
         ),
@@ -3960,6 +3960,43 @@ def test_verify_phone_user_state_accepts_extra_optional_gsm_access(monkeypatch):
         normalized_key_value="009111253128",
         phone_key_type_value=6,
         access_point_ids=[15, 17, 19, 20, 21, 23],
+    )
+
+
+def test_ensure_phone_identity_and_access_persisted_adds_required_readers_without_pruning(monkeypatch):
+    cursor = object()
+    calls: list[tuple] = []
+    monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(cursor))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_ensure_access_permissions",
+        lambda actual_cursor, user_ptr, access_point_ids, *, key_type: calls.append(
+            ("ensure", actual_cursor, user_ptr, list(access_point_ids), key_type)
+        ),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_verify_phone_user_state",
+        lambda actual_cursor, **kwargs: calls.append(("verify", actual_cursor, kwargs)),
+    )
+
+    gate_runtime._ensure_phone_identity_and_access_persisted(
+        42,
+        "009111253128",
+        6,
+        [15, 17, 19, 20, 21, 23],
+    )
+
+    assert calls[0] == ("ensure", cursor, 42, [15, 17, 19, 20, 21, 23], "Phone")
+    assert calls[1] == (
+        "verify",
+        cursor,
+        {
+            "user_ptr": 42,
+            "normalized_key_value": "009111253128",
+            "phone_key_type_value": 6,
+            "access_point_ids": [15, 17, 19, 20, 21, 23],
+        },
     )
 
 
