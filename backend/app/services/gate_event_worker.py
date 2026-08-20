@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from typing import Optional
 
 from ..config import get_settings
 from ..database import SessionLocal
@@ -12,6 +13,13 @@ from .requests import delete_expired_requests
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+# Maximum time (seconds) to defer sweeps while "Список пользователей" is open.
+# After this threshold the sweep runs regardless — an indefinite deferral would
+# prevent expired passes from ever being removed (e.g. if the window is stuck open
+# after a failed gate_bridge UI operation).
+_SWEEP_MAX_DEFER_SECONDS: float = 60.0
+_sweep_defer_start: Optional[float] = None
 
 
 async def poll_courier_gate_entry_events_once() -> int:
@@ -35,8 +43,39 @@ async def sweep_expired_requests_once() -> int:
     cleanup, which does not touch the Gate) are picked up here too, so a Gate key can
     no longer linger after the app already considers the pass gone.
     """
+    global _sweep_defer_start
+
     if not settings.gate_real_integration_enabled:
         return 0
+
+    # Defer this cycle if "Список пользователей" is currently open: a removal burst can hold
+    # GateTerm's UI for 20-30s+ per key, during which a staff member's manual "Добавить" click
+    # has no search-probe protection (that workaround only covers the app-driven create path)
+    # and depends entirely on gateterm_users_guard.py priming the window first.
+    #
+    # IMPORTANT: deferral is time-limited. If the window stays open beyond
+    # _SWEEP_MAX_DEFER_SECONDS (e.g. it was left open after a failed gate_bridge operation),
+    # the sweep runs anyway — an indefinite deferral would prevent expired passes from
+    # ever being cleaned up, which is worse than any UI race risk.
+    window_open = await asyncio.to_thread(gate_client.is_users_window_open)
+    if window_open:
+        now = time.monotonic()
+        if _sweep_defer_start is None:
+            _sweep_defer_start = now
+        elapsed = now - _sweep_defer_start
+        if elapsed < _SWEEP_MAX_DEFER_SECONDS:
+            return 0  # Window open and within deferral limit — skip this cycle
+        # Window has been open longer than the limit — run sweep anyway, then restart the
+        # clock so the next 60-second deferral window begins fresh (not firing every cycle).
+        logger.warning(
+            "sweep_expired_requests_once: 'Список пользователей' open for %.0fs (> %.0fs limit) — "
+            "running sweep anyway to prevent stale passes",
+            elapsed,
+            _SWEEP_MAX_DEFER_SECONDS,
+        )
+        _sweep_defer_start = time.monotonic()  # restart timer after forced sweep
+    else:
+        _sweep_defer_start = None  # Window closed — reset timer for next open event
 
     async with SessionLocal() as session:
         return await delete_expired_requests(session)
@@ -92,20 +131,38 @@ async def courier_gate_event_worker() -> None:
     maintenance_interval = max(interval, float(settings.gate_maintenance_interval_seconds))
     next_maintenance_at = 0.0
     while True:
-        try:
+        # FIX: each operation has its own try/except so a failure in one
+        # (e.g. get_recent_events ODBC error) never prevents the others from running.
+
+        if maintenance_enabled:
             current_time = time.monotonic()
-            if maintenance_enabled and current_time >= next_maintenance_at:
-                await run_gate_maintenance_pass_once()
-                next_maintenance_at = current_time + maintenance_interval
+            if current_time >= next_maintenance_at:
+                try:
+                    await run_gate_maintenance_pass_once()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Failed to run Gate maintenance pass")
+                finally:
+                    next_maintenance_at = time.monotonic() + maintenance_interval
+
+        try:
             scheduled_count = await poll_courier_gate_entry_events_once()
             if scheduled_count:
                 logger.info("Scheduled %s courier request(s) for cleanup from Gate entry events", scheduled_count)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Failed to poll Gate courier entry events")
+
+        # Critical: always sweep expired passes — independent of poll result above.
+        try:
             removed_count = await sweep_expired_requests_once()
             if removed_count:
                 logger.info("Removed %s expired request(s) from Gate after expiry", removed_count)
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("Failed to process Gate entry events")
+            logger.exception("Failed to sweep expired Gate requests")
 
         await asyncio.sleep(interval)

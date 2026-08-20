@@ -4307,6 +4307,11 @@ def test_add_vehicle_key_via_gateterm_ui_creates_new_user(monkeypatch):
     )
     monkeypatch.setattr(
         gate_runtime,
+        "_resolve_gateterm_search_init_probe_value",
+        lambda: "INIT-PROBE-FAKE",
+    )
+    monkeypatch.setattr(
+        gate_runtime,
         "_open_gateterm_new_user_window",
         lambda app, users_window: calls.append(("open_new", app, users_window)) or fake_new_window,
     )
@@ -4357,10 +4362,10 @@ def test_add_vehicle_key_via_gateterm_ui_creates_new_user(monkeypatch):
     assert search_idx == open_users_idx + 1, "search must immediately follow open_users for new users"
     assert open_new_idx == search_idx + 1, "open_new must immediately follow the initial search"
 
-    # the pre-Add search must use the dummy init value, NOT the real plate number
+    # the pre-Add search must use the resolved probe value, NOT the real plate number
     init_search = calls[search_idx]
-    assert init_search[3] == gate_runtime._GATETERM_SEARCH_INIT_DUMMY_VALUE, (
-        "pre-Add search must use the dummy value, not the real plate number"
+    assert init_search[3] == "INIT-PROBE-FAKE", (
+        "pre-Add search must use the resolved probe value, not the real plate number"
     )
 
     # populate first call uses new-user window

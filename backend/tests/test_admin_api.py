@@ -766,6 +766,10 @@ def test_admin_create_user_links_existing_gate_access_by_phone(client, monkeypat
         lambda phone: [],
     )
     monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_name',
+        lambda name: [],
+    )
+    monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
         lambda phone: [],
     )
@@ -857,6 +861,10 @@ def test_admin_create_user_reuses_existing_gate_phone_key_without_creating_defau
                 'expires_at': None,
             }
         ],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_name',
+        lambda name: [],
     )
     monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
@@ -990,6 +998,10 @@ def test_admin_create_user_links_existing_vehicle_pass_without_creating_duplicat
         ],
     )
     monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_name',
+        lambda name: [],
+    )
+    monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
         lambda phone: [
             {
@@ -1087,6 +1099,10 @@ def test_admin_create_user_rolls_back_when_existing_gate_row_has_no_permissions(
         lambda phone: [],
     )
     monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_name',
+        lambda name: [],
+    )
+    monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
         lambda phone: [
             {
@@ -1171,6 +1187,10 @@ def test_admin_create_user_provisions_gate_phone_access_when_missing(client, mon
     monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_phone',
         lambda phone: [],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_name',
+        lambda name: [],
     )
     monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
@@ -1266,6 +1286,10 @@ def test_admin_create_user_recovers_gate_phone_key_after_ui_timeout(client, monk
     monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_phone',
         lambda phone: [],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_name',
+        lambda name: [],
     )
     monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
@@ -1422,6 +1446,10 @@ def test_admin_created_user_can_add_vehicle_pass_without_replacing_phone_pass(cl
         lambda phone: [],
     )
     monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_name',
+        lambda name: [],
+    )
+    monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
         lambda phone: [],
     )
@@ -1532,6 +1560,10 @@ def test_startup_backfills_missing_gate_phone_requests(monkeypatch):
     monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_phone',
         lambda phone: [],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_name',
+        lambda name: [],
     )
     monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
@@ -2152,3 +2184,405 @@ def test_admin_create_user_rolls_back_only_after_all_gate_link_attempts_fail(cli
             return row.scalar_one_or_none() is not None
 
     assert asyncio.run(_user_exists()) is False, 'user must be rolled back after all attempts fail'
+
+
+# ---------------------------------------------------------------------------
+# Name-based Gate vehicle pass linking (fallback when Phone field is empty)
+# ---------------------------------------------------------------------------
+
+def _make_gate_link_monkeypatches(
+    monkeypatch,
+    *,
+    phone_vehicles: list[dict],
+    name_vehicles: list[dict],
+    new_phone_key_id: int = 91001,
+    extra_access_points: str = '[1,2]',
+) -> None:
+    """Set up the standard monkeypatches needed to exercise gate_linking in isolation."""
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.default_access_point_ids_json',
+        extra_access_points,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.gsm_access_point_ids_json',
+        '[]',
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.gate_real_integration_enabled',
+        True,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.get_key_permissions',
+        lambda external_key_id: [],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.resolve_key_id',
+        lambda external_key_id: None,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.add_account_phone_key',
+        lambda **kwargs: new_phone_key_id,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_phone',
+        lambda phone: list(phone_vehicles),
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_name',
+        lambda name: list(name_vehicles),
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
+        lambda phone: [],
+    )
+
+
+def test_gate_name_link_finds_vehicle_with_no_phone_field_in_gate(monkeypatch):
+    """Name-based fallback links a vehicle pass whose Gate row has no Phone field.
+
+    Scenario: The resident owns one car whose Gate record has an empty Phone field.
+    list_vehicle_keys_by_phone returns nothing; list_vehicle_keys_by_name finds it.
+    After create, exactly one VehicleNumber request must exist linked to the account.
+    """
+    from backend.app.services.gate_linking import link_existing_gate_passes_by_phone
+
+    resident_name = f'Петров Пётр Петрович {uuid4().hex[:4]}'
+    vehicle_plate = f'В{uuid4().hex[:3].upper()}001'
+    phone_number = f'+7910{str(uuid4().int)[-7:]}'
+
+    _make_gate_link_monkeypatches(
+        monkeypatch,
+        phone_vehicles=[],  # no phone field in Gate → phone lookup misses this car
+        name_vehicles=[
+            {
+                'gate_key_id': 91101,
+                'key_type': 'VehicleNumber',
+                'key_value': vehicle_plate,
+                'phone_number': None,
+                'access_point_ids': [1, 2],
+                'is_permanent': True,
+                'expires_at': None,
+            }
+        ],
+        new_phone_key_id=91001,
+    )
+
+    async def _link() -> tuple[int, list[int]]:
+        async with SessionLocal() as session:
+            user = User(
+                phone=phone_number,
+                login=f'resident_nml1_{uuid4().hex[:6]}',
+                password_hash=hash_password('demo123'),
+                name=resident_name,
+                apartment='201',
+                plot_number='201',
+                is_admin=False,
+                is_active=True,
+            )
+            session.add(user)
+            await session.flush()
+            result = await link_existing_gate_passes_by_phone(session, user)
+            await session.commit()
+            return user.id, result.linked_request_ids
+
+    user_id, linked_ids = asyncio.run(_link())
+
+    async def _load_requests():
+        async with SessionLocal() as session:
+            q = await session.execute(
+                select(Request).where(Request.resident_id == user_id, Request.status == 'active')
+            )
+            return q.scalars().all()
+
+    requests = asyncio.run(_load_requests())
+    vehicle_requests = [r for r in requests if r.key_type == 'VehicleNumber']
+    phone_requests = [r for r in requests if r.key_type == 'Phone']
+
+    assert len(phone_requests) == 1, f'Expected 1 Phone pass, got {len(phone_requests)}'
+    assert len(vehicle_requests) == 1, (
+        f'Expected 1 VehicleNumber pass linked by name, got {len(vehicle_requests)}'
+    )
+    assert vehicle_requests[0].key_value == vehicle_plate
+    assert vehicle_requests[0].gate_key_id == 91101
+    assert len(linked_ids) == 2, f'linked_request_ids should have Phone+Vehicle, got {linked_ids}'
+
+
+def test_gate_name_link_supplements_phone_linked_vehicles_with_second_car(monkeypatch):
+    """Name-based fallback links a second car not found by phone.
+
+    Scenario: Two cars. Car A has a Phone field in Gate (found by phone lookup).
+    Car B has no Phone field in Gate (missed by phone lookup, found by name lookup).
+    Both must appear in Мои пропуска after account creation.
+    """
+    from backend.app.services.gate_linking import link_existing_gate_passes_by_phone
+
+    resident_name = f'Сидоров Сидор Сидорович {uuid4().hex[:4]}'
+    plate_a = f'А{uuid4().hex[:3].upper()}11'  # has phone in Gate
+    plate_b = f'Б{uuid4().hex[:3].upper()}22'  # no phone in Gate
+    phone_number = f'+7920{str(uuid4().int)[-7:]}'
+
+    _make_gate_link_monkeypatches(
+        monkeypatch,
+        phone_vehicles=[
+            {
+                'gate_key_id': 91201,
+                'key_type': 'VehicleNumber',
+                'key_value': plate_a,
+                'phone_number': phone_number,
+                'access_point_ids': [1, 2],
+                'is_permanent': True,
+                'expires_at': None,
+            }
+        ],
+        name_vehicles=[
+            {
+                'gate_key_id': 91202,
+                'key_type': 'VehicleNumber',
+                'key_value': plate_b,
+                'phone_number': None,
+                'access_point_ids': [1, 2],
+                'is_permanent': True,
+                'expires_at': None,
+            }
+        ],
+        new_phone_key_id=91200,
+    )
+
+    async def _link() -> tuple[int, list[int]]:
+        async with SessionLocal() as session:
+            user = User(
+                phone=phone_number,
+                login=f'resident_nml2_{uuid4().hex[:6]}',
+                password_hash=hash_password('demo123'),
+                name=resident_name,
+                apartment='202',
+                plot_number='202',
+                is_admin=False,
+                is_active=True,
+            )
+            session.add(user)
+            await session.flush()
+            result = await link_existing_gate_passes_by_phone(session, user)
+            await session.commit()
+            return user.id, result.linked_request_ids
+
+    user_id, linked_ids = asyncio.run(_link())
+
+    async def _load_requests():
+        async with SessionLocal() as session:
+            q = await session.execute(
+                select(Request).where(Request.resident_id == user_id, Request.status == 'active')
+            )
+            return q.scalars().all()
+
+    requests = asyncio.run(_load_requests())
+    vehicle_requests = [r for r in requests if r.key_type == 'VehicleNumber']
+    phone_requests = [r for r in requests if r.key_type == 'Phone']
+    plates_linked = {r.key_value for r in vehicle_requests}
+
+    assert len(phone_requests) == 1, f'Expected 1 Phone pass, got {len(phone_requests)}'
+    assert len(vehicle_requests) == 2, (
+        f'Expected 2 VehicleNumber passes (phone+name), got {len(vehicle_requests)}: {plates_linked}'
+    )
+    assert plate_a in plates_linked, f'Car A (found by phone) must be linked; got {plates_linked}'
+    assert plate_b in plates_linked, f'Car B (found by name) must be linked; got {plates_linked}'
+    assert len(linked_ids) == 3, f'linked_request_ids must have Phone+2×Vehicle, got {linked_ids}'
+
+
+def test_gate_name_link_no_duplicate_when_plate_in_both_phone_and_name_results(monkeypatch):
+    """No duplicate Request when the same plate appears in both phone and name lookups.
+
+    Scenario: Gate returns PLATE1 from list_vehicle_keys_by_phone AND also from
+    list_vehicle_keys_by_name (e.g. because the vehicle entry has both Phone and
+    Name set and both matchers fire).  The already_linked_plates guard must prevent
+    a second Request for the same plate.
+    """
+    from backend.app.services.gate_linking import link_existing_gate_passes_by_phone
+
+    resident_name = f'Козлов Козёл Козлович {uuid4().hex[:4]}'
+    shared_plate = f'К{uuid4().hex[:3].upper()}33'
+    phone_number = f'+7930{str(uuid4().int)[-7:]}'
+
+    vehicle_row = {
+        'gate_key_id': 91301,
+        'key_type': 'VehicleNumber',
+        'key_value': shared_plate,
+        'phone_number': phone_number,
+        'access_point_ids': [1, 2],
+        'is_permanent': True,
+        'expires_at': None,
+    }
+
+    _make_gate_link_monkeypatches(
+        monkeypatch,
+        phone_vehicles=[vehicle_row],  # same plate from phone lookup
+        name_vehicles=[vehicle_row],   # same plate from name lookup (should be skipped)
+        new_phone_key_id=91300,
+    )
+
+    async def _link() -> tuple[int, list[int]]:
+        async with SessionLocal() as session:
+            user = User(
+                phone=phone_number,
+                login=f'resident_nml3_{uuid4().hex[:6]}',
+                password_hash=hash_password('demo123'),
+                name=resident_name,
+                apartment='203',
+                plot_number='203',
+                is_admin=False,
+                is_active=True,
+            )
+            session.add(user)
+            await session.flush()
+            result = await link_existing_gate_passes_by_phone(session, user)
+            await session.commit()
+            return user.id, result.linked_request_ids
+
+    user_id, linked_ids = asyncio.run(_link())
+
+    async def _load_requests():
+        async with SessionLocal() as session:
+            q = await session.execute(
+                select(Request).where(Request.resident_id == user_id, Request.status == 'active')
+            )
+            return q.scalars().all()
+
+    requests = asyncio.run(_load_requests())
+    vehicle_requests = [r for r in requests if r.key_type == 'VehicleNumber']
+    phone_requests = [r for r in requests if r.key_type == 'Phone']
+
+    assert len(phone_requests) == 1, f'Expected 1 Phone pass, got {len(phone_requests)}'
+    assert len(vehicle_requests) == 1, (
+        f'Duplicate Request must not be created for the same plate; got {len(vehicle_requests)}'
+    )
+    assert vehicle_requests[0].key_value == shared_plate
+    assert len(linked_ids) == 2, (
+        f'linked_request_ids must have exactly Phone+1×Vehicle (no duplicate), got {linked_ids}'
+    )
+
+
+def test_gate_phone_link_resyncs_old_pass_permissions_in_gate(monkeypatch):
+    """Old Phone passes found via list_keys_by_phone are re-synced in Gate.
+
+    Scenario: A resident's phone pass was created manually in Gate before the app
+    existed. It has stale access_point_ids (e.g. all points from the old config).
+    When the account is created and the pass is linked, _upsert_gate_phone_access
+    must be called to update Gate with the currently configured access points,
+    so that pressing Open in the app never returns "Key has no permission".
+    """
+    from backend.app.services.gate_linking import link_existing_gate_passes_by_phone
+
+    phone_number = f'+7950{str(uuid4().int)[-7:]}'
+    resident_name = f'Старый Житель {uuid4().hex[:4]}'
+
+    # Old pass has all access points (1-30) — stale config from before app
+    old_stale_access_point_ids = list(range(1, 31))
+    old_gate_key_id = 92001
+    new_gate_key_id = 92002  # returned by add_account_phone_key after re-sync
+
+    resync_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.default_access_point_ids_json',
+        '[15,17,19,20,21,23]',
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.gsm_access_point_ids_json',
+        '[5,6]',
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.gate_real_integration_enabled',
+        True,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.get_key_permissions',
+        lambda external_key_id: [],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.resolve_key_id',
+        lambda external_key_id: None,
+    )
+    # list_keys_by_phone returns the OLD phone pass with stale access points
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_keys_by_phone',
+        lambda phone: [
+            {
+                'gate_key_id': old_gate_key_id,
+                'key_type': 'Phone',
+                'key_value': phone,
+                'phone_number': phone,
+                'access_point_ids': old_stale_access_point_ids,
+                'is_permanent': True,
+                'expires_at': None,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_phone',
+        lambda phone: [],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.list_vehicle_keys_by_name',
+        lambda name: [],
+    )
+    # add_account_phone_key is called by _upsert_gate_phone_access for re-sync
+    def _fake_resync(**kwargs):
+        resync_calls.append(dict(kwargs))
+        return new_gate_key_id
+
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.add_account_phone_key',
+        _fake_resync,
+    )
+
+    async def _link() -> tuple[int, list[int]]:
+        async with SessionLocal() as session:
+            user = User(
+                phone=phone_number,
+                login=f'resident_resync_{uuid4().hex[:6]}',
+                password_hash=hash_password('demo123'),
+                name=resident_name,
+                apartment='301',
+                plot_number='301',
+                is_admin=False,
+                is_active=True,
+            )
+            session.add(user)
+            await session.flush()
+            result = await link_existing_gate_passes_by_phone(session, user)
+            await session.commit()
+            return user.id, result.linked_request_ids
+
+    user_id, linked_ids = asyncio.run(_link())
+
+    # Verify add_account_phone_key was called exactly once (the re-sync call)
+    assert len(resync_calls) == 1, (
+        f'Expected exactly 1 re-sync call to add_account_phone_key, got {resync_calls}'
+    )
+    expected_ap_ids = [15, 17, 19, 20, 21, 23, 5, 6]
+    assert resync_calls[0]['access_point_ids'] == expected_ap_ids, (
+        f'Re-sync must use configured access points {expected_ap_ids}, got {resync_calls[0]}'
+    )
+    assert resync_calls[0]['key_value'] == phone_number
+
+    # Verify the Request in DB has the correct (configured) access_point_ids
+    async def _load_phone_request():
+        async with SessionLocal() as session:
+            q = await session.execute(
+                select(Request).where(
+                    Request.resident_id == user_id,
+                    Request.key_type == 'Phone',
+                    Request.status == 'active',
+                )
+            )
+            return q.scalar_one_or_none()
+
+    req = asyncio.run(_load_phone_request())
+    assert req is not None
+    assert req.gate_key_id == new_gate_key_id, (
+        f'gate_key_id must be updated to {new_gate_key_id} after re-sync, got {req.gate_key_id}'
+    )
+    assert req.access_point_ids == expected_ap_ids, (
+        f'access_point_ids must be configured set, got {req.access_point_ids}'
+    )
+    assert len(linked_ids) == 1, f'Expected 1 linked request (Phone only), got {linked_ids}'

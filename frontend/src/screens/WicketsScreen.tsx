@@ -1,5 +1,14 @@
-import React, { memo, useEffect } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import React, { memo, useEffect, useRef } from 'react';
+import {
+  ActivityIndicator,
+  Animated,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -21,18 +30,79 @@ type WicketButtonProps = {
   onPress: () => void;
   disabled: boolean;
   icon: React.ReactNode;
+  isLoading: boolean;
+  isAnyLoading: boolean;
 };
 
-const WicketActionButton = memo(({ title, onPress, disabled, icon }: WicketButtonProps) => (
-  <Pressable onPress={onPress} disabled={disabled} style={[styles.wicketButton, disabled && styles.wicketButtonDisabled]}>
-    <View style={styles.wicketRow}>
-      <View style={styles.wicketIconWrap}>{icon}</View>
-      <Text style={styles.wicketLabel} numberOfLines={2}>
-        {title}
-      </Text>
-    </View>
-  </Pressable>
-));
+const WicketActionButton = memo(({ title, onPress, disabled, icon, isLoading, isAnyLoading }: WicketButtonProps) => {
+  const pressScale = useRef(new Animated.Value(1)).current;
+  const pulseOpacity = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (!isLoading) {
+      pulseOpacity.setValue(1);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseOpacity, { toValue: 0.55, duration: 650, useNativeDriver: true }),
+        Animated.timing(pulseOpacity, { toValue: 1, duration: 650, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+      pulseOpacity.setValue(1);
+    };
+  }, [isLoading, pulseOpacity]);
+
+  const handlePressIn = () => {
+    Animated.spring(pressScale, {
+      toValue: 0.93,
+      useNativeDriver: true,
+      speed: 50,
+      bounciness: 2,
+    }).start();
+  };
+
+  const handlePressOut = () => {
+    Animated.spring(pressScale, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 22,
+      bounciness: 10,
+    }).start();
+  };
+
+  return (
+    <Animated.View style={{ transform: [{ scale: pressScale }] }}>
+      <Pressable
+        onPress={onPress}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        disabled={disabled}
+        style={[
+          styles.wicketButton,
+          isLoading && styles.wicketButtonLoading,
+          isAnyLoading && !isLoading && styles.wicketButtonDimmed,
+        ]}
+      >
+        <Animated.View style={[styles.wicketRow, isLoading && { opacity: pulseOpacity }]}>
+          <View style={styles.wicketIconWrap}>
+            {isLoading ? (
+              <ActivityIndicator size="small" color={theme.colors.textPrimary} />
+            ) : (
+              icon
+            )}
+          </View>
+          <Text style={[styles.wicketLabel, isLoading && styles.wicketLabelLoading]} numberOfLines={2}>
+            {title}
+          </Text>
+        </Animated.View>
+      </Pressable>
+    </Animated.View>
+  );
+});
 WicketActionButton.displayName = 'WicketActionButton';
 
 export const WicketsScreen = ({ navigation }: Props) => {
@@ -41,6 +111,7 @@ export const WicketsScreen = ({ navigation }: Props) => {
 
   const user = useAuthStore((state) => state.user);
   const gateState = useGateStore((state) => state.gateState);
+  const loadingAction = useGateStore((state) => state.loadingAction);
   const result = useGateStore((state) => state.result);
   const error = useGateStore((state) => state.error);
   const openWicketNorth = useGateStore((state) => state.openWicketNorth);
@@ -53,7 +124,7 @@ export const WicketsScreen = ({ navigation }: Props) => {
     resetGateState();
   }, [resetGateState]);
 
-  const isLoading = gateState === 'loading';
+  const isAnyLoading = gateState === 'loading';
   const feedbackMessage = result ? getGateActionFeedback(result, Boolean(user?.isAdmin)) : null;
 
   return (
@@ -75,26 +146,34 @@ export const WicketsScreen = ({ navigation }: Props) => {
               <WicketActionButton
                 title="Калитка Северная (СНТ Пальмира)"
                 onPress={openWicketNorth}
-                disabled={isLoading}
+                disabled={isAnyLoading}
                 icon={<MaterialCommunityIcons name="compass-outline" size={26} color={theme.colors.textPrimary} />}
+                isLoading={loadingAction === 'wicket_north'}
+                isAnyLoading={isAnyLoading}
               />
               <WicketActionButton
                 title="Калитка Озеро (СНТ Вартемяки)"
                 onPress={openWicketLake}
-                disabled={isLoading}
+                disabled={isAnyLoading}
                 icon={<MaterialCommunityIcons name="waves" size={26} color={theme.colors.textPrimary} />}
+                isLoading={loadingAction === 'wicket_lake'}
+                isAnyLoading={isAnyLoading}
               />
               <WicketActionButton
                 title="Калитка у администрации"
                 onPress={openWicketAdmin}
-                disabled={isLoading}
+                disabled={isAnyLoading}
                 icon={<MaterialCommunityIcons name="office-building-marker-outline" size={26} color={theme.colors.textPrimary} />}
+                isLoading={loadingAction === 'wicket_admin'}
+                isAnyLoading={isAnyLoading}
               />
               <WicketActionButton
                 title="Калитка Лес"
                 onPress={openWicketForest}
-                disabled={isLoading}
+                disabled={isAnyLoading}
                 icon={<MaterialCommunityIcons name="tree-outline" size={26} color={theme.colors.textPrimary} />}
+                isLoading={loadingAction === 'wicket_forest'}
+                isAnyLoading={isAnyLoading}
               />
             </View>
 
@@ -150,8 +229,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 10,
   },
-  wicketButtonDisabled: {
-    opacity: 0.8,
+  wicketButtonLoading: {
+    borderColor: 'rgba(219, 193, 134, 0.92)',
+    backgroundColor: 'rgba(38, 62, 48, 0.9)',
+  },
+  wicketButtonDimmed: {
+    opacity: 0.45,
   },
   wicketRow: {
     flexDirection: 'row',
@@ -168,6 +251,9 @@ const styles = StyleSheet.create({
     fontSize: 19,
     fontWeight: '600',
     lineHeight: 24,
+  },
+  wicketLabelLoading: {
+    color: theme.colors.textSecondary,
   },
   feedback: {
     marginTop: 14,

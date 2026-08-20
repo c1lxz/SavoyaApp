@@ -312,6 +312,7 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
                 plot_number=payload.plot_number,
             )
     except Exception as exc:
+        logger.exception("Gate integration failed while creating a pass")
         raise RequestIntegrationError(
             code="gate_bridge_error",
             message="Gate integration failed",
@@ -342,14 +343,24 @@ async def create_request(session: AsyncSession, user: User, payload: CreateReque
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
-        gate_client.remove_key(gate_key_id)
+        # FIX: use asyncio.to_thread — remove_key is a blocking subprocess call (20-30s);
+        # calling it directly on the event loop thread blocks all other requests.
+        if gate_key_id is not None:
+            try:
+                await asyncio.to_thread(gate_client.remove_key, gate_key_id)
+            except Exception:
+                logger.exception("Failed to remove Gate key %s during IntegrityError rollback", gate_key_id)
         raise RequestConflictError(
             code="duplicate_request",
             message=f"An active request already exists for {payload.key_value}",
         ) from exc
     except Exception:
         await session.rollback()
-        gate_client.remove_key(gate_key_id)
+        if gate_key_id is not None:
+            try:
+                await asyncio.to_thread(gate_client.remove_key, gate_key_id)
+            except Exception:
+                logger.exception("Failed to remove Gate key %s during rollback", gate_key_id)
         raise
 
     await session.refresh(request)
@@ -449,7 +460,9 @@ async def cancel_request(session: AsyncSession, user_id: int, request_id: int) -
     )
     other_active_count = int(other_query.scalar_one())
     if other_active_count == 0 and request.gate_key_id is not None:
-        gate_client.remove_key(request.gate_key_id)
+        # FIX: use asyncio.to_thread so the blocking subprocess does not freeze
+        # the async event loop (gate_bridge can take 20-30 s for UI operations).
+        await asyncio.to_thread(gate_client.remove_key, request.gate_key_id)
 
     await session.commit()
     await session.refresh(request)
@@ -516,7 +529,9 @@ async def delete_request_for_admin(session: AsyncSession, request_id: int) -> Re
     await session.flush()
 
     if other_active_count == 0 and gate_key_id is not None:
-        gate_client.remove_key(gate_key_id)
+        # FIX: use asyncio.to_thread so the blocking subprocess does not freeze
+        # the async event loop (gate_bridge can take 20-30 s for UI operations).
+        await asyncio.to_thread(gate_client.remove_key, gate_key_id)
 
     await session.commit()
     return request
@@ -615,7 +630,8 @@ async def cleanup_expired_requests(session: AsyncSession, *, remove_gate_keys: b
                 for permission in permissions_query.scalars().all():
                     permission.is_allowed = False
             if remove_gate_keys:
-                gate_client.remove_key(req.gate_key_id)
+                # FIX: use asyncio.to_thread — gate_bridge blocks 20-30 s in UI mode.
+                await asyncio.to_thread(gate_client.remove_key, req.gate_key_id)
         changed += 1
 
     await session.commit()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -68,6 +69,28 @@ async def _insert_active_courier_request(user_id: int, access_point_id: int, gat
             is_permanent=False,
             is_courier=True,
             expires_at=(datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0),
+            status="active",
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(row)
+        await session.flush()
+        request_id = int(row.id)
+        await session.commit()
+        return request_id
+
+
+async def _insert_active_permanent_request(user_id: int, access_point_id: int, gate_key_id: int) -> int:
+    """Insert a permanent personal pass directly into the DB (bypasses Gate API)."""
+    async with SessionLocal() as session:
+        row = Request(
+            resident_id=user_id,
+            key_type="VehicleNumber",
+            key_value=f"PERSONAL{uuid4().hex[:5]}",
+            gate_key_id=gate_key_id,
+            access_point_ids=[access_point_id],
+            is_permanent=True,
+            is_courier=False,
+            expires_at=None,
             status="active",
             created_at=datetime.now(timezone.utc),
         )
@@ -498,6 +521,95 @@ def test_sweep_expired_requests_once_deletes_already_expired_pass_with_lingering
             assert row is None
 
     asyncio.run(_assert_deleted())
+
+
+def test_sweep_expired_requests_once_defers_when_users_window_is_open(client):
+    """If staff currently has "Список пользователей" open, the sweep must skip the
+    first cycle (within the deferral limit) — a manual "Добавить" click in that window
+    has no protection while a removal is in flight and depends on the window being left
+    alone.  The deferral only lasts up to _SWEEP_MAX_DEFER_SECONDS (see separate test).
+    """
+    headers, user_id = _create_user_and_login(client)
+    entry_point_id = get_settings().gate_action_map["entry"]
+    request_id = asyncio.run(_insert_active_courier_request(user_id, entry_point_id, 200781))
+
+    async def _expire() -> None:
+        async with SessionLocal() as session:
+            row = await session.get(Request, request_id)
+            assert row is not None
+            row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            await session.commit()
+
+    asyncio.run(_expire())
+
+    removed_key_ids: list[int] = []
+    original_remove_key = gate_client.remove_key
+    original_is_users_window_open = gate_client.is_users_window_open
+    original_integration = gate_event_worker.settings.gate_real_integration_enabled
+    original_defer_start = gate_event_worker._sweep_defer_start
+    gate_client.remove_key = lambda key_id: removed_key_ids.append(int(key_id)) or True
+    gate_client.is_users_window_open = lambda: True
+    gate_event_worker.settings.gate_real_integration_enabled = True
+    gate_event_worker._sweep_defer_start = None  # ensure clean slate
+    try:
+        removed = asyncio.run(gate_event_worker.sweep_expired_requests_once())
+    finally:
+        gate_client.remove_key = original_remove_key
+        gate_client.is_users_window_open = original_is_users_window_open
+        gate_event_worker.settings.gate_real_integration_enabled = original_integration
+        gate_event_worker._sweep_defer_start = original_defer_start
+
+    assert removed == 0
+    assert removed_key_ids == []
+
+    async def _assert_not_deleted() -> None:
+        async with SessionLocal() as session:
+            row = await session.get(Request, request_id)
+            assert row is not None, "deferred sweep must not delete the pass this cycle"
+
+    asyncio.run(_assert_not_deleted())
+
+
+def test_sweep_expired_requests_once_forces_sweep_after_max_deferral(client):
+    """After _SWEEP_MAX_DEFER_SECONDS of continuous window-open deferral the sweep must
+    run regardless — an indefinitely-stuck window (e.g. left open by a failed
+    gate_bridge operation) must not prevent expired passes from ever being removed.
+    """
+    headers, user_id = _create_user_and_login(client)
+    entry_point_id = get_settings().gate_action_map["entry"]
+    request_id = asyncio.run(_insert_active_courier_request(user_id, entry_point_id, 200791))
+
+    async def _expire() -> None:
+        async with SessionLocal() as session:
+            row = await session.get(Request, request_id)
+            assert row is not None
+            row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            await session.commit()
+
+    asyncio.run(_expire())
+
+    removed_key_ids: list[int] = []
+    original_remove_key = gate_client.remove_key
+    original_is_users_window_open = gate_client.is_users_window_open
+    original_integration = gate_event_worker.settings.gate_real_integration_enabled
+    original_defer_start = gate_event_worker._sweep_defer_start
+    gate_client.remove_key = lambda key_id: removed_key_ids.append(int(key_id)) or True
+    gate_client.is_users_window_open = lambda: True
+    gate_event_worker.settings.gate_real_integration_enabled = True
+    # Simulate that the window has been open for longer than the allowed limit
+    gate_event_worker._sweep_defer_start = (
+        time.monotonic() - gate_event_worker._SWEEP_MAX_DEFER_SECONDS - 1.0
+    )
+    try:
+        removed = asyncio.run(gate_event_worker.sweep_expired_requests_once())
+    finally:
+        gate_client.remove_key = original_remove_key
+        gate_client.is_users_window_open = original_is_users_window_open
+        gate_event_worker.settings.gate_real_integration_enabled = original_integration
+        gate_event_worker._sweep_defer_start = original_defer_start
+
+    assert removed == 1, "sweep must run and delete the expired pass after max deferral exceeded"
+    assert removed_key_ids == [200791], "Gate key must be removed even while window appears open"
 
 
 def test_sweep_expired_requests_once_noop_when_integration_disabled(client):
@@ -1074,3 +1186,319 @@ def test_cooldown_message_uses_masculine_pronoun_for_barrier():
     message = _cooldown_message(barrier, 5)
     assert "этого шлагбаума" in message
     assert "этой" not in message
+
+
+def test_request_priority_at_entry_prefers_personal_over_courier():
+    """At barrier_entry, a personal pass must rank better (lower tuple) than a courier pass.
+
+    Regression test: before the fix, temporary courier passes ranked *lower* (= won)
+    over permanent personal passes because permanent_rank(temp)=0 < permanent_rank(perm)=1
+    and courier_rank was identical for everyone at entry.  This caused _schedule_courier_
+    requests_after_entry to fire when the resident opened the barrier for themselves.
+    """
+    from types import SimpleNamespace
+
+    from backend.app.services.access import _request_priority
+
+    now = datetime.now(timezone.utc)
+    courier_pass = SimpleNamespace(is_permanent=False, is_courier=True, created_at=now)
+    personal_pass = SimpleNamespace(is_permanent=True, is_courier=False, created_at=now)
+
+    entry_courier = _request_priority(courier_pass, prefer_courier=False)
+    entry_personal = _request_priority(personal_pass, prefer_courier=False)
+    assert entry_personal < entry_courier, (
+        f"At entry: personal {entry_personal} must rank better (lower) than courier {entry_courier}"
+    )
+
+    exit_courier = _request_priority(courier_pass, prefer_courier=True)
+    exit_personal = _request_priority(personal_pass, prefer_courier=True)
+    assert exit_courier < exit_personal, (
+        f"At exit: courier {exit_courier} must rank better (lower) than personal {exit_personal}"
+    )
+
+
+def test_access_open_entry_prefers_personal_pass_over_courier_when_both_present(client):
+    """When a resident has both a permanent personal pass and a courier pass,
+    pressing 'open barrier' at entry must NOT trigger the courier 2-hour countdown.
+
+    Regression test: before the fix, the courier pass was selected as primary at entry
+    (because its permanent_rank=0 beat the personal pass's permanent_rank=1), causing
+    _schedule_courier_requests_after_entry to fire and shift expires_at to now+2h.
+    """
+    headers, user_id = _create_user_and_login(client)
+    entry_point_id = get_settings().gate_action_map["entry"]
+
+    # Insert both passes: courier temp (gate_key_id=200701) + personal permanent (200702)
+    courier_id = asyncio.run(_insert_active_courier_request(user_id, entry_point_id, 200701))
+    asyncio.run(_insert_active_permanent_request(user_id, entry_point_id, 200702))
+
+    opened_at = datetime.now(timezone.utc)
+    opened = client.post("/api/access/open", headers=headers, json={"access_point_id": entry_point_id})
+    assert opened.status_code == 200
+    assert opened.json()["status"] == "success"
+
+    async def _assert_courier_timer_did_not_fire() -> None:
+        async with SessionLocal() as session:
+            courier_row = await session.get(Request, courier_id)
+            assert courier_row is not None
+            # If the courier timer fired, expires_at would be ~2 h from now.
+            # Original expiry was ~1 h from creation → must still be < 1 h 30 min.
+            expires_at = courier_row.expires_at
+            normalized = expires_at.replace(tzinfo=timezone.utc) if expires_at.tzinfo is None else expires_at
+            remaining = normalized - opened_at
+            assert remaining < timedelta(hours=1, minutes=30), (
+                f"Courier 2-hour timer fired unexpectedly when personal pass was present: "
+                f"remaining={remaining}"
+            )
+
+    asyncio.run(_assert_courier_timer_did_not_fire())
+
+
+# ---------------------------------------------------------------------------
+# Companion-pairing fix: vehicle → vehicle must NOT be paired; only vehicle ↔ phone
+# ---------------------------------------------------------------------------
+
+
+async def _insert_courier_vehicle_request_with_phone(
+    user_id: int, access_point_id: int, gate_key_id: int, *, contact_phone: str, pass_kind: str = "courier"
+) -> int:
+    """Insert an active courier-type VehicleNumber pass with an explicit contact_phone."""
+    async with SessionLocal() as session:
+        row = Request(
+            resident_id=user_id,
+            key_type="VehicleNumber",
+            key_value=f"VH{uuid4().hex[:6].upper()}",
+            gate_key_id=gate_key_id,
+            access_point_ids=[access_point_id],
+            is_permanent=False,
+            is_courier=True,
+            pass_kind=pass_kind,
+            contact_phone=contact_phone,
+            expires_at=(datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0),
+            status="active",
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(row)
+        await session.flush()
+        request_id = int(row.id)
+        await session.commit()
+        return request_id
+
+
+async def _insert_courier_phone_request(
+    user_id: int, access_point_id: int, gate_key_id: int, *, phone_number: str
+) -> int:
+    """Insert an active courier-type Phone pass."""
+    async with SessionLocal() as session:
+        row = Request(
+            resident_id=user_id,
+            key_type="Phone",
+            key_value=phone_number,
+            gate_key_id=gate_key_id,
+            access_point_ids=[access_point_id],
+            is_permanent=False,
+            is_courier=True,
+            contact_phone=phone_number,
+            expires_at=(datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0),
+            status="active",
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(row)
+        await session.flush()
+        request_id = int(row.id)
+        await session.commit()
+        return request_id
+
+
+def test_courier_entry_timer_does_not_bleed_to_same_phone_courier_vehicle_pass(client):
+    """Two courier-type vehicle passes (e.g., courier + taxi) that belong to the same
+    account and share the same contact_phone must NOT have their timers linked.
+
+    Regression: _courier_companion_candidates paired vehicle→vehicle via contact_phone,
+    so when either car drove through entry, BOTH passes got expires_at = now+2h.
+    After the fix only the triggered pass should be updated.
+    """
+    headers, user_id = _create_user_and_login(client)
+    entry_point_id = get_settings().gate_action_map["entry"]
+    shared_phone = f"+7800{str(uuid4().int)[:7]}"
+
+    courier_id = asyncio.run(
+        _insert_courier_vehicle_request_with_phone(
+            user_id, entry_point_id, 400001, contact_phone=shared_phone, pass_kind="courier"
+        )
+    )
+    taxi_id = asyncio.run(
+        _insert_courier_vehicle_request_with_phone(
+            user_id, entry_point_id, 400002, contact_phone=shared_phone, pass_kind="taxi"
+        )
+    )
+
+    # Record taxi pass original expiry before the gate event.
+    async def _get_expires_at(request_id: int) -> datetime:
+        async with SessionLocal() as session:
+            row = await session.get(Request, request_id)
+            assert row is not None
+            return row.expires_at  # type: ignore[return-value]
+
+    taxi_original_expires = asyncio.run(_get_expires_at(taxi_id))
+
+    async def _process_courier_entry() -> int:
+        async with SessionLocal() as session:
+            return await process_courier_gate_entry_events(
+                session,
+                [
+                    {
+                        "index": 400101,
+                        "event_type": 1,
+                        "event_code": 2,
+                        "access_point_id": entry_point_id,
+                        "unit": "Считыватель въезд GSM",
+                        "message": "Проход по ключу разрешен",
+                        "user_ptr": 400001,
+                    }
+                ],
+            )
+
+    event_at = datetime.now(timezone.utc)
+    scheduled_count = asyncio.run(_process_courier_entry())
+    assert scheduled_count == 1, "Only the triggering pass should be scheduled"
+
+    async def _assert_only_courier_pass_updated() -> None:
+        async with SessionLocal() as session:
+            courier_row = await session.get(Request, courier_id)
+            taxi_row = await session.get(Request, taxi_id)
+            assert courier_row is not None
+            assert taxi_row is not None
+
+            # Courier pass must have the new 2-hour expiry.
+            courier_expires = courier_row.expires_at
+            normalized_courier = (
+                courier_expires.replace(tzinfo=timezone.utc) if courier_expires.tzinfo is None else courier_expires
+            )
+            remaining = normalized_courier - event_at
+            assert timedelta(hours=1, minutes=59) <= remaining <= timedelta(hours=2, minutes=1), (
+                f"Courier pass should have ~2h expiry after entry, got remaining={remaining}"
+            )
+
+            # Taxi pass must NOT have been touched — its expiry must be unchanged.
+            taxi_expires = taxi_row.expires_at
+            assert taxi_expires == taxi_original_expires, (
+                f"Taxi pass expires_at must not change when courier vehicle enters: "
+                f"original={taxi_original_expires}, after_event={taxi_expires}"
+            )
+
+    asyncio.run(_assert_only_courier_pass_updated())
+
+
+def test_courier_vehicle_entry_timer_propagates_to_companion_phone_pass(client):
+    """When a courier has both a VehicleNumber pass and a Phone pass sharing the same
+    phone number, and the vehicle drives through entry, BOTH passes must get the 2-hour
+    timer set — a phone+vehicle pair represent the same physical courier trip.
+    """
+    headers, user_id = _create_user_and_login(client)
+    entry_point_id = get_settings().gate_action_map["entry"]
+    courier_phone = f"+7900{str(uuid4().int)[:7]}"
+
+    vehicle_id = asyncio.run(
+        _insert_courier_vehicle_request_with_phone(
+            user_id, entry_point_id, 400101, contact_phone=courier_phone, pass_kind="courier"
+        )
+    )
+    phone_id = asyncio.run(
+        _insert_courier_phone_request(user_id, entry_point_id, 400102, phone_number=courier_phone)
+    )
+
+    async def _process_vehicle_entry() -> int:
+        async with SessionLocal() as session:
+            return await process_courier_gate_entry_events(
+                session,
+                [
+                    {
+                        "index": 400201,
+                        "event_type": 1,
+                        "event_code": 2,
+                        "access_point_id": entry_point_id,
+                        "unit": "Считыватель въезд GSM",
+                        "message": "Проход по ключу разрешен",
+                        "user_ptr": 400101,
+                    }
+                ],
+            )
+
+    event_at = datetime.now(timezone.utc)
+    scheduled_count = asyncio.run(_process_vehicle_entry())
+    assert scheduled_count == 2, "Vehicle + phone companion must both be scheduled (2 passes)"
+
+    async def _assert_both_passes_updated() -> None:
+        async with SessionLocal() as session:
+            vehicle_row = await session.get(Request, vehicle_id)
+            phone_row = await session.get(Request, phone_id)
+            assert vehicle_row is not None
+            assert phone_row is not None
+
+            for label, row in [("vehicle", vehicle_row), ("phone", phone_row)]:
+                expires = row.expires_at
+                normalized = expires.replace(tzinfo=timezone.utc) if expires.tzinfo is None else expires
+                remaining = normalized - event_at
+                assert timedelta(hours=1, minutes=59) <= remaining <= timedelta(hours=2, minutes=1), (
+                    f"{label} pass should have ~2h expiry after vehicle entry, got remaining={remaining}"
+                )
+
+    asyncio.run(_assert_both_passes_updated())
+
+
+def test_courier_phone_entry_timer_propagates_to_companion_vehicle_pass(client):
+    """When a courier triggers entry via their Phone pass, the companion VehicleNumber pass
+    (same contact_phone) must also receive the 2-hour timer — the phone↔vehicle pair share
+    the entry TTL in both trigger directions.
+    """
+    headers, user_id = _create_user_and_login(client)
+    entry_point_id = get_settings().gate_action_map["entry"]
+    courier_phone = f"+7901{str(uuid4().int)[:7]}"
+
+    phone_id = asyncio.run(
+        _insert_courier_phone_request(user_id, entry_point_id, 400301, phone_number=courier_phone)
+    )
+    vehicle_id = asyncio.run(
+        _insert_courier_vehicle_request_with_phone(
+            user_id, entry_point_id, 400302, contact_phone=courier_phone, pass_kind="courier"
+        )
+    )
+
+    async def _process_phone_entry() -> int:
+        async with SessionLocal() as session:
+            return await process_courier_gate_entry_events(
+                session,
+                [
+                    {
+                        "index": 400301,
+                        "event_type": 1,
+                        "event_code": 2,
+                        "access_point_id": entry_point_id,
+                        "unit": "Считыватель въезд GSM",
+                        "message": "Проход по ключу разрешен",
+                        "user_ptr": 400301,
+                    }
+                ],
+            )
+
+    event_at = datetime.now(timezone.utc)
+    scheduled_count = asyncio.run(_process_phone_entry())
+    assert scheduled_count == 2, "Phone + vehicle companion must both be scheduled (2 passes)"
+
+    async def _assert_both_passes_updated() -> None:
+        async with SessionLocal() as session:
+            phone_row = await session.get(Request, phone_id)
+            vehicle_row = await session.get(Request, vehicle_id)
+            assert phone_row is not None
+            assert vehicle_row is not None
+
+            for label, row in [("phone", phone_row), ("vehicle", vehicle_row)]:
+                expires = row.expires_at
+                normalized = expires.replace(tzinfo=timezone.utc) if expires.tzinfo is None else expires
+                remaining = normalized - event_at
+                assert timedelta(hours=1, minutes=59) <= remaining <= timedelta(hours=2, minutes=1), (
+                    f"{label} pass should have ~2h expiry after phone entry, got remaining={remaining}"
+                )
+
+    asyncio.run(_assert_both_passes_updated())

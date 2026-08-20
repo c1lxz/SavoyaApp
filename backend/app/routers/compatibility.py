@@ -253,7 +253,10 @@ async def compat_login(
 
 @router.get("/user/me", response_model=CompatUser)
 async def compat_get_me(user: User = Depends(get_current_user)) -> CompatUser:
-    return _compat_user(user)
+    return _compat_user(
+        user,
+        password_change_prompt_required=bool(user.password_change_required and not user.password_change_prompt_shown and not user.is_admin),
+    )
 
 
 @router.put("/user/profile", response_model=CompatUser)

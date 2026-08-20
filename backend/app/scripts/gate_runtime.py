@@ -43,9 +43,6 @@ _GATETERM_USER_SEARCH_WINDOW_TITLE = "Поиск пользователя"
 _GATETERM_USER_EDIT_WINDOW_TITLE = "Изменение пользователя"
 _GATETERM_USER_SEARCH_FIELD_KEY_NUMBER = "Номер ключа"
 _GATETERM_USER_SEARCH_FIELD_KEY_NUMBER_INDEX = 4
-# Short dummy value used to initialise GateTerm's internal list object before clicking Add.
-# The actual content does not matter — it just needs to trigger the search dialog flow.
-_GATETERM_SEARCH_INIT_DUMMY_VALUE = "157/42325"
 _GATETERM_LOGIN_WINDOW_TITLE = "Регистрация оператора"
 _GATETERM_USER_EDITOR_TAB_OFFSETS = {
     "key": 40,
@@ -494,6 +491,44 @@ def _generate_unique_number_u(cursor: pyodbc.Cursor) -> str:
         if cursor.fetchone() is None:
             return candidate
     raise RuntimeError("Failed to generate a unique Users.NumberU value")
+
+
+def _resolve_gateterm_search_init_probe_value() -> str:
+    # GateTerm only initialises its internal list/recordset object when a search FINDS a
+    # row — a no-match search leaves the object Nothing, and the subsequent "Добавить"
+    # (New User) click raises VB6 Error 91.  We therefore need a probe that is guaranteed
+    # to match an existing record.
+    #
+    # Previous approach: hardcoded UserPtr=8391 ("Тест Автоудаление", "157/42326").
+    # Problem: that specific record can be deleted by the auto-expiry sweep (now running
+    # reliably after yesterday's gate_event_worker fix), breaking the probe for *every*
+    # new-user pass creation attempt — observed as Error 91 for any account that doesn't
+    # already have a GateTerm entry (while accounts *with* existing entries use the real
+    # plate number and are unaffected).
+    #
+    # Fix: dynamic lookup — same query used by gateterm_users_guard.py's anchor-key
+    # resolution.  Picks the most-recently-created non-deleted vehicle key (KeyType=1),
+    # falling back to phone/other key types.  This is always a real, live record, so the
+    # search always finds a match regardless of which test fixtures exist.
+    with _readonly_cursor() as (_, cursor):
+        for key_type in (1, 3, 6):
+            row = cursor.execute(
+                """SELECT TOP 1 [Number]
+                   FROM Users
+                   WHERE (Deleted = 0 OR Deleted IS NULL)
+                     AND KeyType = ?
+                     AND [Number] IS NOT NULL
+                     AND Trim([Number]) <> ''
+                   ORDER BY UserPtr DESC""",
+                (key_type,),
+            ).fetchone()
+            if row is not None:
+                value = str(row[0] or "").strip()
+                if value:
+                    return value
+    raise RuntimeError(
+        "GateTerm search-init probe: no non-deleted keys found in Users table"
+    )
 
 
 def _vehicle_number_u_mode() -> str:
@@ -1043,6 +1078,13 @@ def _find_reusable_deleted_user_ptr(
                 return int(row.UserPtr)
             continue
         if _normalize_optional_text(row.Number) == normalized_key_value:
+            return int(row.UserPtr)
+        # Also check NumberU — GateTerm may clear the Number field on deletion while
+        # leaving NumberU intact (or the plate was stored there originally).  Without
+        # this check a deleted plate is invisible to the lookup, so the code falls
+        # through to the "New User" dialog and GateTerm raises "Ошибка 402"
+        # (duplicate vehicle number) because the plate still exists in the DB.
+        if _normalize_optional_text(getattr(row, "NumberU", None)) == normalized_key_value:
             return int(row.UserPtr)
     return None
 
@@ -2013,6 +2055,28 @@ def add_phone_permanent_key_via_gateterm_ui(
                 desired_access_labels = set(refreshed_context["desired_access_labels"])
                 current_access_labels = set(refreshed_context.get("current_access_labels") or set())
                 if current_access_labels != desired_access_labels:
+                    # FIX 8 (phone): mirrors the vehicle FIX 8 in add_vehicle_key_via_gateterm_ui.
+                    # Step 1 — explicit wait/close loop for "Новый пользователь".
+                    _fix8_phone_drain_deadline = time_module.monotonic() + _env_float(
+                        "GATE_GATETERM_UI_NEW_USER_DRAIN_TIMEOUT_SECONDS", 3.0
+                    )
+                    while _window_still_open(app, _GATETERM_NEW_USER_WINDOW_TITLE):
+                        _close_gateterm_message_boxes_if_open(app)
+                        try:
+                            _close_gateterm_new_user_window_if_open(app)
+                        except Exception:
+                            pass
+                        if time_module.monotonic() >= _fix8_phone_drain_deadline:
+                            raise RuntimeError(
+                                "GateTerm new-user window still open before phone access-label fix; "
+                                f"open windows: {_list_gateterm_windows(app)!r}"
+                            )
+                        time_module.sleep(0.2)
+                    # Step 2 — drain sleep.
+                    time_module.sleep(_env_float("GATE_GATETERM_UI_MODAL_SETTLE_SECONDS", 0.5))
+                    # Step 3 — workspace cleanup (not swallowed).
+                    _prepare_gateterm_users_workspace(app)
+                    users_window = _open_gateterm_users_view(app)
                     _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
                     editor_window = _open_gateterm_user_edit_window(app, users_window)
                     _populate_gateterm_phone_pass_editor(
@@ -2084,11 +2148,11 @@ def add_vehicle_key_via_gateterm_ui(
 
             created_via_new_dialog = context["existing_user_ptr"] is None
             if created_via_new_dialog:
-                # Search with a short dummy value to initialise GateTerm's internal list
-                # object before clicking Add.  Using the real plate number here would be
-                # wrong — the user doesn't exist yet and a long string is unnecessary.
-                # Any non-empty value that triggers the search dialog is sufficient.
-                _search_gateterm_user_by_key_number(app, users_window, _GATETERM_SEARCH_INIT_DUMMY_VALUE)
+                # Search with a dynamically-resolved probe value to initialise GateTerm's
+                # internal list object before clicking Add.  The probe always finds a real,
+                # existing record (most recent non-deleted key) so GateTerm's recordset
+                # object is guaranteed to be Set before "Новый пользователь" is opened.
+                _search_gateterm_user_by_key_number(app, users_window, _resolve_gateterm_search_init_probe_value())
                 editor_window = _open_gateterm_new_user_window(app, users_window)
                 finalize_save = _finalize_gateterm_new_user_save
             else:
@@ -2123,6 +2187,37 @@ def add_vehicle_key_via_gateterm_ui(
                 desired_access_labels = set(refreshed_context["desired_access_labels"])
                 current_access_labels = set(refreshed_context.get("current_access_labels") or set())
                 if current_access_labels != desired_access_labels:
+                    # FIX 8: After "Новый пользователь" closes, VB6 needs time to fully
+                    # unwind its internal modal-form stack before another modal (search)
+                    # can be shown.  Calling _search immediately causes VB6 Error 402
+                    # ("Must close or hide topmost modal form first").
+                    #
+                    # Step 1 — explicit wait/close loop: ensure the window is truly gone.
+                    # With FIX 8's _finalize fix (No on "Продолжить?") the window should
+                    # already be closed at this point; the loop is a belt-and-suspenders
+                    # guard for any remaining edge cases (e.g. duplicate-key error that
+                    # left the window open even after _finalize returned).
+                    _fix8_vehicle_drain_deadline = time_module.monotonic() + _env_float(
+                        "GATE_GATETERM_UI_NEW_USER_DRAIN_TIMEOUT_SECONDS", 3.0
+                    )
+                    while _window_still_open(app, _GATETERM_NEW_USER_WINDOW_TITLE):
+                        _close_gateterm_message_boxes_if_open(app)
+                        try:
+                            _close_gateterm_new_user_window_if_open(app)
+                        except Exception:
+                            pass
+                        if time_module.monotonic() >= _fix8_vehicle_drain_deadline:
+                            raise RuntimeError(
+                                "GateTerm new-user window still open before access-label fix; "
+                                f"open windows: {_list_gateterm_windows(app)!r}"
+                            )
+                        time_module.sleep(0.2)
+                    # Step 2 — drain sleep: let VB6 finish processing the modal-form unload.
+                    time_module.sleep(_env_float("GATE_GATETERM_UI_MODAL_SETTLE_SECONDS", 0.5))
+                    # Step 3 — workspace cleanup: NOT wrapped in try/except so failures are
+                    # visible to the outer retry loop (no more silent swallow of Error 402).
+                    _prepare_gateterm_users_workspace(app)
+                    users_window = _open_gateterm_users_view(app)
                     _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
                     editor_window = _open_gateterm_user_edit_window(app, users_window)
                     _populate_gateterm_vehicle_pass_editor(
@@ -2665,6 +2760,28 @@ def repair_user_display_names(*, include_deleted: bool = False) -> dict[str, Any
         "updated": len(repaired_user_ptrs),
         "user_ptrs": repaired_user_ptrs,
     }
+
+
+def is_gateterm_users_window_open() -> bool:
+    # Read-only window lookup (no clicks/keystrokes) so the background sweep scheduler can
+    # defer a removal burst while staff may be actively using "Бюро пропусков" manually —
+    # the manual "Добавить" flow never runs our search-probe workaround, so it depends on
+    # the window being left alone (or pre-primed by gateterm_users_guard.py) to avoid Error 91.
+    try:
+        from pywinauto import Application
+    except ImportError:
+        return False
+
+    gate_term_exe = _env("GATE_GATETERM_EXE", default=r"C:\GATE\Terminal\GateTerm.exe")
+    if not gate_term_exe:
+        return False
+
+    try:
+        app = Application(backend="win32").connect(path=gate_term_exe)
+    except Exception:
+        return False
+
+    return _find_gateterm_window(app, _GATETERM_USERS_WINDOW_TITLE) is not None
 
 
 def get_access_points() -> list[dict[str, Any]]:
@@ -3348,6 +3465,106 @@ def list_vehicle_keys_by_phone(phone_number: str) -> list[dict[str, Any]]:
         return vehicles
 
 
+def _normalize_resident_name(value: str | None) -> str:
+    """Return a lowercase, whitespace-collapsed version of a name for comparison."""
+    if not value:
+        return ""
+    return " ".join(value.lower().split())
+
+
+def _resident_names_match(gate_name: str | None, app_name: str | None) -> bool:
+    """Return True when the Gate row name and the app resident name are the same person.
+
+    Comparison is case-insensitive and ignores extra whitespace.  Both the
+    Gate-side full name (Name/LastName/FirstName/FatherName composite) and the
+    app-side name are normalised before comparing, so minor formatting differences
+    (e.g. extra spaces, mixed case) do not cause a miss.
+    """
+    g = _normalize_resident_name(gate_name)
+    a = _normalize_resident_name(app_name)
+    if not g or not a:
+        return False
+    return g == a
+
+
+def list_vehicle_keys_by_name(resident_name: str) -> list[dict[str, Any]]:
+    """Return all active vehicle passes in Gate whose owner name matches *resident_name*.
+
+    This is used as a fallback when a vehicle pass in Gate does not have a Phone
+    field populated — in that case :func:`list_keys_by_phone` would miss it.
+    Duplicate plates (same plate, multiple Gate rows) are deduplicated; the row
+    with the highest UserPtr (most recently created) wins.
+    """
+    if not resident_name or not resident_name.strip():
+        return []
+    with _readonly_cursor() as (_, cursor):
+        try:
+            vehicle_key_type_value = _sample_key_type(cursor, "VehicleNumber")
+        except Exception:
+            vehicle_key_type_value = None
+        rows = cursor.execute(
+            """
+            SELECT
+                UserPtr,
+                KeyType,
+                [Number],
+                NumberU,
+                Phone,
+                Name,
+                LastName,
+                FirstName,
+                FatherName,
+                Deleted,
+                Status,
+                UseExpiry,
+                ExpiryDate,
+                ExpiryTime
+            FROM Users
+            ORDER BY UserPtr DESC
+            """
+        ).fetchall()
+
+        vehicles: list[dict[str, Any]] = []
+        seen_numbers: set[str] = set()
+        for row in rows:
+            user_ptr = int(getattr(row, "UserPtr", 0) or 0)
+            if user_ptr <= 0:
+                continue
+            if not _is_vehicle_identity_row(row, vehicle_key_type_value=vehicle_key_type_value):
+                continue
+            if not _is_active_user_status(getattr(row, "Status", None)):
+                continue
+
+            gate_name = _gate_row_resident_name(row)
+            if not _resident_names_match(gate_name, resident_name):
+                continue
+
+            key_value = _normalize_optional_text(getattr(row, "Number", None))
+            if not key_value and _vehicle_number_u_mode() != "random":
+                key_value = _normalize_optional_text(getattr(row, "NumberU", None))
+            if not key_value or key_value in seen_numbers:
+                continue
+            seen_numbers.add(key_value)
+
+            phone = _normalize_optional_phone(getattr(row, "Phone", None))
+            expires_at = None
+            if bool(getattr(row, "UseExpiry", False)):
+                expires_at = _combine_expiry(getattr(row, "ExpiryDate", None), getattr(row, "ExpiryTime", None))
+
+            vehicles.append(
+                {
+                    "gate_key_id": user_ptr,
+                    "key_type": "VehicleNumber",
+                    "key_value": key_value,
+                    "phone_number": phone,
+                    "access_point_ids": _permission_access_point_ids(_get_user_permissions(cursor, user_ptr)),
+                    "is_permanent": not bool(getattr(row, "UseExpiry", False)),
+                    "expires_at": expires_at,
+                }
+            )
+        return vehicles
+
+
 def _parity_bit_even(value: int) -> int:
     return bin(value).count("1") % 2
 
@@ -3518,21 +3735,36 @@ def _remove_key_via_gateterm_ui(*, key_id: int, normalized_key_value: str) -> bo
             # guaranteed below by _wait_for_gate_user_deleted, which confirms this exact
             # UserPtr is gone (so a wrong row could never be reported as deleted).
             _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
-            users_window.set_focus()
+            _safe_set_focus(users_window)
             try:
                 users_window.menu().items()[0].sub_menu().items()[2].click()
             except Exception:
                 users_window.type_keys("^d")
             # GateTerm opens delete confirmation asynchronously; wait for it before leaving the user card flow.
-            dialog = _wait_for_gateterm_confirmation_dialog(
-                app,
-                timeout_seconds=_env_float("GATE_GATETERM_UI_DELETE_CONFIRM_TIMEOUT_SECONDS", 5.0),
-            )
+            try:
+                dialog = _wait_for_gateterm_confirmation_dialog(
+                    app,
+                    timeout_seconds=_env_float("GATE_GATETERM_UI_DELETE_CONFIRM_TIMEOUT_SECONDS", 5.0),
+                )
+            except RuntimeError:
+                # No confirmation dialog appeared — the user may already be deleted.
+                with _readonly_cursor() as (_, cursor):
+                    _already_gone = cursor.execute(
+                        "SELECT TOP 1 UserPtr, Deleted FROM Users WHERE UserPtr = ?",
+                        (int(key_id),),
+                    ).fetchone()
+                if _already_gone is None or bool(getattr(_already_gone, "Deleted", False)):
+                    try:
+                        _close_gateterm_users_window_if_open(app)
+                    except Exception:
+                        pass
+                    return True
+                raise
             _confirm_gateterm_dialog(dialog)
             _confirm_gateterm_message_boxes_if_open(app)
             _wait_for_gate_user_deleted(
                 key_id,
-                timeout_seconds=_env_float("GATE_GATETERM_UI_DELETE_APPLY_TIMEOUT_SECONDS", 6.0),
+                timeout_seconds=_env_float("GATE_GATETERM_UI_DELETE_APPLY_TIMEOUT_SECONDS", 12.0),
             )
 
             try:
@@ -3674,7 +3906,7 @@ def _wait_for_enabled_gateterm_window(app: Any, title_fragment: str, *, timeout_
             try:
                 if window.is_enabled():
                     try:
-                        window.set_focus()
+                        _safe_set_focus(window)
                     except Exception:
                         pass
                     return window
@@ -3727,6 +3959,32 @@ def _find_gateterm_main_window(app: Any) -> Any | None:
         except Exception:
             continue
     return None
+
+
+def _safe_set_focus(window: Any) -> None:
+    """Bring *window* to foreground; silently ignore SetForegroundWindow failures.
+
+    Windows may refuse ``SetForegroundWindow`` when the calling process is a
+    background subprocess (e.g. a uvicorn worker) that has no recent foreground
+    access.  Almost all pywinauto operations (click, type_keys, menu_select)
+    send Win32 messages directly to the window handle and work correctly even
+    without explicit foreground focus, so a failed set_focus is not fatal.
+    As a fallback we use win32gui.BringWindowToTop which does NOT require
+    the calling process to hold foreground rights.
+    """
+    try:
+        window.set_focus()
+    except Exception:
+        # SetForegroundWindow returned FALSE (Windows focus-stealing protection).
+        # Try a lighter-weight alternative that does not require foreground rights.
+        try:
+            import win32gui
+            import win32con
+            hwnd = window.handle
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            win32gui.BringWindowToTop(hwnd)
+        except Exception:
+            pass  # Last resort: continue without focus – Win32 messages still work
 
 
 def _find_gateterm_users_window(app: Any) -> Any | None:
@@ -3913,7 +4171,11 @@ def _close_gateterm_new_user_window_if_open(app: Any) -> None:
     except Exception:
         if _window_still_open(app, _GATETERM_NEW_USER_WINDOW_TITLE):
             _dismiss_gateterm_window_via_escape(app, _GATETERM_NEW_USER_WINDOW_TITLE)
-    _close_gateterm_message_boxes_if_open(app)
+    # FIX 8: After clicking Cancel, GateTerm may show "Выйти без сохранения? Да/Нет".
+    # Use _confirm (buttons 6→1: Yes/OK) so we confirm "Yes, exit without saving".
+    # The old _close (buttons 7→2→1) clicked "Нет" (No, button 7) → "Don't exit" →
+    # window stayed OPEN → _wait_for_gateterm_window_to_close timed out → RuntimeError.
+    _confirm_gateterm_message_boxes_if_open(app)
     if not _window_still_open(app, _GATETERM_NEW_USER_WINDOW_TITLE):
         return
     _wait_for_gateterm_window_to_close(
@@ -3928,7 +4190,7 @@ def _close_gateterm_window_if_open(app: Any, title_fragment: str, *, timeout_sec
     if window is None:
         return
     try:
-        window.set_focus()
+        _safe_set_focus(window)
     except Exception:
         pass
     try:
@@ -3949,10 +4211,32 @@ def _close_gateterm_window_if_open(app: Any, title_fragment: str, *, timeout_sec
 
 
 def _close_gateterm_users_window_if_open(app: Any) -> None:
+    users_window = _find_gateterm_window(app, _GATETERM_USERS_WINDOW_TITLE)
+    if users_window is None:
+        return
+    # Click the "Выход" (Exit) button so VB6's Unload handler runs cleanly.
+    # Using window.close() / Alt+F4 can bypass the VB6 Unload handler and cause Error 91.
+    _close_gateterm_message_boxes_if_open(app)
+    clicked = False
+    for btn_id in (1, 2, 3):
+        try:
+            _click_gateterm_control(users_window, btn_id, "ThunderRT6CommandButton", "Button")
+            clicked = True
+            break
+        except Exception:
+            continue
+    if not clicked:
+        try:
+            users_window.type_keys("{ESC}")
+        except Exception:
+            pass
+    _close_gateterm_message_boxes_if_open(app)
+    if not _window_still_open(app, _GATETERM_USERS_WINDOW_TITLE):
+        return
     _close_gateterm_window_if_open(
         app,
         _GATETERM_USERS_WINDOW_TITLE,
-        timeout_seconds=_env_float("GATE_GATETERM_UI_USERS_CLOSE_DELAY_SECONDS", 0.8),
+        timeout_seconds=_env_float("GATE_GATETERM_UI_USERS_CLOSE_DELAY_SECONDS", 1.5),
     )
 
 
@@ -4065,6 +4349,21 @@ def _wait_for_gate_user_deleted(user_ptr: int, *, timeout_seconds: float) -> Non
                 _mark_gate_user_deleted(int(user_ptr))
             return
         if time_module.monotonic() >= deadline:
+            # Final check: GateTerm may have finished writing after the last poll.
+            time_module.sleep(0.5)
+            with _readonly_cursor() as (_, cursor):
+                final_row = cursor.execute(
+                    "SELECT TOP 1 UserPtr, Deleted FROM Users WHERE UserPtr = ?",
+                    (int(user_ptr),),
+                ).fetchone()
+                final_access = cursor.execute(
+                    "SELECT TOP 1 UserPtr FROM AccessTable WHERE UserPtr = ?",
+                    (int(user_ptr),),
+                ).fetchone()
+            if final_row is None or bool(getattr(final_row, "Deleted", False)):
+                if final_access is not None:
+                    _mark_gate_user_deleted(int(user_ptr))
+                return
             raise RuntimeError(f"GateTerm did not delete key {int(user_ptr)}")
         time_module.sleep(0.25)
 
@@ -4096,20 +4395,46 @@ def _finalize_gateterm_vehicle_user_edit_save(app: Any) -> None:
 
 
 def _finalize_gateterm_new_user_save(app: Any) -> None:
-    _confirm_gateterm_message_boxes_if_open(app)
+    # FIX 8: Use _close_gateterm_message_boxes_if_open (buttons 7→2→1: No/Cancel/OK)
+    # instead of _confirm (buttons 6→1: Yes/OK).
+    # After saving a new user GateTerm shows "Продолжить добавление пользователей? Да/Нет".
+    # _confirm clicked "Да" (Yes, button 6) → form resets for another entry, window STAYS
+    # OPEN → gate_bridge then tried to open a new modal (search/edit) → VB6 Error 402
+    # ("Must close or hide topmost modal form first").
+    # _close clicks "Нет" (No, button 7) → GateTerm closes "Новый пользователь" naturally.
+    # For dialogs that have only OK (e.g. "Ошибка 402: дубликат ключа"), buttons 7 and 2
+    # are absent, so button 1 (OK) is tried last — the dialog is dismissed correctly.
+    _close_gateterm_message_boxes_if_open(app)
     time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_CONFIRM_DELAY_SECONDS", 0.35))
+    # A late-appearing dialog (duplicate-key error, etc.) may surface during the sleep
+    # above — dismiss it with the same No/Cancel/OK priority before checking the window.
+    _close_gateterm_message_boxes_if_open(app)
     if _window_still_open(app, _GATETERM_NEW_USER_WINDOW_TITLE):
         try:
-            _wait_for_gateterm_window_to_close(
-                app,
-                _GATETERM_NEW_USER_WINDOW_TITLE,
-                timeout_seconds=_env_float("GATE_GATETERM_UI_USER_SAVE_CLOSE_DELAY_SECONDS", 0.8),
+            # Poll until the window closes.  Each iteration dismisses any stray dialog.
+            close_deadline = time_module.monotonic() + _env_float(
+                "GATE_GATETERM_UI_USER_SAVE_CLOSE_DELAY_SECONDS", 0.8
             )
+            while True:
+                _close_gateterm_message_boxes_if_open(app)
+                if not _window_still_open(app, _GATETERM_NEW_USER_WINDOW_TITLE):
+                    break
+                if time_module.monotonic() >= close_deadline:
+                    raise RuntimeError(
+                        "GateTerm new-user window did not close after save; "
+                        f"open windows: {_list_gateterm_windows(app)!r}"
+                    )
+                time_module.sleep(0.1)
         except Exception:
             _close_gateterm_new_user_window_if_open(app)
 
 
 def _prepare_gateterm_users_workspace(app: Any) -> None:
+    _close_gateterm_message_boxes_if_open(app)
+    # An interrupted open_access_point attempt (e.g. killed by the bridge's external
+    # call timeout before its own `finally` cleanup runs) can leave this window open,
+    # which disables GateTerm's main window and breaks every later automation attempt.
+    _close_gateterm_access_window_if_open(app)
     _close_gateterm_message_boxes_if_open(app)
     _close_gateterm_search_window_if_open(app)
     _close_gateterm_message_boxes_if_open(app)
@@ -4162,7 +4487,7 @@ def _open_gateterm_users_view(app: Any) -> Any:
             break
         try:
             if users_window.is_enabled():
-                users_window.set_focus()
+                _safe_set_focus(users_window)
                 return users_window
         except Exception:
             pass
@@ -4171,7 +4496,7 @@ def _open_gateterm_users_view(app: Any) -> Any:
     main_window = _find_gateterm_main_window(app)
     if main_window is None:
         raise RuntimeError(f"GATE main window is not open; open windows: {_list_gateterm_windows(app)!r}")
-    main_window.set_focus()
+    _safe_set_focus(main_window)
     try:
         main_window.menu_select(_GATETERM_USERS_MENU_PATH)
     except Exception as menu_select_exc:
@@ -4200,15 +4525,28 @@ def _open_gateterm_users_view(app: Any) -> Any:
         _GATETERM_USERS_WINDOW_TITLE,
         timeout_seconds=_env_float("GATE_GATETERM_UI_USERS_OPEN_DELAY_SECONDS", 1.5),
     )
-    users_window.set_focus()
+    _safe_set_focus(users_window)
     return users_window
 
 
 def _open_gateterm_new_user_window(app: Any, users_window: Any) -> Any:
+    # FIX 6 (same as in _open_gateterm_user_edit_window): settle VB6 modal state
+    # after the previous modal form (e.g. "Поиск пользователя") closed.
+    time_module.sleep(_env_float("GATE_GATETERM_UI_MODAL_SETTLE_SECONDS", 0.5))
+    _close_gateterm_message_boxes_if_open(app)
+    # FIX 7 (belt-and-suspenders): guard (separate process, polls every 0.35s) may have
+    # opened its anchor-key search window during the FIX 6 settle sleep.  Close it now
+    # so VB6's modal stack is clear before we attempt the new-user menu click.
+    try:
+        _close_gateterm_search_window_if_open(app)
+    except Exception:
+        pass
+    _close_gateterm_message_boxes_if_open(app)
+
     dialog_delay_seconds = _env_float("GATE_GATETERM_UI_USER_EDIT_OPEN_DELAY_SECONDS", 0.9)
     attempts: list[str] = []
 
-    users_window.set_focus()
+    _safe_set_focus(users_window)
     try:
         users_window.menu().items()[0].sub_menu().items()[0].click()
         attempts.append("menu")
@@ -4232,7 +4570,7 @@ def _open_gateterm_new_user_window(app: Any, users_window: Any) -> Any:
             f"attempts={attempts!r}; open windows={_list_gateterm_windows(app)!r}"
         )
 
-    users_window.set_focus()
+    _safe_set_focus(users_window)
     try:
         users_window.type_keys("^n")
         attempts.append("hotkey")
@@ -4264,7 +4602,7 @@ def _open_gateterm_user_search_window(app: Any, users_window: Any) -> Any:
     dialog_delay_seconds = _env_float("GATE_GATETERM_UI_USER_SEARCH_DIALOG_DELAY_SECONDS", 0.5)
     attempts: list[str] = []
 
-    users_window.set_focus()
+    _safe_set_focus(users_window)
     try:
         users_window.menu().items()[4].sub_menu().items()[0].click()
         attempts.append("menu")
@@ -4278,7 +4616,7 @@ def _open_gateterm_user_search_window(app: Any, users_window: Any) -> Any:
     if search_window is not None:
         return search_window
 
-    users_window.set_focus()
+    _safe_set_focus(users_window)
     try:
         users_window.type_keys("^f")
         attempts.append("hotkey")
@@ -4309,12 +4647,12 @@ def _search_gateterm_user_by_key_number(app: Any, users_window: Any, normalized_
         combo.select(_GATETERM_USER_SEARCH_FIELD_KEY_NUMBER)
 
     try:
-        edit.set_focus()
+        _safe_set_focus(edit)
         if hasattr(edit, "set_edit_text"):
             edit.set_edit_text(normalized_key_value)
         else:
             edit.type_keys("^a{BACKSPACE}")
-            edit.type_keys(normalized_key_value, with_spaces=True, set_foreground=True)
+            edit.type_keys(normalized_key_value, with_spaces=True, set_foreground=False)
     except Exception as exc:
         raise RuntimeError(f"GateTerm user search input failed: {exc}") from exc
 
@@ -4336,12 +4674,12 @@ def _search_gateterm_user_by_key_number(app: Any, users_window: Any, normalized_
 
 def _set_gateterm_text_input(control: Any, value: str, *, field_name: str) -> None:
     try:
-        control.set_focus()
+        _safe_set_focus(control)
         if hasattr(control, "set_edit_text"):
             control.set_edit_text(value)
         else:
             control.type_keys("^a{BACKSPACE}")
-            control.type_keys(value, with_spaces=True, set_foreground=True)
+            control.type_keys(value, with_spaces=True, set_foreground=False)
         # GateTerm commits the key-number edit only after the field loses focus.
         if hasattr(control, "type_keys"):
             control.type_keys("{TAB}")
@@ -4596,6 +4934,17 @@ def _load_vehicle_ui_provisioning_context(
             normalized_key_value,
             key_type_value=vehicle_key_type_value,
         )
+        # If no active user found, check for a soft-deleted record with the same plate
+        # number.  Reusing the deleted record via the edit dialog avoids "Ошибка 402"
+        # (duplicate vehicle number) that GateTerm raises when the "New User" dialog is
+        # used for a plate that still exists as a deleted entry in config.mdb.
+        if existing_user_ptr is None:
+            existing_user_ptr = _find_reusable_deleted_user_ptr(
+                cursor,
+                "VehicleNumber",
+                normalized_key_value,
+                key_type_value=vehicle_key_type_value,
+            )
         desired_access_labels = _resolve_gateterm_access_labels(cursor, access_point_ids)
         current_access_labels: set[str] = set()
         if existing_user_ptr is not None:
@@ -4846,10 +5195,25 @@ def _restore_gate_user_name_fields(*, user_ptr: int, resident_name: str | None) 
 
 
 def _open_gateterm_user_edit_window(app: Any, users_window: Any) -> Any:
+    # FIX 6: After a modal form closes (e.g. "Поиск пользователя"), VB6 needs a moment
+    # to fully unwind its internal modal-form stack before another modal can be shown.
+    # Without this settle, opening the edit dialog immediately causes VB6 Error 402
+    # ("Must close or hide topmost modal form first").
+    time_module.sleep(_env_float("GATE_GATETERM_UI_MODAL_SETTLE_SECONDS", 0.5))
+    _close_gateterm_message_boxes_if_open(app)
+    # FIX 7 (belt-and-suspenders): guard (separate process, polls every 0.35s) may have
+    # opened its anchor-key search window during the FIX 6 settle sleep.  Close it now
+    # so VB6's modal stack is clear before we attempt the edit-user menu click.
+    try:
+        _close_gateterm_search_window_if_open(app)
+    except Exception:
+        pass
+    _close_gateterm_message_boxes_if_open(app)
+
     dialog_delay_seconds = _env_float("GATE_GATETERM_UI_USER_EDIT_OPEN_DELAY_SECONDS", 0.9)
     attempts: list[str] = []
 
-    users_window.set_focus()
+    _safe_set_focus(users_window)
     try:
         users_window.menu().items()[0].sub_menu().items()[1].click()
         attempts.append("menu")
@@ -4863,7 +5227,7 @@ def _open_gateterm_user_edit_window(app: Any, users_window: Any) -> Any:
     if edit_window is not None:
         return edit_window
 
-    users_window.set_focus()
+    _safe_set_focus(users_window)
     try:
         users_window.type_keys("^e")
         attempts.append("hotkey")
@@ -5553,7 +5917,7 @@ def _open_gateterm_access_window(app: Any) -> Any | None:
         try:
             if "GATE Terminal" not in str(candidate.window_text()):
                 continue
-            candidate.set_focus()
+            _safe_set_focus(candidate)
             candidate.menu_select("Управление->Точки доступа")
             time_module.sleep(0.75)
             return _find_gateterm_access_window(app)
@@ -5602,72 +5966,93 @@ def _open_access_point_via_gateterm_ui(cursor: pyodbc.Cursor, access_point_id: i
     previous_event = _latest_gate_open_event(access_point_id)
     previous_index = int(previous_event["index"]) if previous_event is not None else None
 
-    app: Any | None = None
-    try:
-        app = Application(backend="win32").connect(path=gate_term_exe)
-        window = _open_gateterm_access_window(app)
-        if window is None:
-            raise RuntimeError("GateTerm access-point window is not open and could not be opened from the menu")
+    # Retry on transient exceptions (VB6 errors, pywinauto errors) but NOT on event-timeout
+    # failures — if the button was already clicked the gate may already be opening.
+    max_attempts = _env_int("GATE_GATETERM_UI_OPEN_MAX_ATTEMPTS", 2)
+    last_exc: Exception | None = None
 
-        window.set_focus()
-        grid = window.child_window(class_name="MSFlexGridWndClass")
-        button = window.child_window(control_id=11, class_name="ThunderRT6CommandButton")
-        rect = grid.rectangle()
+    for attempt in range(max_attempts):
+        app: Any | None = None
+        try:
+            if attempt > 0:
+                # Brief pause before the retry so GateTerm can recover from the transient error.
+                time_module.sleep(_env_float("GATE_GATETERM_UI_RETRY_DELAY_SECONDS", 0.35))
+            # Use _connect_or_start_gateterm_application so GateTerm is auto-started if it crashed,
+            # and the operator login dialog is handled automatically.
+            app = _connect_or_start_gateterm_application()
+            # Clear any stale modal dialogs left by a previous operation before opening the
+            # access-point window; stale modals cause VB6 errors 400/402.
+            _prepare_gateterm_users_workspace(app)
+            window = _open_gateterm_access_window(app)
+            if window is None:
+                raise RuntimeError("GateTerm access-point window is not open and could not be opened from the menu")
 
-        row_index = int(row_map[access_point_id])
-        row_height = _env_int("GATE_GATETERM_UI_ROW_HEIGHT", 16)
-        header_height = _env_int("GATE_GATETERM_UI_HEADER_HEIGHT", 17)
-        x_offset = _env_int("GATE_GATETERM_UI_X_OFFSET", 70)
-        y_offset = header_height + (row_height * row_index) + max(row_height // 2, 1)
-        if y_offset <= 0 or rect.top + y_offset >= rect.bottom:
-            raise RuntimeError(f"Computed GateTerm row coordinate is outside the grid: row_index={row_index}")
+            _safe_set_focus(window)
+            grid = window.child_window(class_name="MSFlexGridWndClass")
+            button = window.child_window(control_id=11, class_name="ThunderRT6CommandButton")
+            rect = grid.rectangle()
 
-        grid.click_input(coords=(x_offset, y_offset))
-        button.click_input()
+            row_index = int(row_map[access_point_id])
+            row_height = _env_int("GATE_GATETERM_UI_ROW_HEIGHT", 16)
+            header_height = _env_int("GATE_GATETERM_UI_HEADER_HEIGHT", 17)
+            x_offset = _env_int("GATE_GATETERM_UI_X_OFFSET", 70)
+            y_offset = header_height + (row_height * row_index) + max(row_height // 2, 1)
+            if y_offset <= 0 or rect.top + y_offset >= rect.bottom:
+                raise RuntimeError(f"Computed GateTerm row coordinate is outside the grid: row_index={row_index}")
 
-        timeout_seconds = _env_float("GATE_GATETERM_UI_VERIFY_TIMEOUT_SECONDS", 6.0)
-        observed_event = _wait_for_gate_open_event(access_point_id, previous_index, timeout_seconds)
-        details = {
-            "transport": "gateterm_ui",
-            "external_key_id": external_key_id,
-            "access_point_id": access_point_id,
-            "row_index": row_index,
-            "visible_rows": visible_rows,
-            "previous_event": previous_event,
-            "observed_event": observed_event,
-        }
-        if observed_event is None:
-            return GateOpenResponse(
-                success=False,
-                error_code="gateterm_ui_event_not_observed",
-                message="GateTerm UI command was sent, but no matching Gate operator event was observed",
-                details=details,
-            )
+            grid.click_input(coords=(x_offset, y_offset))
+            # Small wait so the VB6 grid has time to process the row-selection event before
+            # the Open button is clicked (prevents "no wait between operations" instability).
+            time_module.sleep(_env_float("GATE_GATETERM_UI_ACCESS_OPEN_DELAY_SECONDS", 0.2))
+            button.click_input()
 
-        return GateOpenResponse(
-            success=True,
-            message=f"Access point {access_point_id} opened via GateTerm UI",
-            details=details,
-        )
-    except Exception as exc:
-        return GateOpenResponse(
-            success=False,
-            error_code="gateterm_ui_error",
-            message=f"GateTerm UI open failed: {exc}",
-            details={
+            timeout_seconds = _env_float("GATE_GATETERM_UI_VERIFY_TIMEOUT_SECONDS", 6.0)
+            observed_event = _wait_for_gate_open_event(access_point_id, previous_index, timeout_seconds)
+            details = {
                 "transport": "gateterm_ui",
                 "external_key_id": external_key_id,
                 "access_point_id": access_point_id,
-                "row_index": row_map.get(access_point_id),
+                "row_index": row_index,
                 "visible_rows": visible_rows,
-            },
-        )
-    finally:
-        if app is not None:
-            try:
-                _close_gateterm_access_window_if_open(app)
-            except Exception:
-                pass
+                "previous_event": previous_event,
+                "observed_event": observed_event,
+            }
+            if observed_event is None:
+                # Do not retry: the Open button was already clicked — the gate may have opened
+                # even if no event was observed within the timeout window.
+                return GateOpenResponse(
+                    success=False,
+                    error_code="gateterm_ui_event_not_observed",
+                    message="GateTerm UI command was sent, but no matching Gate operator event was observed",
+                    details=details,
+                )
+
+            return GateOpenResponse(
+                success=True,
+                message=f"Access point {access_point_id} opened via GateTerm UI",
+                details=details,
+            )
+        except Exception as exc:
+            last_exc = exc
+        finally:
+            if app is not None:
+                try:
+                    _close_gateterm_access_window_if_open(app)
+                except Exception:
+                    pass
+
+    return GateOpenResponse(
+        success=False,
+        error_code="gateterm_ui_error",
+        message=f"GateTerm UI open failed after {max_attempts} attempt(s): {last_exc}",
+        details={
+            "transport": "gateterm_ui",
+            "external_key_id": external_key_id,
+            "access_point_id": access_point_id,
+            "row_index": row_map.get(access_point_id),
+            "visible_rows": visible_rows,
+        },
+    )
 
 
 def open_access_point(access_point_id: int, external_key_id: str | None = None) -> dict[str, Any]:

@@ -26,7 +26,6 @@ const hasAtLeastTwoWords = (value: string) => value.trim().split(/\s+/).filter(B
 const PASS_PURPOSE_OPTIONS: { value: PassPurpose; label: string }[] = [
   { value: 'courier', label: 'Курьер' },
   { value: 'taxi', label: 'Такси' },
-  { value: 'other', label: 'Другое' },
 ];
 
 const renderClearButton = (onPress: () => void) => (

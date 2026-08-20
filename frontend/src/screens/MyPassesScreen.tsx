@@ -75,17 +75,17 @@ export const MyPassesScreen = ({ navigation }: Props) => {
             data={passes}
             keyExtractor={keyExtractor}
             renderItem={renderItem}
-            scrollEnabled={false}
+            scrollEnabled={true}
             initialNumToRender={8}
             maxToRenderPerBatch={8}
             windowSize={7}
             removeClippedSubviews
             contentContainerStyle={styles.listContent}
             ListEmptyComponent={emptyState}
-            showsVerticalScrollIndicator={false}
-            bounces={false}
+            showsVerticalScrollIndicator={true}
+            bounces={true}
             alwaysBounceVertical={false}
-            overScrollMode="never"
+            overScrollMode="always"
           />
 
           <LoadingOverlay visible={loadState === 'loading' || cancelState === 'loading'} />

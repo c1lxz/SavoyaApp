@@ -12,6 +12,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# FIX: lock file written by gate.py while a mutating gate_bridge subprocess is running.
+# Guard must not open GateTerm's search dialog while gate_bridge is using the UI — doing so
+# causes a race condition that triggers VB6 Error 91.
+_GATE_BRIDGE_LOCK_FILE = PROJECT_ROOT / "_gate_bridge_active.lock"
+
 from backend.app.scripts import gate_runtime  # noqa: E402
 
 POLL_SECONDS = 0.35
@@ -115,6 +120,19 @@ def main(argv: list[str] | None = None) -> int:
     if not gate_term_exe:
         raise RuntimeError("GATE_GATETERM_EXE is not configured")
 
+    # FIX 7: grace period after any modal window was detected.
+    # gate_bridge (separate process) opens + closes modal dialogs (search, edit, new-user).
+    # After the modal closes, gate_bridge still needs a moment (FIX 6 settle: 0.5s, then
+    # menu click, then edit window open: ~1.0s) before it can tolerate the guard running
+    # its own anchor search.  If the guard opens "Поиск пользователя" inside that window,
+    # VB6 raises Error 402 (can't show another modal while search is top-most).
+    # Solution: after detecting ANY modal, record the time and refuse to run anchor search
+    # until POST_MODAL_GRACE_SECONDS have elapsed without any modal being seen.
+    POST_MODAL_GRACE_SECONDS = float(
+        gate_runtime._env("GATE_GATETERM_USERS_GUARD_POST_MODAL_GRACE_SECONDS", default="2.0") or "2.0"
+    )
+    last_modal_seen_at: float = 0.0
+
     prepared_handles: set[int] = set()
     last_anchor_key = ""
     last_status = ""
@@ -162,16 +180,29 @@ def main(argv: list[str] | None = None) -> int:
                 time.sleep(POLL_SECONDS)
                 continue
 
-            if gate_runtime._find_gateterm_window(app, gate_runtime._GATETERM_NEW_USER_WINDOW_TITLE) is not None:
+            # FIX 7: check for modal windows and record last-seen time
+            modal_found = (
+                gate_runtime._find_gateterm_window(app, gate_runtime._GATETERM_NEW_USER_WINDOW_TITLE) is not None
+                or gate_runtime._find_gateterm_window(app, gate_runtime._GATETERM_USER_EDIT_WINDOW_TITLE) is not None
+                or gate_runtime._find_gateterm_window(app, gate_runtime._GATETERM_USER_SEARCH_WINDOW_TITLE) is not None
+                or bool(gate_runtime._gateterm_dialog_windows(app))
+            )
+            if modal_found:
+                last_modal_seen_at = time.monotonic()
                 time.sleep(POLL_SECONDS)
                 continue
-            if gate_runtime._find_gateterm_window(app, gate_runtime._GATETERM_USER_EDIT_WINDOW_TITLE) is not None:
+
+            # FIX 7: enforce grace period — don't run anchor search too soon after a modal
+            # closed.  gate_bridge needs this window to finish opening the edit dialog
+            # (FIX 6: 0.5s settle + ~0.9s for edit window = ~1.4s total).  2.0s is safe.
+            if time.monotonic() - last_modal_seen_at < POST_MODAL_GRACE_SECONDS:
                 time.sleep(POLL_SECONDS)
                 continue
-            if gate_runtime._find_gateterm_window(app, gate_runtime._GATETERM_USER_SEARCH_WINDOW_TITLE) is not None:
-                time.sleep(POLL_SECONDS)
-                continue
-            if gate_runtime._gateterm_dialog_windows(app):
+
+            # FIX: if gate_bridge is running a mutating UI operation, treat as "modal seen"
+            # and wait — racing gate_bridge for GateTerm's UI causes VB6 Error 91.
+            if _GATE_BRIDGE_LOCK_FILE.exists():
+                last_modal_seen_at = time.monotonic()
                 time.sleep(POLL_SECONDS)
                 continue
 

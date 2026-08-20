@@ -154,6 +154,112 @@ async def _upsert_gate_phone_access(user: User, request: Request, access_point_i
     )
 
 
+async def _get_linked_vehicle_plates(
+    session: AsyncSession,
+    request_ids: list[int],
+) -> set[str]:
+    """Return the set of VehicleNumber key_values for a given list of request IDs.
+
+    Used to build the *already_linked_plates* exclusion set before the name-based
+    vehicle lookup so that we never create duplicate requests for the same plate.
+    """
+    if not request_ids:
+        return set()
+    result = await session.execute(
+        select(Request.key_value).where(
+            Request.id.in_(request_ids),
+            Request.key_type == "VehicleNumber",
+        )
+    )
+    return {str(v) for v in result.scalars().all()}
+
+
+async def _link_existing_gate_vehicle_passes_by_name(
+    session: AsyncSession,
+    user: User,
+    *,
+    already_linked_plates: set[str],
+) -> list[int]:
+    """Find vehicle passes in Gate whose owner name matches the account name.
+
+    This is a fallback for vehicle passes that don't have a Phone field set in Gate
+    (so phone-based lookup misses them).  Plates already imported by the phone-based
+    lookup are skipped via *already_linked_plates* to avoid duplicates.
+    """
+    resident_name = (user.name or "").strip()
+    if not resident_name:
+        return []
+    try:
+        vehicle_rows = await asyncio.to_thread(gate_client.list_vehicle_keys_by_name, resident_name)
+    except Exception as exc:  # pragma: no cover - depends on local Gate bridge/runtime.
+        logger.warning(
+            "Gate vehicle name-link lookup failed for user_id=%s name=%r: %s",
+            user.id,
+            resident_name,
+            exc,
+        )
+        return []
+
+    linked_ids: list[int] = []
+    for item in vehicle_rows:
+        key_value = str(item.get("key_value") or "").strip()
+        if not key_value:
+            continue
+        if key_value in already_linked_plates:
+            continue  # already imported by phone-based lookup
+
+        existing_query = await session.execute(
+            select(Request.id).where(
+                Request.key_type == "VehicleNumber",
+                Request.key_value == key_value,
+                Request.status == "active",
+            )
+        )
+        if existing_query.scalar_one_or_none() is not None:
+            continue
+
+        try:
+            gate_key_id = int(item.get("gate_key_id") or 0)
+        except (TypeError, ValueError):
+            gate_key_id = 0
+        access_point_ids = _permission_access_point_ids(
+            [{"access_point_id": point_id} for point_id in (item.get("access_point_ids") or [])]
+        )
+        if not access_point_ids:
+            continue
+
+        raw_expires_at = item.get("expires_at")
+        expires_at = raw_expires_at
+        if isinstance(raw_expires_at, str):
+            try:
+                expires_at = datetime.fromisoformat(raw_expires_at.replace("Z", "+00:00"))
+            except ValueError:
+                expires_at = None
+
+        request = Request(
+            resident_id=user.id,
+            key_type="VehicleNumber",
+            key_value=key_value,
+            gate_key_id=gate_key_id if gate_key_id > 0 else None,
+            access_point_ids=access_point_ids,
+            is_permanent=bool(item.get("is_permanent", True)),
+            is_courier=False,
+            contact_phone=item.get("phone_number") or None,
+            expires_at=ensure_utc_datetime(expires_at),
+            status="active",
+            plot_number=user.plot_number or user.apartment,
+        )
+        session.add(request)
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            continue
+        linked_ids.append(int(request.id))
+
+    return linked_ids
+
+
 async def _link_existing_gate_vehicle_passes_by_phone(session: AsyncSession, user: User, phone_key: str) -> list[int]:
     try:
         vehicle_rows = await asyncio.to_thread(gate_client.list_vehicle_keys_by_phone, phone_key)
@@ -253,11 +359,18 @@ async def _link_existing_gate_keys_by_phone(session: AsyncSession, user: User, p
         except (TypeError, ValueError):
             gate_key_id = 0
 
-        access_point_ids = _permission_access_point_ids(
-            [{"access_point_id": point_id} for point_id in (item.get("access_point_ids") or [])]
-        )
         if key_type == "Phone":
-            access_point_ids = _configured_phone_access_point_ids(access_point_ids)
+            # Replace whatever stale permissions the old pass carried with exactly
+            # the currently configured access points.  Old manually-created passes
+            # often have every available access point; keeping those would cause
+            # "Key has no permission" errors when the resident uses the app.
+            access_point_ids = _merge_access_point_ids(
+                settings.default_access_point_ids, settings.gsm_access_point_ids
+            )
+        else:
+            access_point_ids = _permission_access_point_ids(
+                [{"access_point_id": point_id} for point_id in (item.get("access_point_ids") or [])]
+            )
         if not access_point_ids:
             continue
 
@@ -292,6 +405,34 @@ async def _link_existing_gate_keys_by_phone(session: AsyncSession, user: User, p
             await session.rollback()
             continue
         linked_ids.append(int(request.id))
+
+        # Re-sync old Phone passes in Gate with the current configured access points.
+        # Passes created manually before the app existed often have a stale or
+        # overly-broad set of access point permissions.  Calling _upsert_gate_phone_access
+        # here ensures Gate's own permission table is updated to exactly match the
+        # configured access points, preventing "Key has no permission" errors when the
+        # resident later presses the Open button in the app.
+        if key_type == "Phone" and settings.gate_real_integration_enabled:
+            try:
+                synced_key_id = await _upsert_gate_phone_access(user, request, access_point_ids)
+                request.gate_key_id = synced_key_id
+                user.gate_user_id = synced_key_id
+                session.add(user)
+                session.add(request)
+                logger.info(
+                    "Re-synced Gate phone pass for user_id=%s phone=%s → gate_key_id=%s ap=%s",
+                    user.id,
+                    phone_key,
+                    synced_key_id,
+                    access_point_ids,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Gate phone pass re-sync failed for user_id=%s phone=%s (pass still linked): %s",
+                    user.id,
+                    phone_key,
+                    exc,
+                )
 
     return linked_ids, found_gate_rows
 
@@ -440,9 +581,7 @@ async def link_existing_gate_passes_by_phone(session: AsyncSession, user: User) 
         return GatePhoneLinkResult(error=str(exc))
 
     if found_existing_gate_rows and not existing_gate_request_ids:
-        return GatePhoneLinkResult(
-            error="Gate user exists for this phone, but has no active access permissions to link",
-        )
+        return GatePhoneLinkResult(error="Gate user exists but has no active access permissions")
 
     linked_phone_request_id: int | None = None
     if existing_gate_request_ids:
@@ -455,9 +594,17 @@ async def link_existing_gate_passes_by_phone(session: AsyncSession, user: User) 
         )
         linked_phone_request_id = linked_phone_query.scalar_one_or_none()
         if linked_phone_request_id is not None:
+            # Phone pass found — also sweep by name to catch any vehicles whose Phone
+            # field in Gate is blank or in a different format.
+            name_ids = await _link_existing_gate_vehicle_passes_by_name(
+                session,
+                user,
+                already_linked_plates=await _get_linked_vehicle_plates(session, existing_gate_request_ids),
+            )
+            all_ids = existing_gate_request_ids + name_ids
             await session.commit()
             return GatePhoneLinkResult(
-                linked_request_ids=existing_gate_request_ids,
+                linked_request_ids=all_ids,
                 access_point_count=len(access_point_ids),
             )
 
@@ -467,9 +614,16 @@ async def link_existing_gate_passes_by_phone(session: AsyncSession, user: User) 
             access_point_ids = existing_access_point_ids
     else:
         if existing_gate_request_ids:
+            # Vehicle-only Gate rows found by phone — sweep by name for any remaining.
+            name_ids = await _link_existing_gate_vehicle_passes_by_name(
+                session,
+                user,
+                already_linked_plates=await _get_linked_vehicle_plates(session, existing_gate_request_ids),
+            )
+            all_ids = existing_gate_request_ids + name_ids
             await session.commit()
             return GatePhoneLinkResult(
-                linked_request_ids=existing_gate_request_ids,
+                linked_request_ids=all_ids,
                 access_point_count=len(access_point_ids),
             )
 
@@ -516,6 +670,13 @@ async def link_existing_gate_passes_by_phone(session: AsyncSession, user: User) 
 
     try:
         vehicle_request_ids = await _link_existing_gate_vehicle_passes_by_phone(session, user, phone_key)
+        # Also sweep by name for any vehicles with no phone field in Gate.
+        phone_linked_plates = await _get_linked_vehicle_plates(session, vehicle_request_ids)
+        name_ids = await _link_existing_gate_vehicle_passes_by_name(
+            session,
+            user,
+            already_linked_plates=phone_linked_plates,
+        )
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
@@ -524,7 +685,7 @@ async def link_existing_gate_passes_by_phone(session: AsyncSession, user: User) 
 
     await session.refresh(request)
     return GatePhoneLinkResult(
-        linked_request_ids=[int(request.id), *vehicle_request_ids],
+        linked_request_ids=[int(request.id), *vehicle_request_ids, *name_ids],
         access_point_count=len(access_point_ids),
     )
 

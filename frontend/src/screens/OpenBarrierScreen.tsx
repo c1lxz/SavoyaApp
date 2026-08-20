@@ -1,5 +1,15 @@
-import React, { memo, useEffect } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import React, { memo, useEffect, useRef } from 'react';
+import {
+  ActivityIndicator,
+  Animated,
+  Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -21,19 +31,78 @@ type BarrierButtonProps = {
   onPress: () => void;
   disabled: boolean;
   iconSource: number;
+  isLoading: boolean;
+  isAnyLoading: boolean;
 };
 
 const ENTRY_ICON = require('../../assets/barrier-entry.png');
 const EXIT_ICON = require('../../assets/barrier-exit.png');
 
-const BarrierActionButton = memo(({ title, onPress, disabled, iconSource }: BarrierButtonProps) => (
-  <Pressable onPress={onPress} disabled={disabled} style={[styles.barrierButton, disabled && styles.barrierButtonDisabled]}>
-    <View style={styles.barrierRow}>
-      <Image source={iconSource} style={styles.barrierIcon} resizeMode="contain" />
-      <Text style={styles.barrierLabel}>{title}</Text>
-    </View>
-  </Pressable>
-));
+const BarrierActionButton = memo(({ title, onPress, disabled, iconSource, isLoading, isAnyLoading }: BarrierButtonProps) => {
+  const pressScale = useRef(new Animated.Value(1)).current;
+  const pulseOpacity = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (!isLoading) {
+      pulseOpacity.setValue(1);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseOpacity, { toValue: 0.55, duration: 650, useNativeDriver: true }),
+        Animated.timing(pulseOpacity, { toValue: 1, duration: 650, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+      pulseOpacity.setValue(1);
+    };
+  }, [isLoading, pulseOpacity]);
+
+  const handlePressIn = () => {
+    Animated.spring(pressScale, {
+      toValue: 0.93,
+      useNativeDriver: true,
+      speed: 50,
+      bounciness: 2,
+    }).start();
+  };
+
+  const handlePressOut = () => {
+    Animated.spring(pressScale, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 22,
+      bounciness: 10,
+    }).start();
+  };
+
+  return (
+    <Animated.View style={{ transform: [{ scale: pressScale }] }}>
+      <Pressable
+        onPress={onPress}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        disabled={disabled}
+        style={[
+          styles.barrierButton,
+          isLoading && styles.barrierButtonLoading,
+          isAnyLoading && !isLoading && styles.barrierButtonDimmed,
+        ]}
+      >
+        <Animated.View style={[styles.barrierRow, isLoading && { opacity: pulseOpacity }]}>
+          {isLoading ? (
+            <ActivityIndicator size="large" color={theme.colors.textPrimary} style={styles.barrierIcon} />
+          ) : (
+            <Image source={iconSource} style={styles.barrierIcon} resizeMode="contain" />
+          )}
+          <Text style={[styles.barrierLabel, isLoading && styles.barrierLabelLoading]}>{title}</Text>
+        </Animated.View>
+      </Pressable>
+    </Animated.View>
+  );
+});
 BarrierActionButton.displayName = 'BarrierActionButton';
 
 export const OpenBarrierScreen = ({ navigation }: Props) => {
@@ -42,6 +111,7 @@ export const OpenBarrierScreen = ({ navigation }: Props) => {
 
   const user = useAuthStore((state) => state.user);
   const gateState = useGateStore((state) => state.gateState);
+  const loadingAction = useGateStore((state) => state.loadingAction);
   const result = useGateStore((state) => state.result);
   const error = useGateStore((state) => state.error);
   const openEntry = useGateStore((state) => state.openEntry);
@@ -52,7 +122,7 @@ export const OpenBarrierScreen = ({ navigation }: Props) => {
     resetGateState();
   }, [resetGateState]);
 
-  const isLoading = gateState === 'loading';
+  const isAnyLoading = gateState === 'loading';
   const feedbackMessage = result ? getGateActionFeedback(result, Boolean(user?.isAdmin)) : null;
 
   return (
@@ -71,8 +141,22 @@ export const OpenBarrierScreen = ({ navigation }: Props) => {
             <ScreenHeader title="Открыть шлагбаум" onBack={() => goBackOrHome(navigation)} />
 
             <View style={[styles.actions, { gap: metrics.panelGap }]}>
-              <BarrierActionButton title="Въезд" onPress={openEntry} disabled={isLoading} iconSource={ENTRY_ICON} />
-              <BarrierActionButton title="Выезд" onPress={openExit} disabled={isLoading} iconSource={EXIT_ICON} />
+              <BarrierActionButton
+                title="Въезд"
+                onPress={openEntry}
+                disabled={isAnyLoading}
+                iconSource={ENTRY_ICON}
+                isLoading={loadingAction === 'entry'}
+                isAnyLoading={isAnyLoading}
+              />
+              <BarrierActionButton
+                title="Выезд"
+                onPress={openExit}
+                disabled={isAnyLoading}
+                iconSource={EXIT_ICON}
+                isLoading={loadingAction === 'exit'}
+                isAnyLoading={isAnyLoading}
+              />
             </View>
 
             <View style={styles.feedback}>
@@ -126,8 +210,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 22,
   },
-  barrierButtonDisabled: {
-    opacity: 0.8,
+  barrierButtonLoading: {
+    borderColor: 'rgba(219, 193, 134, 0.92)',
+    backgroundColor: 'rgba(38, 62, 48, 0.9)',
+  },
+  barrierButtonDimmed: {
+    opacity: 0.45,
   },
   barrierRow: {
     flexDirection: 'row',
@@ -143,6 +231,9 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
     fontSize: 19,
     fontWeight: '600',
+  },
+  barrierLabelLoading: {
+    color: theme.colors.textSecondary,
   },
   feedback: {
     marginTop: theme.spacing.xl,

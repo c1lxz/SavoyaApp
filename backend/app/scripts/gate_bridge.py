@@ -56,6 +56,8 @@ def _call(action: str, payload: dict) -> object:
         return gate_runtime.resolve_key_id(str(payload["external_key_id"]))
     if action == "get_access_points":
         return gate_runtime.get_access_points()
+    if action == "is_users_window_open":
+        return gate_runtime.is_gateterm_users_window_open()
     if action == "get_recent_events":
         return gate_runtime.get_recent_events(limit=int(payload.get("limit") or 100))
     if action == "repair_user_display_names":
@@ -70,6 +72,8 @@ def _call(action: str, payload: dict) -> object:
         return gate_runtime.get_key_permissions(str(payload["external_key_id"]))
     if action == "list_vehicle_keys_by_phone":
         return gate_runtime.list_vehicle_keys_by_phone(str(payload["phone_number"]))
+    if action == "list_vehicle_keys_by_name":
+        return gate_runtime.list_vehicle_keys_by_name(str(payload["resident_name"]))
     if action == "list_keys_by_phone":
         return gate_runtime.list_keys_by_phone(str(payload["phone_number"]))
     if action == "get_wiegand_credentials":
@@ -95,14 +99,41 @@ def main() -> int:
     raw_payload = sys.argv[2] if len(sys.argv) > 2 else sys.stdin.read()
     payload = json.loads(raw_payload) if str(raw_payload or "").strip() else {}
 
+    # FIX: hold a lock file for the duration of any UI-mutating action so that
+    # gateterm_users_guard.py backs off and does not race gate_bridge for GateTerm's UI.
+    # Racing causes VB6 Error 91 ("Object variable or With block variable not set") because
+    # both processes try to open the "Поиск пользователя" search dialog simultaneously.
+    _UI_MUTATING_ACTIONS = frozenset({
+        "add_temporary_key", "add_permanent_key", "add_phone_permanent_key_via_ui",
+        "remove_key", "post_sync_vehicle_key", "post_sync_phone_key", "open_access_point",
+        "repair_phone_identity_rows", "repair_user_display_names",
+        "repair_vehicle_number_u", "repair_vehicle_visual_numbers",
+    })
+    _lock_file = _PROJECT_ROOT / "_gate_bridge_active.lock"
+    _is_ui_action = action in _UI_MUTATING_ACTIONS
+    if _is_ui_action:
+        try:
+            _lock_file.touch()
+        except Exception:
+            pass
+
+    exit_code = 0
+    output = ""
     try:
         result = _call(action, payload)
+        output = json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=_json_default)
     except Exception as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
-        return 1
+        output = json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+        exit_code = 1
+    finally:
+        if _is_ui_action:
+            try:
+                _lock_file.unlink(missing_ok=True)
+            except Exception:
+                pass
 
-    print(json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=_json_default))
-    return 0
+    print(output)
+    return exit_code
 
 
 if __name__ == "__main__":

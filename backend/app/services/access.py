@@ -96,7 +96,12 @@ def _account_access_point_ids() -> list[int]:
 
 def _request_priority(item: Request, *, prefer_courier: bool) -> tuple[int, int, float]:
     created_at = ensure_utc_datetime(item.created_at) or datetime.fromtimestamp(0, tz=timezone.utc)
-    courier_rank = 0 if prefer_courier and bool(getattr(item, "is_courier", False)) else 1
+    is_courier = bool(getattr(item, "is_courier", False))
+    # At barrier_exit (prefer_courier=True):  courier passes rank 0 (preferred), non-courier rank 1.
+    # At barrier_entry (prefer_courier=False): non-courier passes rank 0 (preferred), courier rank 1.
+    # This prevents a courier/taxi pass from triggering the 2-hour entry countdown when a
+    # non-courier personal pass is also available and the resident opens the barrier themselves.
+    courier_rank = (0 if is_courier else 1) if prefer_courier else (1 if is_courier else 0)
     permanent_rank = 1 if item.is_permanent else 0
     return (courier_rank, permanent_rank, -created_at.timestamp())
 
@@ -400,9 +405,18 @@ async def _courier_companion_candidates(
     for row in query.scalars().all():
         if request_item.plot_number and row.plot_number and request_item.plot_number != row.plot_number:
             continue
-        is_companion_phone = row.key_type == "Phone" and row.key_value == phone_value
-        is_companion_vehicle = row.key_type == "VehicleNumber" and row.contact_phone == phone_value
-        if is_companion_phone or is_companion_vehicle:
+        # Only pair opposite key types:
+        #   vehicle entry  → find the companion Phone pass (same phone number stored in key_value)
+        #   phone entry    → find the companion VehicleNumber pass (same phone in contact_phone)
+        # Vehicle → vehicle pairing is intentionally skipped: two separate courier vehicles on
+        # the same account that share a contact phone are independent passes (e.g. a taxi pass
+        # and a courier pass).  Linking their timers is incorrect — only a phone+vehicle pair
+        # representing the same physical person/trip should share the entry TTL.
+        if request_item.key_type == "VehicleNumber":
+            is_companion = row.key_type == "Phone" and row.key_value == phone_value
+        else:
+            is_companion = row.key_type == "VehicleNumber" and row.contact_phone == phone_value
+        if is_companion:
             candidates.append(row)
 
     return candidates
@@ -861,7 +875,13 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
     await session.commit()
 
     try:
-        result = gate_client.open_access_point(access_point.id, key_external_id=access_key.external_id)
+        # FIX: wrap in asyncio.to_thread — open_access_point is now in _MUTATING_BRIDGE_ACTIONS
+        # and acquires _mutating_bridge_lock (threading.Lock).  Calling it directly on the
+        # event loop thread would block the entire event loop for the bridge timeout (up to 60s),
+        # stalling all other requests including a second concurrent open_access_point call.
+        result = await asyncio.to_thread(
+            gate_client.open_access_point, access_point.id, key_external_id=access_key.external_id
+        )
     except Exception as exc:
         result = GateOpenResult(
             success=False,
@@ -894,7 +914,9 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
                 access_key.protocol_type = "gate_account_phone"
                 await session.commit()
                 context.key_external_id = str(refreshed_gate_key_id)
-                result = gate_client.open_access_point(access_point.id, key_external_id=access_key.external_id)
+                result = await asyncio.to_thread(
+                    gate_client.open_access_point, access_point.id, key_external_id=access_key.external_id
+                )
         except Exception as exc:
             result = GateOpenResult(
                 success=False,

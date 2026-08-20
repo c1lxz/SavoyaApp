@@ -21,6 +21,10 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _GATE_BRIDGE_SCRIPT = _PROJECT_ROOT / "backend" / "app" / "scripts" / "gate_bridge.py"
 _GATETERM_USERS_GUARD_SCRIPT = _PROJECT_ROOT / "scripts" / "gateterm_users_guard.py"
 _GATETERM_USERS_GUARD_ACTIONS = frozenset({"repair_vehicle_visual_numbers"})
+# Lock file that signals gateterm_users_guard: a UI-mutating gate_bridge operation is active.
+# The guard checks this file before running its anchor search so it does not race gate_bridge
+# for GateTerm's UI (which causes VB6 Error 91 / Error 402).
+_GATE_BRIDGE_LOCK_FILE = _PROJECT_ROOT / "_gate_bridge_active.lock"
 _MAINTENANCE_BRIDGE_ACTIONS = frozenset(
     {
         "repair_phone_identity_rows",
@@ -41,6 +45,10 @@ _MUTATING_BRIDGE_ACTIONS = frozenset(
         "repair_vehicle_number_u",
         "repair_vehicle_visual_numbers",
         "post_sync_vehicle_key",
+        # Serialise gate-open with other GateTerm UI operations so concurrent pass
+        # creation and gate-open calls do not fight over the same VB6 window state
+        # (which triggers VB6 errors 400/402).
+        "open_access_point",
     }
 )
 
@@ -180,7 +188,7 @@ class GateClient:
 
     @staticmethod
     def _bridge_timeout_seconds(action: str) -> int:
-        if action in {"post_sync_vehicle_key", "post_sync_phone_key", "add_phone_permanent_key_via_ui"}:
+        if action in {"post_sync_vehicle_key", "post_sync_phone_key", "add_phone_permanent_key_via_ui", "add_temporary_key", "remove_key"}:
             return max(1, int(settings.gate_bridge_vehicle_post_sync_timeout_seconds))
         if action in _MAINTENANCE_BRIDGE_ACTIONS:
             return max(1, int(settings.gate_bridge_maintenance_timeout_seconds))
@@ -198,59 +206,74 @@ class GateClient:
         maintenance_action = action in _MAINTENANCE_BRIDGE_ACTIONS
 
         bridge_lock = self._mutating_bridge_lock if action in _MUTATING_BRIDGE_ACTIONS else nullcontext()
+        is_ui_mutating = action in _MUTATING_BRIDGE_ACTIONS
         with bridge_lock:
-            deadline = time.monotonic() + timeout_seconds if maintenance_action else None
-            attempt_index = 0
-            while True:
-                attempt_index += 1
-                attempt_timeout = timeout_seconds
-                if deadline is not None:
-                    remaining_before_attempt = deadline - time.monotonic()
-                    if remaining_before_attempt <= 0:
-                        raise RuntimeError(
-                            f"Gate bridge action '{action}' timed out after {timeout_seconds} seconds"
-                        )
-                    attempt_timeout = max(1, min(timeout_seconds, int(remaining_before_attempt)))
+            # FIX: signal gateterm_users_guard that a mutating UI operation is active so it
+            # does not race gate_bridge for GateTerm's UI (VB6 Error 91 / Error 402).
+            if is_ui_mutating:
                 try:
-                    completed = subprocess.run(
-                        command,
-                        cwd=_PROJECT_ROOT,
-                        input=payload_json,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        env=self._gate_subprocess_env(),
-                        timeout=attempt_timeout,
-                        check=False,
-                    )
-                except subprocess.TimeoutExpired as exc:
-                    raise RuntimeError(f"Gate bridge action '{action}' timed out after {timeout_seconds} seconds") from exc
-                stdout = (completed.stdout or "").strip()
-                stderr = (completed.stderr or "").strip()
-                if completed.returncode == 0:
+                    _GATE_BRIDGE_LOCK_FILE.touch()
+                except Exception:
+                    pass
+            try:
+                deadline = time.monotonic() + timeout_seconds if maintenance_action else None
+                attempt_index = 0
+                while True:
+                    attempt_index += 1
+                    attempt_timeout = timeout_seconds
+                    if deadline is not None:
+                        remaining_before_attempt = deadline - time.monotonic()
+                        if remaining_before_attempt <= 0:
+                            raise RuntimeError(
+                                f"Gate bridge action '{action}' timed out after {timeout_seconds} seconds"
+                            )
+                        attempt_timeout = max(1, min(timeout_seconds, int(remaining_before_attempt)))
                     try:
-                        data = json.loads(stdout)
-                    except json.JSONDecodeError as exc:
-                        raise RuntimeError(f"Gate bridge returned invalid JSON: {stdout}") from exc
+                        completed = subprocess.run(
+                            command,
+                            cwd=_PROJECT_ROOT,
+                            input=payload_json,
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            env=self._gate_subprocess_env(),
+                            timeout=attempt_timeout,
+                            check=False,
+                        )
+                    except subprocess.TimeoutExpired as exc:
+                        raise RuntimeError(f"Gate bridge action '{action}' timed out after {timeout_seconds} seconds") from exc
+                    stdout = (completed.stdout or "").strip()
+                    stderr = (completed.stderr or "").strip()
+                    if completed.returncode == 0:
+                        try:
+                            data = json.loads(stdout)
+                        except json.JSONDecodeError as exc:
+                            raise RuntimeError(f"Gate bridge returned invalid JSON: {stdout}") from exc
 
-                    if not data.get("ok"):
-                        raise RuntimeError(str(data.get("error") or "Gate bridge failed"))
-                    return data.get("result")
+                        if not data.get("ok"):
+                            raise RuntimeError(str(data.get("error") or "Gate bridge failed"))
+                        return data.get("result")
 
-                message = stdout or stderr or f"Gate bridge failed with exit code {completed.returncode}"
-                if deadline is not None:
-                    is_last_attempt = time.monotonic() >= deadline
-                else:
-                    is_last_attempt = attempt_index >= attempts
-                if is_last_attempt or not self._is_retryable_bridge_error(message):
-                    raise RuntimeError(message)
-                if deadline is None:
-                    time.sleep(delay_seconds)
-                    continue
-                remaining_after_attempt = deadline - time.monotonic()
-                if remaining_after_attempt <= 0:
-                    raise RuntimeError(message)
-                time.sleep(min(delay_seconds, remaining_after_attempt))
+                    message = stdout or stderr or f"Gate bridge failed with exit code {completed.returncode}"
+                    if deadline is not None:
+                        is_last_attempt = time.monotonic() >= deadline
+                    else:
+                        is_last_attempt = attempt_index >= attempts
+                    if is_last_attempt or not self._is_retryable_bridge_error(message):
+                        raise RuntimeError(message)
+                    if deadline is None:
+                        time.sleep(delay_seconds)
+                        continue
+                    remaining_after_attempt = deadline - time.monotonic()
+                    if remaining_after_attempt <= 0:
+                        raise RuntimeError(message)
+                    time.sleep(min(delay_seconds, remaining_after_attempt))
+            finally:
+                if is_ui_mutating:
+                    try:
+                        _GATE_BRIDGE_LOCK_FILE.unlink(missing_ok=True)
+                    except Exception:
+                        pass
 
         raise RuntimeError("Gate bridge retry loop exited unexpectedly")
 
@@ -339,6 +362,14 @@ class GateClient:
             return resolved if resolved > 0 else None
         return None
 
+    def is_users_window_open(self) -> bool:
+        if not settings.gate_real_integration_enabled:
+            return False
+        try:
+            return bool(self._run_bridge("is_users_window_open"))
+        except Exception:
+            return False
+
     def get_access_points(self) -> list[dict[str, Any]]:
         if settings.gate_real_integration_enabled:
             result = self._run_bridge("get_access_points")
@@ -392,6 +423,12 @@ class GateClient:
     def list_vehicle_keys_by_phone(self, phone_number: str) -> list[dict[str, Any]]:
         if settings.gate_real_integration_enabled:
             result = self._run_bridge("list_vehicle_keys_by_phone", {"phone_number": phone_number})
+            return [dict(item) for item in result]
+        return []
+
+    def list_vehicle_keys_by_name(self, resident_name: str) -> list[dict[str, Any]]:
+        if settings.gate_real_integration_enabled:
+            result = self._run_bridge("list_vehicle_keys_by_name", {"resident_name": resident_name})
             return [dict(item) for item in result]
         return []
 
