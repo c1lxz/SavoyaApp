@@ -1306,35 +1306,52 @@ def test_post_sync_phone_key_via_gateterm_ui_uses_clean_search_then_edit_flow(mo
     ]
 
 
-def test_add_phone_permanent_key_via_gateterm_ui_creates_new_user(monkeypatch):
+def test_add_phone_permanent_key_via_gateterm_ui_bootstraps_new_user_then_edits(monkeypatch):
     calls: list[object] = []
     fake_app = object()
     fake_users_window = object()
-    fake_new_window = object()
     fake_edit_window = object()
+
+    contexts = iter(
+        [
+            {
+                "existing_user_ptr": None,
+                "phone_key_type_value": 6,
+                "phone_storage_value": "89991234567",
+                "desired_access_labels": {"калитка 1", "камера въезда", "считыватель въезд gsm"},
+                "current_access_labels": set(),
+            },
+            {
+                "existing_user_ptr": 9123,
+                "phone_key_type_value": 6,
+                "phone_storage_value": "89991234567",
+                "desired_access_labels": {"калитка 1", "камера въезда", "считыватель въезд gsm"},
+                "current_access_labels": {"калитка 1", "камера въезда", "считыватель въезд gsm"},
+            },
+        ]
+    )
 
     monkeypatch.setattr(
         gate_runtime,
         "_load_phone_ui_provisioning_context",
-        lambda **kwargs: {
-            "existing_user_ptr": None,
-            "phone_key_type_value": 6,
-            "phone_storage_value": "89991234567",
-            "desired_access_labels": {"калитка 1", "камера въезда", "считыватель въезд gsm"},
-            "current_access_labels": set(),
-        },
+        lambda **kwargs: next(contexts),
+    )
+    fake_cursor = object()
+
+    @contextmanager
+    def fake_transaction_cursor():
+        yield object(), fake_cursor
+
+    monkeypatch.setattr(gate_runtime, "_transaction_cursor", fake_transaction_cursor)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_upsert_real_user",
+        lambda cursor, **kwargs: calls.append(("bootstrap", cursor, kwargs)) or 9123,
     )
     monkeypatch.setattr(gate_runtime, "_connect_or_start_gateterm_application", lambda: calls.append("connect") or fake_app)
     monkeypatch.setattr(gate_runtime, "_prepare_gateterm_users_workspace", lambda app: calls.append(("prepare", app)))
     monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: calls.append(("open_users", app)) or fake_users_window)
     monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: calls.append(("close_users", app)))
-    monkeypatch.setattr(gate_runtime, "_resolve_gateterm_search_init_probe_value", lambda: "PROBE-EXISTING")
-    monkeypatch.setattr(gate_runtime, "_window_still_open", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(
-        gate_runtime,
-        "_open_gateterm_new_user_window",
-        lambda app, users_window: calls.append(("open_new", app, users_window)) or fake_new_window,
-    )
     monkeypatch.setattr(
         gate_runtime,
         "_search_gateterm_user_by_key_number",
@@ -1356,7 +1373,6 @@ def test_add_phone_permanent_key_via_gateterm_ui_creates_new_user(monkeypatch):
         lambda window, control_id, *class_names: calls.append(("click", window, control_id, class_names)),
     )
     monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_new_user_save", lambda app: calls.append(("finalize_new", app)))
     monkeypatch.setattr(gate_runtime, "_finalize_gateterm_user_edit_save", lambda app: calls.append(("finalize_edit", app)))
     monkeypatch.setattr(
         gate_runtime,
@@ -1381,33 +1397,21 @@ def test_add_phone_permanent_key_via_gateterm_ui_creates_new_user(monkeypatch):
 
     assert result == 9123
     assert calls == [
-        "connect",
-        ("prepare", fake_app),
-        ("open_users", fake_app),
-        ("search", fake_app, fake_users_window, "PROBE-EXISTING"),
-        ("open_new", fake_app, fake_users_window),
         (
-            "populate",
-            fake_new_window,
+            "bootstrap",
+            fake_cursor,
             {
+                "key_type": "Phone",
                 "normalized_key_value": "009991234567",
-                "phone_storage_value": "89991234567",
+                "phone_number": "+79991234567",
                 "resident_name": "Новый Житель",
                 "plot_number": "11",
-                "desired_access_labels": {"калитка 1", "камера въезда", "считыватель въезд gsm"},
-                "current_access_labels": set(),
+                "is_visitor": False,
+                "expires_at": None,
+                "access_point_ids": [15, 19, 5],
             },
         ),
-        ("click", fake_new_window, 1, ("ThunderRT6CommandButton", "Button")),
-        ("finalize_new", fake_app),
-        (
-            "wait_user_ptr",
-            {
-                "normalized_key_value": "009991234567",
-                "phone_key_type_value": 6,
-                "timeout_seconds": 12.0,
-            },
-        ),
+        "connect",
         ("prepare", fake_app),
         ("open_users", fake_app),
         ("search", fake_app, fake_users_window, "009991234567"),
@@ -1421,11 +1425,19 @@ def test_add_phone_permanent_key_via_gateterm_ui_creates_new_user(monkeypatch):
                 "resident_name": "Новый Житель",
                 "plot_number": "11",
                 "desired_access_labels": {"калитка 1", "камера въезда", "считыватель въезд gsm"},
-                "current_access_labels": set(),
+                "current_access_labels": {"калитка 1", "камера въезда", "считыватель въезд gsm"},
             },
         ),
         ("click", fake_edit_window, 1, ("ThunderRT6CommandButton", "Button")),
         ("finalize_edit", fake_app),
+        (
+            "wait_user_ptr",
+            {
+                "normalized_key_value": "009991234567",
+                "phone_key_type_value": 6,
+                "timeout_seconds": 12.0,
+            },
+        ),
         ("verify", 9123, "009991234567", 6, [15, 19, 5]),
         ("close_users", fake_app),
     ]

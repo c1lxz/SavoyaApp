@@ -2003,12 +2003,36 @@ def add_phone_permanent_key_via_gateterm_ui(
     resident_name: str = "Resident",
     plot_number: str | None = None,
 ) -> int:
-    del phone_number
-
     normalized_key_value = _normalize_phone(key_value)
     validated_points = _validate_access_point_ids(access_point_ids)
     attempts = max(1, _env_int("GATE_GATETERM_UI_CREATE_ATTEMPTS", 3))
     last_error: Exception | None = None
+
+    initial_context = _load_phone_ui_provisioning_context(
+        normalized_key_value=normalized_key_value,
+        access_point_ids=validated_points,
+    )
+    if initial_context["existing_user_ptr"] is None:
+        # GateTerm 1.22.99 raises VB6 Error 91 when the key-type combo is
+        # changed in its New User dialog, even after the users recordset has
+        # been initialized by a successful search. Bootstrap the phone row in
+        # the same MDB transaction used by the established direct provisioner,
+        # then continue through GateTerm's normal edit UI below. This leaves the
+        # editor showing the required checked readers and still subjects the
+        # result to the same UI save and post-save verification as existing
+        # passes.
+        with _transaction_cursor() as (_, cursor):
+            _upsert_real_user(
+                cursor,
+                key_type="Phone",
+                normalized_key_value=normalized_key_value,
+                phone_number=phone_number,
+                resident_name=resident_name,
+                plot_number=plot_number,
+                is_visitor=False,
+                expires_at=None,
+                access_point_ids=validated_points,
+            )
 
     for attempt_index in range(attempts):
         context = _load_phone_ui_provisioning_context(
