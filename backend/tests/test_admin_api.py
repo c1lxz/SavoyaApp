@@ -1157,7 +1157,7 @@ def test_admin_create_user_provisions_gate_phone_access_when_missing(client, mon
 
     phone_number = f"+7999{str(uuid4().int)[-7:]}"
     plot_number = str(900 + (uuid4().int % 100))
-    expected_access_point_ids = [15, 17, 19, 20, 21, 23, 5, 6]
+    expected_access_point_ids = [15, 17, 19, 20, 21, 23]
     captured_gate_calls = []
 
     monkeypatch.setattr(
@@ -1249,7 +1249,7 @@ def test_admin_create_user_recovers_gate_phone_key_after_ui_timeout(client, monk
 
     phone_number = f"+7999{str(uuid4().int)[-7:]}"
     plot_number = str(910 + (uuid4().int % 100))
-    expected_access_point_ids = [15, 17, 19, 20, 21, 23, 5, 6]
+    expected_access_point_ids = [15, 17, 19, 20, 21, 23]
 
     monkeypatch.setattr(
         'backend.app.services.gate_linking.settings.default_access_point_ids_json',
@@ -1265,7 +1265,10 @@ def test_admin_create_user_recovers_gate_phone_key_after_ui_timeout(client, monk
     )
     monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.get_key_permissions',
-        lambda external_key_id: [],
+        lambda external_key_id: [
+            {"access_point_id": point_id}
+            for point_id in expected_access_point_ids
+        ],
     )
     resolve_calls = {'n': 0}
 
@@ -1511,7 +1514,7 @@ def test_admin_created_user_can_add_vehicle_pass_without_replacing_phone_pass(cl
     assert captured_gate_calls[0] == {
         'key_value': phone_number,
         'phone_number': phone_number,
-        'access_point_ids': [15, 17, 19, 20, 21, 23, 5, 6],
+        'access_point_ids': [15, 17, 19, 20, 21, 23],
         'resident_name': 'Resident Vehicle',
         'plot_number': plot_number,
     }
@@ -1530,7 +1533,7 @@ def test_startup_backfills_missing_gate_phone_requests(monkeypatch):
     from backend.app.services.gate_linking import ensure_users_have_gate_phone_requests
 
     phone_number = f"+7999{str(uuid4().int)[-7:]}"
-    expected_access_point_ids = [15, 17, 19, 20, 21, 23, 5, 6]
+    expected_access_point_ids = [15, 17, 19, 20, 21, 23]
     captured_gate_calls = []
 
     monkeypatch.setattr(
@@ -1627,7 +1630,7 @@ def test_startup_backfills_missing_gate_phone_requests(monkeypatch):
 def test_startup_expands_existing_permanent_phone_access_points(monkeypatch):
     from backend.app.services.gate_linking import ensure_existing_phone_requests_have_configured_access
 
-    expected_access_point_ids = [15, 17, 19, 20, 21, 23, 5, 6]
+    expected_access_point_ids = [15, 17, 19, 20, 21, 23, 6, 5]
     captured_gate_calls = []
 
     monkeypatch.setattr(
