@@ -3087,6 +3087,43 @@ def test_normalize_vehicle_repairs_utf8_mojibake_before_ascii_canonicalization()
     assert gate_runtime._normalize_vehicle("\u0420\u0452123\u0420\u0452\u0420\u045277") == "A123AA77"
 
 
+def test_populate_gateterm_phone_pass_editor_uses_regular_group_not_gsm(monkeypatch):
+    combo_calls: list[tuple[object, str, str]] = []
+
+    monkeypatch.setattr(
+        gate_runtime,
+        "_visible_gateterm_control_by_id",
+        lambda _window, control_id, *class_names: ("control", control_id, class_names),
+    )
+    monkeypatch.setattr(gate_runtime, "_set_gateterm_text_input", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_set_gateterm_combo_value",
+        lambda control, value, *, field_name: combo_calls.append((control, value, field_name)),
+    )
+    monkeypatch.setattr(gate_runtime, "_set_gateterm_checkbox_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_select_gateterm_user_editor_tab", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_set_gateterm_user_key_number", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_configure_gateterm_phone_access_permissions", lambda *_args, **_kwargs: None)
+
+    gate_runtime._populate_gateterm_phone_pass_editor(
+        object(),
+        normalized_key_value="009991234567",
+        phone_storage_value="89991234567",
+        resident_name="Resident Phone",
+        plot_number="15",
+        desired_access_labels={"камера въезда"},
+        current_access_labels=set(),
+    )
+
+    assert (
+        ("control", 10, ("ThunderRT6ComboBox", "ComboBox")),
+        "Группа",
+        "resident group",
+    ) in combo_calls
+    assert all(value != "GSM" for _, value, _ in combo_calls)
+
+
 def test_populate_gateterm_vehicle_pass_editor_types_latin_plate(monkeypatch):
     calls = []
 

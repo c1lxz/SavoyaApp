@@ -5166,7 +5166,7 @@ def _populate_gateterm_phone_pass_editor(
     )
     _set_gateterm_combo_value(
         _visible_gateterm_control_by_id(window, 10, "ThunderRT6ComboBox", "ComboBox"),
-        "GSM",
+        "Группа",
         field_name="resident group",
     )
     _set_gateterm_checkbox_state(
