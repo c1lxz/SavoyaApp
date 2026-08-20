@@ -3646,6 +3646,101 @@ def test_prune_access_permissions_keeps_only_requested_readers():
     )
 
 
+def test_configure_gateterm_phone_access_uses_live_checked_state_and_preserves_gsm(monkeypatch):
+    item_texts = [
+        "Считыватель  калитка 1",
+        "Вход Лес",
+        "Вход озеро",
+        "Камера Въезда",
+        "Камера Выезда",
+        "Считыватель Северная калитка 1",
+        "Считыватель въезд GSM",
+        "Считыватель выезд GSM",
+    ]
+
+    class _CheckedListBox:
+        def __init__(self) -> None:
+            self.checked = {6, 7}
+            self.select_calls: list[tuple[int, bool]] = []
+
+        def item_texts(self):
+            return list(item_texts)
+
+        def selected_indices(self):
+            return tuple(sorted(self.checked))
+
+        def select(self, index: int, selected: bool = True):
+            self.select_calls.append((index, selected))
+            if selected:
+                self.checked.add(index)
+
+        def item_rect(self, index: int):
+            raise AssertionError(f"Mouse fallback was not expected for item {index}")
+
+    listbox = _CheckedListBox()
+    monkeypatch.setattr(gate_runtime, "_select_gateterm_user_editor_tab", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_visible_gateterm_control_by_id", lambda *_args, **_kwargs: listbox)
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+
+    gate_runtime._configure_gateterm_phone_access_permissions(
+        object(),
+        desired_access_labels={
+            "калитка 1",
+            "калитка лес",
+            "калитка озеро",
+            "камера въезда",
+            "камера выезда",
+            "северная калитка",
+        },
+        # Deliberately stale: the MDB claims all six are present while the live
+        # GateTerm dialog shows only the two optional GSM readers as checked.
+        current_access_labels={
+            "калитка 1",
+            "калитка лес",
+            "калитка озеро",
+            "камера въезда",
+            "камера выезда",
+            "северная калитка",
+        },
+    )
+
+    assert listbox.checked == set(range(8))
+    assert listbox.select_calls == [(index, True) for index in range(6)]
+
+
+def test_configure_gateterm_phone_access_uses_mouse_fallback_when_checked_state_is_unavailable(monkeypatch):
+    item_texts = ["Камера Въезда", "Камера Выезда"]
+
+    class _LegacyListBox:
+        def __init__(self) -> None:
+            self.clicks: list[tuple[int, int]] = []
+
+        def item_texts(self):
+            return list(item_texts)
+
+        def selected_indices(self):
+            raise RuntimeError("LB_GETSELITEMS is unavailable")
+
+        def item_rect(self, index: int):
+            return SimpleNamespace(top=index * 20, bottom=(index + 1) * 20)
+
+        def click_input(self, *, coords):
+            self.clicks.append(coords)
+
+    listbox = _LegacyListBox()
+    monkeypatch.setattr(gate_runtime, "_select_gateterm_user_editor_tab", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_visible_gateterm_control_by_id", lambda *_args, **_kwargs: listbox)
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+
+    gate_runtime._configure_gateterm_phone_access_permissions(
+        object(),
+        desired_access_labels={"камера въезда", "камера выезда"},
+        current_access_labels=set(),
+    )
+
+    assert listbox.clicks == [(8, 10), (8, 30)]
+
+
 def test_verify_phone_user_state_accepts_expected_shape(monkeypatch):
     cursor = _PhoneVerificationCursor(
         SimpleNamespace(
@@ -3671,6 +3766,39 @@ def test_verify_phone_user_state_accepts_expected_shape(monkeypatch):
         normalized_key_value="009111253128",
         phone_key_type_value=6,
         access_point_ids=[6, 5],
+    )
+
+
+def test_verify_phone_user_state_accepts_extra_optional_gsm_access(monkeypatch):
+    cursor = _PhoneVerificationCursor(
+        SimpleNamespace(
+            UserPtr=42,
+            KeyType=6,
+            Number="009111253128",
+            NumberU="009111253128",
+            Phone="89111253128\n",
+            Deleted=False,
+            Status=0,
+        ),
+        [
+            SimpleNamespace(RdrPtr=5),
+            SimpleNamespace(RdrPtr=6),
+            SimpleNamespace(RdrPtr=15),
+            SimpleNamespace(RdrPtr=17),
+            SimpleNamespace(RdrPtr=19),
+            SimpleNamespace(RdrPtr=20),
+            SimpleNamespace(RdrPtr=21),
+            SimpleNamespace(RdrPtr=23),
+        ],
+    )
+    monkeypatch.setattr(gate_runtime, "_format_phone_for_storage", lambda *_args, **_kwargs: "89111253128\n")
+
+    gate_runtime._verify_phone_user_state(
+        cursor,
+        user_ptr=42,
+        normalized_key_value="009111253128",
+        phone_key_type_value=6,
+        access_point_ids=[15, 17, 19, 20, 21, 23],
     )
 
 

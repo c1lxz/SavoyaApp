@@ -649,7 +649,7 @@ def test_admin_create_user_links_existing_gate_access_by_phone(client, monkeypat
 
     phone_number = f"+7999{str(uuid4().int)[-7:]}"
     plot_number = str(700 + (uuid4().int % 200))
-    expected_access_point_ids = [15, 17, 19, 20, 21, 23, 5, 6]
+    expected_access_point_ids = [15, 17, 19, 20, 21, 23, 6, 5]
     captured_gate_calls = []
 
     monkeypatch.setattr(
@@ -720,7 +720,7 @@ def test_admin_create_user_provisions_gate_phone_access_when_missing(client, mon
 
     phone_number = f"+7999{str(uuid4().int)[-7:]}"
     plot_number = str(900 + (uuid4().int % 100))
-    expected_access_point_ids = [15, 17, 19, 20, 21, 23, 5, 6]
+    expected_access_point_ids = [15, 17, 19, 20, 21, 23]
     captured_gate_calls = []
 
     monkeypatch.setattr(
@@ -796,7 +796,7 @@ def test_admin_create_user_recovers_gate_phone_key_after_ui_timeout(client, monk
 
     phone_number = f"+7999{str(uuid4().int)[-7:]}"
     plot_number = str(910 + (uuid4().int % 100))
-    expected_access_point_ids = [15, 17, 19, 20, 21, 23, 5, 6]
+    expected_access_point_ids = [15, 17, 19, 20, 21, 23]
 
     monkeypatch.setattr(
         'backend.app.services.gate_linking.settings.default_access_point_ids_json',
@@ -810,9 +810,19 @@ def test_admin_create_user_recovers_gate_phone_key_after_ui_timeout(client, monk
         'backend.app.services.gate_linking.settings.gate_real_integration_enabled',
         True,
     )
+    permission_lookups = 0
+
+    def _fake_get_key_permissions(external_key_id):
+        nonlocal permission_lookups
+        assert external_key_id == phone_number
+        permission_lookups += 1
+        if permission_lookups == 1:
+            return []
+        return [{'access_point_id': point_id} for point_id in expected_access_point_ids]
+
     monkeypatch.setattr(
         'backend.app.services.gate_linking.gate_client.get_key_permissions',
-        lambda external_key_id: [],
+        _fake_get_key_permissions,
     )
 
     def _raise_timeout(**_kwargs):
@@ -861,6 +871,67 @@ def test_admin_create_user_recovers_gate_phone_key_after_ui_timeout(client, monk
     assert recovered_request.gate_key_id == 88008
     assert recovered_request.key_value == phone_number
     assert recovered_request.access_point_ids == expected_access_point_ids
+    assert permission_lookups == 2
+
+
+def test_admin_create_user_rejects_recovered_gate_key_without_required_access(client, monkeypatch):
+    admin_login = f'admin_recover_missing_{uuid4().hex[:6]}'
+    admin_password = 'demo123'
+    asyncio.run(
+        _ensure_user(
+            admin_login,
+            admin_password,
+            full_name='Admin Recover Missing',
+            plot_number='954',
+            is_admin=True,
+        )
+    )
+
+    phone_number = f"+7999{str(uuid4().int)[-7:]}"
+    plot_number = str(600 + (uuid4().int % 100))
+
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.default_access_point_ids_json',
+        '[15,17,19,20,21,23]',
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.settings.gate_real_integration_enabled',
+        True,
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.get_key_permissions',
+        lambda _external_key_id: [{'access_point_id': 5}, {'access_point_id': 6}],
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.add_account_phone_key',
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError('GateTerm checkbox update timed out')),
+    )
+    monkeypatch.setattr(
+        'backend.app.services.gate_linking.gate_client.resolve_key_id',
+        lambda external_key_id: 88009 if external_key_id == phone_number else None,
+    )
+
+    admin_token = _api_login(client, admin_login, admin_password)
+    response = client.post(
+        '/api/admin/users',
+        headers={'Authorization': f'Bearer {admin_token}'},
+        json={
+            'full_name': 'Admin Recovery Must Fail',
+            'phone': phone_number,
+            'plot_number': plot_number,
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json()['detail']['code'] == 'gate_phone_access_failed'
+    assert '[15, 17, 19, 20, 21, 23]' in response.json()['detail']['message']
+
+    async def _load_user() -> User | None:
+        async with SessionLocal() as session:
+            result = await session.execute(select(User).where(User.phone == phone_number))
+            return result.scalar_one_or_none()
+
+    assert asyncio.run(_load_user()) is None
 
 
 def test_admin_create_user_rolls_back_when_gate_phone_access_is_not_provisioned(client, monkeypatch):
@@ -940,6 +1011,10 @@ def test_admin_created_user_can_add_vehicle_pass_without_replacing_phone_pass(cl
         'backend.app.services.gate_linking.gate_client.get_key_permissions',
         lambda external_key_id: [],
     )
+    monkeypatch.setattr(
+        'backend.app.routers.compatibility._runtime_default_access_point_ids',
+        lambda: [15, 17, 19, 20, 21, 23],
+    )
 
     def _fake_add_permanent_key(**kwargs):
         captured_gate_calls.append(dict(kwargs))
@@ -1011,7 +1086,7 @@ def test_admin_created_user_can_add_vehicle_pass_without_replacing_phone_pass(cl
     assert captured_gate_calls[0] == {
         'key_value': phone_number,
         'phone_number': phone_number,
-        'access_point_ids': [15, 17, 19, 20, 21, 23, 5, 6],
+        'access_point_ids': [15, 17, 19, 20, 21, 23],
         'resident_name': 'Resident Vehicle',
         'plot_number': plot_number,
     }
@@ -1029,7 +1104,7 @@ def test_startup_backfills_missing_gate_phone_requests(monkeypatch):
     from backend.app.services.gate_linking import ensure_users_have_gate_phone_requests
 
     phone_number = f"+7999{str(uuid4().int)[-7:]}"
-    expected_access_point_ids = [15, 17, 19, 20, 21, 23, 5, 6]
+    expected_access_point_ids = [15, 17, 19, 20, 21, 23]
     captured_gate_calls = []
 
     monkeypatch.setattr(
@@ -1110,7 +1185,7 @@ def test_startup_backfills_missing_gate_phone_requests(monkeypatch):
 def test_startup_expands_existing_permanent_phone_access_points(monkeypatch):
     from backend.app.services.gate_linking import ensure_existing_phone_requests_have_configured_access
 
-    expected_access_point_ids = [15, 17, 19, 20, 21, 23, 5, 6]
+    expected_access_point_ids = [15, 17, 19, 20, 21, 23, 6, 5]
     captured_gate_calls = []
 
     monkeypatch.setattr(
@@ -1175,6 +1250,7 @@ def test_admin_monitor_endpoint_returns_app_open_events(client, monkeypatch):
     admin_login = f'admin_monitor_{uuid4().hex[:6]}'
     resident_login = f'resident_monitor_{uuid4().hex[:6]}'
     password = 'demo123'
+    entry_point_id = get_settings().gate_action_map['entry']
 
     asyncio.run(_ensure_user(admin_login, password, full_name='Admin Monitor', plot_number='901', is_admin=True))
     asyncio.run(_ensure_user(resident_login, password, full_name='Resident Monitor', plot_number='404'))
@@ -1185,14 +1261,14 @@ def test_admin_monitor_endpoint_returns_app_open_events(client, monkeypatch):
             resident_login,
             key_type='VehicleNumber',
             key_value=f'A{uuid4().hex[:5]}',
-            access_point_ids=[1],
+            access_point_ids=[entry_point_id],
         )
     )
 
     open_response = client.post(
         '/api/access/open',
         headers={'Authorization': f'Bearer {resident_token}'},
-        json={'access_point_id': 1},
+        json={'access_point_id': entry_point_id},
     )
     assert open_response.status_code == 200
 
@@ -1222,7 +1298,7 @@ def test_admin_monitor_endpoint_returns_app_open_events(client, monkeypatch):
     assert body['total'] >= 120
     app_event = next(item for item in body['items'] if item['source'] == 'app')
     assert app_event['actor_login'] == resident_login
-    assert app_event['access_point_id'] == 1
+    assert app_event['access_point_id'] == entry_point_id
     assert app_event['app_request_id'] == created_request_id
     assert app_event['gate_key_id'] is not None
 
@@ -1233,6 +1309,7 @@ def test_admin_monitor_enriches_gate_events_with_app_actor(client, monkeypatch):
     password = 'demo123'
     gate_event_index = 555001
     key_value = f'A{uuid4().hex[:5]}'
+    entry_point_id = get_settings().gate_action_map['entry']
 
     asyncio.run(_ensure_user(admin_login, password, full_name='Admin Monitor', plot_number='901', is_admin=True))
     asyncio.run(_ensure_user(resident_login, password, full_name='Resident Linked', plot_number='405'))
@@ -1260,7 +1337,7 @@ def test_admin_monitor_enriches_gate_events_with_app_actor(client, monkeypatch):
                 'index': gate_event_index,
                 'time': datetime.now(timezone.utc).isoformat(),
                 'event_code': 1,
-                'access_point_id': 1,
+                'access_point_id': entry_point_id,
                 'unit': 'Gate Entry',
                 'message': 'Opened by operator',
                 'name': 'Админ',
@@ -1279,14 +1356,14 @@ def test_admin_monitor_enriches_gate_events_with_app_actor(client, monkeypatch):
             resident_login,
             key_type='VehicleNumber',
             key_value=key_value,
-            access_point_ids=[1],
+            access_point_ids=[entry_point_id],
         )
     )
 
     open_response = client.post(
         '/api/access/open',
         headers={'Authorization': f'Bearer {resident_token}'},
-        json={'access_point_id': 1},
+        json={'access_point_id': entry_point_id},
     )
     assert open_response.status_code == 200
 

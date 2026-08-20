@@ -100,7 +100,7 @@ def test_runtime_gsm_access_point_ids_detects_terminal_hints_when_config_is_empt
     assert compatibility._runtime_gsm_access_point_ids() == [71]
 
 
-def test_build_compat_create_payloads_adds_gsm_points_for_phone_when_available(monkeypatch):
+def test_build_compat_create_payloads_does_not_create_gsm_phone_pass(monkeypatch):
     monkeypatch.setattr(compatibility, "_runtime_default_access_point_ids", lambda: [15, 17, 19])
     monkeypatch.setattr(compatibility, "_runtime_gsm_access_point_ids", lambda: [70, 71])
 
@@ -113,10 +113,11 @@ def test_build_compat_create_payloads_adds_gsm_points_for_phone_when_available(m
         isCourier=False,
     )
 
-    rows = compatibility._build_compat_create_payloads(payload)
+    rows = compatibility._build_compat_create_payloads(
+        payload,
+        contact_phone_number=payload.phoneNumber,
+    )
 
-    assert len(rows) == 2
+    assert len(rows) == 1
     assert rows[0].key_type == "VehicleNumber"
     assert rows[0].access_point_ids == [15, 17, 19]
-    assert rows[1].key_type == "Phone"
-    assert rows[1].access_point_ids == [15, 17, 19, 70, 71]

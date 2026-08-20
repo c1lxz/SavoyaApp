@@ -64,9 +64,11 @@ class Settings(BaseSettings):
     gate_vehicle_post_sync_required: bool = True
     gate_startup_sync_enabled: bool = False
     gate_action_map_json: str = Field(
-        default='{"entry": 1, "exit": 2, "wicket_north": 3, "wicket_lake": 4, "wicket_admin": 5, "wicket_forest": 6}'
+        default='{"entry": 19, "exit": 20, "wicket_north": 15, "wicket_lake": 23, "wicket_admin": 17, "wicket_forest": 21}'
     )
-    default_access_point_ids_json: str = "[1, 2, 3, 4, 5, 6]"
+    # Mandatory app-operated access points in the live Savoya Gate database:
+    # north wicket, wicket 1, entry/exit cameras, forest and lake wickets.
+    default_access_point_ids_json: str = "[15, 17, 19, 20, 21, 23]"
     gsm_access_point_ids_json: str = "[]"
     courier_ttl_only_enabled: bool = True
     courier_default_hours: int = 2
