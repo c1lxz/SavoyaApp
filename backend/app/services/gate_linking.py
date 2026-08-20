@@ -63,7 +63,6 @@ def _merge_access_point_ids(*groups: Iterable[int]) -> list[int]:
 def _configured_phone_access_point_ids(existing_access_point_ids: Iterable[int]) -> list[int]:
     return _merge_access_point_ids(
         settings.default_access_point_ids,
-        settings.gsm_access_point_ids,
         existing_access_point_ids,
     )
 
@@ -132,10 +131,27 @@ async def _provision_gate_phone_key(
             resident_name=resident_name,
             plot_number=plot_number,
         )
-    except Exception:
+    except Exception as provisioning_exc:
         recovered_key_id = await _recover_gate_phone_key_id(phone_key=phone_key, context=recovery_context)
         if recovered_key_id is None:
             raise
+
+        try:
+            recovered_permissions = await asyncio.to_thread(gate_client.get_key_permissions, phone_key)
+        except Exception as verification_exc:
+            raise RuntimeError(
+                f"Recovered Gate phone key {recovered_key_id}, but its access permissions could not be verified"
+            ) from verification_exc
+
+        recovered_access_point_ids = set(_permission_access_point_ids(recovered_permissions))
+        missing_access_point_ids = [
+            point_id for point_id in access_point_ids if point_id not in recovered_access_point_ids
+        ]
+        if missing_access_point_ids:
+            raise RuntimeError(
+                f"Recovered Gate phone key {recovered_key_id}, but required access points are missing: "
+                f"{missing_access_point_ids}"
+            ) from provisioning_exc
         gate_key_id = recovered_key_id
 
     if gate_key_id <= 0:
@@ -438,16 +454,15 @@ async def _link_existing_gate_keys_by_phone(session: AsyncSession, user: User, p
 
 
 async def ensure_existing_phone_requests_have_configured_access(session: AsyncSession) -> int:
-    """Expand active permanent phone passes to the configured default and GSM points.
+    """Expand active permanent phone passes to the configured app-operated points.
 
     Older auto-linked Gate phone passes could contain only their existing GSM
     reader permissions, which made app buttons fail for the regular barrier and
     wicket access points. Keep any extra existing permissions, but always prepend
-    the configured default and GSM points in the same order as newly created
-    phone passes.
+    the configured defaults in the same order as newly created phone passes.
     """
 
-    configured_ids = _merge_access_point_ids(settings.default_access_point_ids, settings.gsm_access_point_ids)
+    configured_ids = _merge_access_point_ids(settings.default_access_point_ids)
     if not configured_ids:
         return 0
 
@@ -498,12 +513,12 @@ async def ensure_existing_phone_requests_have_configured_access(session: AsyncSe
 
 
 async def link_existing_gate_passes_by_phone(session: AsyncSession, user: User) -> GatePhoneLinkResult:
-    """Ensure a resident account has a permanent Gate GSM/phone pass.
+    """Ensure a resident account has a permanent Gate phone pass.
 
     If Gate already knows this phone, reuse its existing reader permissions and
-    expand them with the configured default/GSM points. If Gate does not have a
-    phone pass yet, provision a new permanent pass with the configured points so
-    caller-id events in Gate Terminal resolve to the resident account.
+    expand them with the configured app-operated points. Existing GSM permissions
+    are preserved, but GSM readers are not added to newly linked accounts because
+    residents operate access points through the application.
     """
 
     if user.is_admin or not user.phone or not settings.gate_real_integration_enabled:

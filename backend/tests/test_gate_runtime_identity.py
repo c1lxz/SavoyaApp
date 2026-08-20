@@ -3769,6 +3769,101 @@ def test_prune_access_permissions_keeps_only_requested_readers():
     )
 
 
+def test_configure_gateterm_phone_access_uses_live_checked_state_and_preserves_gsm(monkeypatch):
+    item_texts = [
+        "Считыватель  калитка 1",
+        "Вход Лес",
+        "Вход озеро",
+        "Камера Въезда",
+        "Камера Выезда",
+        "Считыватель Северная калитка 1",
+        "Считыватель въезд GSM",
+        "Считыватель выезд GSM",
+    ]
+
+    class _CheckedListBox:
+        def __init__(self) -> None:
+            self.checked = {6, 7}
+            self.select_calls: list[tuple[int, bool]] = []
+
+        def item_texts(self):
+            return list(item_texts)
+
+        def selected_indices(self):
+            return tuple(sorted(self.checked))
+
+        def select(self, index: int, selected: bool = True):
+            self.select_calls.append((index, selected))
+            if selected:
+                self.checked.add(index)
+
+        def item_rect(self, index: int):
+            raise AssertionError(f"Mouse fallback was not expected for item {index}")
+
+    listbox = _CheckedListBox()
+    monkeypatch.setattr(gate_runtime, "_select_gateterm_user_editor_tab", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_visible_gateterm_control_by_id", lambda *_args, **_kwargs: listbox)
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+
+    gate_runtime._configure_gateterm_phone_access_permissions(
+        object(),
+        desired_access_labels={
+            "калитка 1",
+            "калитка лес",
+            "калитка озеро",
+            "камера въезда",
+            "камера выезда",
+            "северная калитка",
+        },
+        # Deliberately stale: the MDB claims all six are present while the live
+        # GateTerm dialog shows only the two optional GSM readers as checked.
+        current_access_labels={
+            "калитка 1",
+            "калитка лес",
+            "калитка озеро",
+            "камера въезда",
+            "камера выезда",
+            "северная калитка",
+        },
+    )
+
+    assert listbox.checked == set(range(8))
+    assert listbox.select_calls == [(index, True) for index in range(6)]
+
+
+def test_configure_gateterm_phone_access_uses_mouse_fallback_when_checked_state_is_unavailable(monkeypatch):
+    item_texts = ["Камера Въезда", "Камера Выезда"]
+
+    class _LegacyListBox:
+        def __init__(self) -> None:
+            self.clicks: list[tuple[int, int]] = []
+
+        def item_texts(self):
+            return list(item_texts)
+
+        def selected_indices(self):
+            raise RuntimeError("LB_GETSELITEMS is unavailable")
+
+        def item_rect(self, index: int):
+            return SimpleNamespace(top=index * 20, bottom=(index + 1) * 20)
+
+        def click_input(self, *, coords):
+            self.clicks.append(coords)
+
+    listbox = _LegacyListBox()
+    monkeypatch.setattr(gate_runtime, "_select_gateterm_user_editor_tab", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_visible_gateterm_control_by_id", lambda *_args, **_kwargs: listbox)
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+
+    gate_runtime._configure_gateterm_phone_access_permissions(
+        object(),
+        desired_access_labels={"камера въезда", "камера выезда"},
+        current_access_labels=set(),
+    )
+
+    assert listbox.clicks == [(8, 10), (8, 30)]
+
+
 def test_verify_phone_user_state_accepts_expected_shape(monkeypatch):
     cursor = _PhoneVerificationCursor(
         SimpleNamespace(
@@ -3794,6 +3889,39 @@ def test_verify_phone_user_state_accepts_expected_shape(monkeypatch):
         normalized_key_value="009111253128",
         phone_key_type_value=6,
         access_point_ids=[6, 5],
+    )
+
+
+def test_verify_phone_user_state_accepts_extra_optional_gsm_access(monkeypatch):
+    cursor = _PhoneVerificationCursor(
+        SimpleNamespace(
+            UserPtr=42,
+            KeyType=6,
+            Number="009111253128",
+            NumberU="009111253128",
+            Phone="89111253128\n",
+            Deleted=False,
+            Status=0,
+        ),
+        [
+            SimpleNamespace(RdrPtr=5),
+            SimpleNamespace(RdrPtr=6),
+            SimpleNamespace(RdrPtr=15),
+            SimpleNamespace(RdrPtr=17),
+            SimpleNamespace(RdrPtr=19),
+            SimpleNamespace(RdrPtr=20),
+            SimpleNamespace(RdrPtr=21),
+            SimpleNamespace(RdrPtr=23),
+        ],
+    )
+    monkeypatch.setattr(gate_runtime, "_format_phone_for_storage", lambda *_args, **_kwargs: "89111253128\n")
+
+    gate_runtime._verify_phone_user_state(
+        cursor,
+        user_ptr=42,
+        normalized_key_value="009111253128",
+        phone_key_type_value=6,
+        access_point_ids=[15, 17, 19, 20, 21, 23],
     )
 
 
@@ -4534,8 +4662,9 @@ def _make_fake_access_listbox(item_names: list[str], checked_indices: set[int]):
     """Return a fake listbox whose LB_GETITEMDATA returns 1 for checked_indices."""
 
     class _FakeRect:
-        top = 0
-        bottom = 20
+        def __init__(self, index: int):
+            self.top = index * 20
+            self.bottom = (index + 1) * 20
 
     class _FakeListbox:
         handle = 7777
@@ -4544,19 +4673,27 @@ def _make_fake_access_listbox(item_names: list[str], checked_indices: set[int]):
             return list(item_names)
 
         def item_rect(self, index):
-            return _FakeRect()
+            return _FakeRect(index)
 
         def click_input(self, coords):
             _FakeListbox.clicks.append(coords)
+            index = int(coords[1]) // 20
+            if index in self.checked:
+                self.checked.remove(index)
+            else:
+                self.checked.add(index)
 
         clicks: list = []
+
+        def __init__(self):
+            self.checked = set(checked_indices)
 
     _FakeListbox.clicks = []
     return _FakeListbox()
 
 
 def test_configure_gateterm_phone_access_reads_actual_ui_state_via_lb_getitemdata(monkeypatch):
-    """When GateTerm has all items checked, only unchecked the ones not in desired."""
+    """Optional existing permissions stay checked when required ones are present."""
     # UI has all three items checked (cameras + wicket)
     item_names = ["Камера Въезда", "Камера Выезда", "Калитка Север"]
     fake_lb = _make_fake_access_listbox(item_names, checked_indices={0, 1, 2})
@@ -4565,7 +4702,7 @@ def test_configure_gateterm_phone_access_reads_actual_ui_state_via_lb_getitemdat
 
     def _fake_lb_getitemdata(hwnd, index):
         lb_calls.append((hwnd, index))
-        return 1  # all checked in UI
+        return 1 if index in fake_lb.checked else 0
 
     monkeypatch.setattr(gate_runtime, "_lb_getitemdata", _fake_lb_getitemdata)
     monkeypatch.setattr(gate_runtime, "_select_gateterm_user_editor_tab", lambda *a: None)
@@ -4579,9 +4716,8 @@ def test_configure_gateterm_phone_access_reads_actual_ui_state_via_lb_getitemdat
         current_access_labels=set(),
     )
 
-    # toggle_labels = desired ^ actual = {cameras} ^ {cameras, wicket} = {wicket}
-    # Only one click: uncheck the wicket
-    assert len(fake_lb.clicks) == 1, "only the wicket item should be unchecked"
+    assert fake_lb.clicks == []
+    assert fake_lb.checked == {0, 1, 2}
     assert len(lb_calls) == 3, "LB_GETITEMDATA must be called for each item"
 
 
@@ -4590,7 +4726,11 @@ def test_configure_gateterm_phone_access_checks_cameras_when_all_unchecked(monke
     item_names = ["Камера Въезда", "Камера Выезда", "Калитка Север"]
     fake_lb = _make_fake_access_listbox(item_names, checked_indices=set())
 
-    monkeypatch.setattr(gate_runtime, "_lb_getitemdata", lambda hwnd, index: 0)  # all unchecked
+    monkeypatch.setattr(
+        gate_runtime,
+        "_lb_getitemdata",
+        lambda hwnd, index: 1 if index in fake_lb.checked else 0,
+    )
     monkeypatch.setattr(gate_runtime, "_select_gateterm_user_editor_tab", lambda *a: None)
     monkeypatch.setattr(gate_runtime, "_visible_gateterm_control_by_id", lambda *a, **kw: fake_lb)
     monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_: None)
@@ -4601,8 +4741,8 @@ def test_configure_gateterm_phone_access_checks_cameras_when_all_unchecked(monke
         current_access_labels=set(),
     )
 
-    # toggle_labels = {cameras} ^ {} = {cameras} — two clicks to check both cameras
     assert len(fake_lb.clicks) == 2, "both camera items should be checked"
+    assert fake_lb.checked == {0, 1}
 
 
 def test_configure_gateterm_phone_access_no_op_when_already_correct(monkeypatch):
@@ -4611,8 +4751,10 @@ def test_configure_gateterm_phone_access_no_op_when_already_correct(monkeypatch)
     fake_lb = _make_fake_access_listbox(item_names, checked_indices=set())
 
     # UI: cameras checked, wicket unchecked
+    fake_lb.checked = {0, 1}
+
     def _fake_lb(hwnd, index):
-        return 1 if item_names[index].lower().startswith("камера") else 0
+        return 1 if index in fake_lb.checked else 0
 
     monkeypatch.setattr(gate_runtime, "_lb_getitemdata", _fake_lb)
     monkeypatch.setattr(gate_runtime, "_select_gateterm_user_editor_tab", lambda *a: None)
@@ -4629,7 +4771,7 @@ def test_configure_gateterm_phone_access_no_op_when_already_correct(monkeypatch)
 
 
 def test_configure_gateterm_phone_access_falls_back_to_db_state_on_lb_error(monkeypatch):
-    """On LB_GETITEMDATA failure, fall back to DB-based symmetric_difference."""
+    """On LB_GETITEMDATA failure, add missing required permissions only."""
     item_names = ["Камера Въезда", "Камера Выезда", "Калитка Север"]
     fake_lb = _make_fake_access_listbox(item_names, checked_indices=set())
 
@@ -4641,15 +4783,15 @@ def test_configure_gateterm_phone_access_falls_back_to_db_state_on_lb_error(monk
     monkeypatch.setattr(gate_runtime, "_visible_gateterm_control_by_id", lambda *a, **kw: fake_lb)
     monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_: None)
 
-    # DB current: wicket checked (canonical label for "Калитка Север" is "северная калитка")
-    # fallback toggle = {cameras} ^ {northern wicket} = all three
+    # DB current: wicket checked (canonical label for "Калитка Север" is "северная калитка").
+    # The optional wicket is preserved while both required cameras are checked.
     gate_runtime._configure_gateterm_phone_access_permissions(
         object(),
         desired_access_labels={"камера въезда", "камера выезда"},
         current_access_labels={"северная калитка"},
     )
 
-    assert len(fake_lb.clicks) == 3, "fallback should toggle all three (cameras to check, wicket to uncheck)"
+    assert len(fake_lb.clicks) == 2
 
 
 # ---------------------------------------------------------------------------

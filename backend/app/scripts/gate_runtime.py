@@ -1629,9 +1629,10 @@ def _verify_phone_user_state(
         if raw_reader_ptr is None:
             raw_reader_ptr = item[0]
         actual_access_ids.append(int(raw_reader_ptr))
-    actual_access_ids.sort()
-    expected_access_ids = sorted(int(point_id) for point_id in access_point_ids)
-    if actual_access_ids != expected_access_ids:
+    actual_access_ids = sorted(set(actual_access_ids))
+    expected_access_ids = sorted(set(int(point_id) for point_id in access_point_ids))
+    missing_access_ids = sorted(set(expected_access_ids) - set(actual_access_ids))
+    if missing_access_ids:
         issues.append(f"Access={actual_access_ids!r}")
 
     if issues:
@@ -4974,6 +4975,20 @@ def _lb_getitemdata(hwnd: int, index: int) -> int:
     return ctypes.windll.user32.SendMessageW(hwnd, LB_GETITEMDATA, index, 0)
 
 
+def _lb_setitemdata(hwnd: int, index: int, value: int) -> None:
+    """Set and redraw a VB6 CheckListBox check state via Win32 messages."""
+    import ctypes
+
+    LB_SETITEMDATA = 0x019A
+    LB_ERR = -1
+    result = int(ctypes.windll.user32.SendMessageW(hwnd, LB_SETITEMDATA, index, int(value)))
+    if result == LB_ERR:
+        raise RuntimeError(f"LB_SETITEMDATA failed for item {index}")
+
+    ctypes.windll.user32.InvalidateRect(hwnd, None, True)
+    ctypes.windll.user32.UpdateWindow(hwnd)
+
+
 def _configure_gateterm_phone_access_permissions(
     window: Any,
     *,
@@ -4998,32 +5013,118 @@ def _configure_gateterm_phone_access_permissions(
             f"{missing_labels!r}; available={sorted(available_labels)!r}"
         )
 
-    # Read actual checked state from the UI rather than relying on DB state.
-    # For new users, DB state is empty while GateTerm may start with all items checked —
-    # using DB-based symmetric_difference would produce a wrong toggle set in that case.
+    desired_labels = {_canonical_gateterm_access_label(item) for item in desired_access_labels}
+    desired_labels.discard("")
+
+    # GateTerm's VB6 CheckListBox stores its live check state in item data.
+    # This is the authoritative state: AccessTable may still contain stale rows.
+    hwnd: int | None = None
+    checked_indices: set[int] | None = None
     try:
         hwnd = int(listbox.handle)
-        actual_checked_labels: set[str] = set()
-        for index, item_text in enumerate(item_texts):
-            data = _lb_getitemdata(hwnd, index)
-            if data == 1:
-                actual_checked_labels.add(_canonical_gateterm_access_label(item_text))
-        toggle_labels = desired_access_labels.symmetric_difference(actual_checked_labels)
+        item_states = [int(_lb_getitemdata(hwnd, index)) for index in range(len(item_texts))]
+        if any(state < 0 for state in item_states):
+            raise RuntimeError("LB_GETITEMDATA returned LB_ERR")
+        checked_indices = {index for index, state in enumerate(item_states) if state == 1}
     except Exception:
-        toggle_labels = desired_access_labels.symmetric_difference(current_access_labels)
+        hwnd = None
+        try:
+            checked_indices = {int(index) for index in listbox.selected_indices() if int(index) >= 0}
+        except Exception:
+            checked_indices = None
 
-    if not toggle_labels:
+    if checked_indices is None:
+        checked_labels = {_canonical_gateterm_access_label(item) for item in current_access_labels}
+    else:
+        checked_labels = {
+            _canonical_gateterm_access_label(item_texts[index])
+            for index in checked_indices
+            if index < len(item_texts)
+        }
+
+    missing_labels = desired_labels - checked_labels
+    if not missing_labels:
         return
 
     checkbox_offset_x = _env_int("GATE_GATETERM_UI_ACCESS_CHECKBOX_X", 8)
     for index, item_text in enumerate(item_texts):
         current_label = _canonical_gateterm_access_label(item_text)
-        if current_label not in toggle_labels:
+        if current_label not in missing_labels:
             continue
+
+        def _is_checked() -> bool | None:
+            if hwnd is not None:
+                state = int(_lb_getitemdata(hwnd, index))
+                return None if state < 0 else state == 1
+            if checked_indices is not None:
+                try:
+                    return index in {int(item) for item in listbox.selected_indices()}
+                except Exception:
+                    return None
+            return None
+
+        # First try the DPI-independent wrapper operation. Some GateTerm builds
+        # expose check state through selection, while others require a real
+        # checkbox click or direct VB6 item-data update.
+        selected_semantically = False
+        if checked_indices is not None:
+            try:
+                listbox.select(index, True)
+                selected_semantically = True
+            except TypeError:
+                try:
+                    listbox.select(index)
+                    selected_semantically = True
+                except Exception:
+                    selected_semantically = False
+            except Exception:
+                selected_semantically = False
+
+        time_module.sleep(_env_float("GATE_GATETERM_UI_ACCESS_TOGGLE_DELAY_SECONDS", 0.2))
+        if _is_checked() is True:
+            continue
+
+        # Retain the proven checkbox-coordinate path for classic GateTerm.
         item_rect = listbox.item_rect(index)
         click_y = int(item_rect.top + max(4, (item_rect.bottom - item_rect.top) // 2))
         listbox.click_input(coords=(checkbox_offset_x, click_y))
         time_module.sleep(_env_float("GATE_GATETERM_UI_ACCESS_TOGGLE_DELAY_SECONDS", 0.2))
+        if _is_checked() is True:
+            continue
+
+        # Last DPI-independent fallback for the VB6 owner-drawn checklist.
+        if hwnd is not None:
+            _lb_setitemdata(hwnd, index, 1)
+            time_module.sleep(_env_float("GATE_GATETERM_UI_ACCESS_TOGGLE_DELAY_SECONDS", 0.2))
+            if _is_checked() is True:
+                continue
+
+        if _is_checked() is False:
+            method = "semantic selection, mouse click, and LB_SETITEMDATA" if selected_semantically else "mouse click and LB_SETITEMDATA"
+            raise RuntimeError(f"GateTerm access checkbox {item_text!r} stayed unchecked after {method}")
+
+    if hwnd is not None:
+        final_checked_labels = set()
+        for index, item_text in enumerate(item_texts):
+            if int(_lb_getitemdata(hwnd, index)) == 1:
+                final_checked_labels.add(_canonical_gateterm_access_label(item_text))
+    elif checked_indices is not None:
+        try:
+            final_checked_indices = {int(index) for index in listbox.selected_indices() if int(index) >= 0}
+        except Exception:
+            final_checked_indices = checked_indices
+        final_checked_labels = {
+            _canonical_gateterm_access_label(item_texts[index])
+            for index in final_checked_indices
+            if index < len(item_texts)
+        }
+    else:
+        final_checked_labels = set()
+
+    if final_checked_labels:
+        still_missing = sorted(desired_labels - final_checked_labels)
+        if still_missing:
+            raise RuntimeError(f"GateTerm access checkboxes stayed unchecked: {still_missing!r}")
 
 
 def _populate_gateterm_phone_pass_editor(
