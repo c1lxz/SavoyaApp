@@ -2127,16 +2127,22 @@ def add_phone_permanent_key_via_gateterm_ui(
                     _click_gateterm_control(editor_window, 1, "ThunderRT6CommandButton", "Button")
                     time_module.sleep(_env_float("GATE_GATETERM_UI_USER_SAVE_DELAY_SECONDS", 0.75))
                     _finalize_gateterm_user_edit_save(app)
+            try:
+                _close_gateterm_users_window_if_open(app)
+            except Exception:
+                pass
+            # GateTerm can commit the VB6 checklist a short time after the edit
+            # dialog itself has closed. On a newly bootstrapped phone this late
+            # write was observed replacing AccessTable after our first repair
+            # and dropping reader 23. Close the users workspace, let that write
+            # drain, and only then enforce the authoritative required set.
+            time_module.sleep(_env_float("GATE_GATETERM_UI_POST_SAVE_SETTLE_SECONDS", 1.25))
             _ensure_phone_identity_and_access_persisted(
                 user_ptr,
                 normalized_key_value,
                 context["phone_key_type_value"],
                 validated_points,
             )
-            try:
-                _close_gateterm_users_window_if_open(app)
-            except Exception:
-                pass
             return user_ptr
         except Exception as exc:
             last_error = exc
@@ -5482,20 +5488,24 @@ def _ensure_phone_identity_and_access_persisted(
     """
 
     required_access_point_ids = [int(item) for item in access_point_ids]
-    with _transaction_cursor() as (_, cursor):
-        _ensure_access_permissions(
-            cursor,
-            int(user_ptr),
-            required_access_point_ids,
-            key_type="Phone",
-        )
-        _verify_phone_user_state(
-            cursor,
-            user_ptr=int(user_ptr),
-            normalized_key_value=normalized_key_value,
-            phone_key_type_value=phone_key_type_value,
-            access_point_ids=required_access_point_ids,
-        )
+    persistence_passes = max(1, _env_int("GATE_PHONE_ACCESS_PERSISTENCE_PASSES", 2))
+    for pass_index in range(persistence_passes):
+        with _transaction_cursor() as (_, cursor):
+            _ensure_access_permissions(
+                cursor,
+                int(user_ptr),
+                required_access_point_ids,
+                key_type="Phone",
+            )
+            _verify_phone_user_state(
+                cursor,
+                user_ptr=int(user_ptr),
+                normalized_key_value=normalized_key_value,
+                phone_key_type_value=phone_key_type_value,
+                access_point_ids=required_access_point_ids,
+            )
+        if pass_index + 1 < persistence_passes:
+            time_module.sleep(_env_float("GATE_PHONE_ACCESS_PERSISTENCE_VERIFY_DELAY_SECONDS", 0.75))
 
 
 def _wait_for_phone_user_ptr(

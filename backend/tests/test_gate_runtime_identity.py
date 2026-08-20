@@ -1438,8 +1438,8 @@ def test_add_phone_permanent_key_via_gateterm_ui_bootstraps_new_user_then_edits(
                 "timeout_seconds": 12.0,
             },
         ),
-        ("verify", 9123, "009991234567", 6, [15, 19, 5]),
         ("close_users", fake_app),
+        ("verify", 9123, "009991234567", 6, [15, 19, 5]),
     ]
 
 
@@ -1536,8 +1536,8 @@ def test_add_phone_permanent_key_via_gateterm_ui_updates_existing_user(monkeypat
                 "timeout_seconds": 12.0,
             },
         ),
-        ("verify", 3401, "009128152001", 6, [5, 6]),
         ("close_users", fake_app),
+        ("verify", 3401, "009128152001", 6, [5, 6]),
     ]
 
 
@@ -3991,6 +3991,7 @@ def test_ensure_phone_identity_and_access_persisted_adds_required_readers_withou
         "_verify_phone_user_state",
         lambda actual_cursor, **kwargs: calls.append(("verify", actual_cursor, kwargs)),
     )
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
 
     gate_runtime._ensure_phone_identity_and_access_persisted(
         42,
@@ -3999,8 +4000,9 @@ def test_ensure_phone_identity_and_access_persisted_adds_required_readers_withou
         [15, 17, 19, 20, 21, 23],
     )
 
-    assert calls[0] == ("ensure", cursor, 42, [15, 17, 19, 20, 21, 23], "Phone")
-    assert calls[1] == (
+    expected_pass = [
+        ("ensure", cursor, 42, [15, 17, 19, 20, 21, 23], "Phone"),
+        (
         "verify",
         cursor,
         {
@@ -4009,7 +4011,9 @@ def test_ensure_phone_identity_and_access_persisted_adds_required_readers_withou
             "phone_key_type_value": 6,
             "access_point_ids": [15, 17, 19, 20, 21, 23],
         },
-    )
+        ),
+    ]
+    assert calls == expected_pass + expected_pass
 
 
 def test_verify_phone_user_state_raises_on_mismatch(monkeypatch):
