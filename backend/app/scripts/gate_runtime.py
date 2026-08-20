@@ -2023,6 +2023,17 @@ def add_phone_permanent_key_via_gateterm_ui(
 
             created_via_new_dialog = context["existing_user_ptr"] is None
             if created_via_new_dialog:
+                # GateTerm leaves its VB6 users recordset unset until a search
+                # successfully finds a real row. Opening "New user" before that
+                # raises Error 91 ("Object variable or With block variable not
+                # set") and leaves a modal error dialog behind. Vehicle passes
+                # already perform this initialization; phone passes need the
+                # same guaranteed-match probe before opening the editor.
+                _search_gateterm_user_by_key_number(
+                    app,
+                    users_window,
+                    _resolve_gateterm_search_init_probe_value(),
+                )
                 editor_window = _open_gateterm_new_user_window(app, users_window)
                 finalize_save = _finalize_gateterm_new_user_save
             else:

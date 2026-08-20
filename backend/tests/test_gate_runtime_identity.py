@@ -1328,6 +1328,8 @@ def test_add_phone_permanent_key_via_gateterm_ui_creates_new_user(monkeypatch):
     monkeypatch.setattr(gate_runtime, "_prepare_gateterm_users_workspace", lambda app: calls.append(("prepare", app)))
     monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: calls.append(("open_users", app)) or fake_users_window)
     monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: calls.append(("close_users", app)))
+    monkeypatch.setattr(gate_runtime, "_resolve_gateterm_search_init_probe_value", lambda: "PROBE-EXISTING")
+    monkeypatch.setattr(gate_runtime, "_window_still_open", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         gate_runtime,
         "_open_gateterm_new_user_window",
@@ -1382,6 +1384,7 @@ def test_add_phone_permanent_key_via_gateterm_ui_creates_new_user(monkeypatch):
         "connect",
         ("prepare", fake_app),
         ("open_users", fake_app),
+        ("search", fake_app, fake_users_window, "PROBE-EXISTING"),
         ("open_new", fake_app, fake_users_window),
         (
             "populate",
@@ -1405,6 +1408,8 @@ def test_add_phone_permanent_key_via_gateterm_ui_creates_new_user(monkeypatch):
                 "timeout_seconds": 12.0,
             },
         ),
+        ("prepare", fake_app),
+        ("open_users", fake_app),
         ("search", fake_app, fake_users_window, "009991234567"),
         ("open_edit", fake_app, fake_users_window),
         (
