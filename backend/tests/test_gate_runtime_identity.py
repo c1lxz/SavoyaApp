@@ -3087,7 +3087,7 @@ def test_normalize_vehicle_repairs_utf8_mojibake_before_ascii_canonicalization()
     assert gate_runtime._normalize_vehicle("\u0420\u0452123\u0420\u0452\u0420\u045277") == "A123AA77"
 
 
-def test_populate_gateterm_phone_pass_editor_uses_regular_group_not_gsm(monkeypatch):
+def test_populate_gateterm_phone_pass_editor_keeps_default_group(monkeypatch):
     combo_calls: list[tuple[object, str, str]] = []
 
     monkeypatch.setattr(
@@ -3116,11 +3116,7 @@ def test_populate_gateterm_phone_pass_editor_uses_regular_group_not_gsm(monkeypa
         current_access_labels=set(),
     )
 
-    assert (
-        ("control", 10, ("ThunderRT6ComboBox", "ComboBox")),
-        "Группа",
-        "resident group",
-    ) in combo_calls
+    assert all(control[1] != 10 for control, _, _ in combo_calls)
     assert all(value != "GSM" for _, value, _ in combo_calls)
 
 

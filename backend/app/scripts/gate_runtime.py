@@ -5164,11 +5164,10 @@ def _populate_gateterm_phone_pass_editor(
         str(father_name or ""),
         field_name="resident father name",
     )
-    _set_gateterm_combo_value(
-        _visible_gateterm_control_by_id(window, 10, "ThunderRT6ComboBox", "ComboBox"),
-        "Группа",
-        field_name="resident group",
-    )
+    # Keep GateTerm's default resident group. Programmatically changing this
+    # combo in the new-phone form invokes a broken VB6 change handler and raises
+    # Error 91 before the access tab can be configured. App-operated phone
+    # passes do not need the legacy GSM group.
     _set_gateterm_checkbox_state(
         _visible_gateterm_control_by_id(window, 4, "ThunderRT6CheckBox", "Button"),
         False,
