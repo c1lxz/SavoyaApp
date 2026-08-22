@@ -134,6 +134,26 @@ def test_main_exits_when_parent_pid_is_gone(monkeypatch) -> None:
     ]
 
 
+def test_interrupted_vb6_recordset_dialog_matches_error_91_text() -> None:
+    guard = _load_guard_module()
+    dialog = SimpleNamespace(
+        window_text=lambda: "GateTerm",
+        texts=lambda: ["GateTerm", "Object variable or With block variable not set", "OK"],
+    )
+
+    assert guard._is_interrupted_vb6_recordset_dialog(dialog) is True
+
+
+def test_interrupted_vb6_recordset_dialog_ignores_other_confirmations() -> None:
+    guard = _load_guard_module()
+    dialog = SimpleNamespace(
+        window_text=lambda: "GateTerm",
+        texts=lambda: ["GateTerm", "Continue saving changes?", "Yes", "No"],
+    )
+
+    assert guard._is_interrupted_vb6_recordset_dialog(dialog) is False
+
+
 def test_resolve_safe_anchor_key_scans_configured_key_types(monkeypatch) -> None:
     guard = _load_guard_module()
     queries: list[tuple[str, tuple[int]]] = []

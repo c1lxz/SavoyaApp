@@ -20,6 +20,7 @@ _GATE_BRIDGE_LOCK_FILE = PROJECT_ROOT / "_gate_bridge_active.lock"
 from backend.app.scripts import gate_runtime  # noqa: E402
 
 POLL_SECONDS = 0.35
+_INTERRUPTED_VB6_RECORDSET_ERROR = "object variable or with block variable not set"
 
 
 def _log(message: str) -> None:
@@ -33,6 +34,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Keep GateTerm users view on a safe anchor row.")
     parser.add_argument("--parent-pid", type=int, default=0, help="Backend process id. Guard exits when it disappears.")
     return parser.parse_args(argv)
+
+
+def _is_interrupted_vb6_recordset_dialog(window: object) -> bool:
+    """Identify the exact Error 91 dialog left by an interrupted users edit."""
+
+    fragments: list[str] = []
+    try:
+        fragments.append(str(window.window_text() or ""))
+    except Exception:
+        pass
+    try:
+        fragments.extend(str(item or "") for item in window.texts())
+    except Exception:
+        pass
+    normalized_text = " ".join(fragments).casefold()
+    return _INTERRUPTED_VB6_RECORDSET_ERROR in normalized_text
 
 
 def _parent_pid_is_alive(parent_pid: int) -> bool:
@@ -175,19 +192,36 @@ def main(argv: list[str] | None = None) -> int:
                 time.sleep(POLL_SECONDS)
                 continue
 
-            if window_handle in prepared_handles:
-                last_status = f"prepared:{window_handle}"
+            # A prepared users-window handle can survive a modal edit while its
+            # underlying VB6 recordset does not. Always inspect bridge activity
+            # and modal state before trusting the prepared-handle cache.
+            if _GATE_BRIDGE_LOCK_FILE.exists():
+                prepared_handles.discard(window_handle)
+                last_modal_seen_at = time.monotonic()
                 time.sleep(POLL_SECONDS)
                 continue
 
-            # FIX 7: check for modal windows and record last-seen time
+            dialogs = gate_runtime._gateterm_dialog_windows(app)
+            if dialogs:
+                prepared_handles.discard(window_handle)
+                last_modal_seen_at = time.monotonic()
+                if any(_is_interrupted_vb6_recordset_dialog(dialog) for dialog in dialogs):
+                    _log("GateTerm users guard: recovering interrupted VB6 Error 91 workspace")
+                    gate_runtime._close_gateterm_message_boxes_if_open(app)
+                    gate_runtime._prepare_gateterm_users_workspace(app)
+                    prepared_handles.clear()
+                    last_anchor_key = ""
+                    last_status = "recovered_error_91"
+                time.sleep(POLL_SECONDS)
+                continue
+
             modal_found = (
                 gate_runtime._find_gateterm_window(app, gate_runtime._GATETERM_NEW_USER_WINDOW_TITLE) is not None
                 or gate_runtime._find_gateterm_window(app, gate_runtime._GATETERM_USER_EDIT_WINDOW_TITLE) is not None
                 or gate_runtime._find_gateterm_window(app, gate_runtime._GATETERM_USER_SEARCH_WINDOW_TITLE) is not None
-                or bool(gate_runtime._gateterm_dialog_windows(app))
             )
             if modal_found:
+                prepared_handles.discard(window_handle)
                 last_modal_seen_at = time.monotonic()
                 time.sleep(POLL_SECONDS)
                 continue
@@ -199,10 +233,8 @@ def main(argv: list[str] | None = None) -> int:
                 time.sleep(POLL_SECONDS)
                 continue
 
-            # FIX: if gate_bridge is running a mutating UI operation, treat as "modal seen"
-            # and wait — racing gate_bridge for GateTerm's UI causes VB6 Error 91.
-            if _GATE_BRIDGE_LOCK_FILE.exists():
-                last_modal_seen_at = time.monotonic()
+            if window_handle in prepared_handles:
+                last_status = f"prepared:{window_handle}"
                 time.sleep(POLL_SECONDS)
                 continue
 
