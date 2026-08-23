@@ -4530,22 +4530,37 @@ def _fake_noop_cursor():
 
 
 def test_add_vehicle_key_via_gateterm_ui_creates_new_user(monkeypatch):
-    """New user: search is performed BEFORE clicking Add, then access-fix pass after creation."""
+    """New vehicle: bootstrap the row, then use GateTerm's stable edit path."""
     calls: list[object] = []
     fake_app = object()
     fake_users_window = object()
-    fake_new_window = object()
     fake_edit_window = object()
 
+    contexts = iter(
+        [
+            {
+                "existing_user_ptr": None,
+                "vehicle_key_type_value": 3,
+                "desired_access_labels": {"камера въезда", "камера выезда"},
+                "current_access_labels": set(),
+            },
+            {
+                "existing_user_ptr": 8881,
+                "vehicle_key_type_value": 3,
+                "desired_access_labels": {"камера въезда", "камера выезда"},
+                "current_access_labels": {"камера въезда", "камера выезда"},
+            },
+        ]
+    )
     monkeypatch.setattr(
         gate_runtime,
         "_load_vehicle_ui_provisioning_context",
-        lambda **kwargs: {
-            "existing_user_ptr": None,
-            "vehicle_key_type_value": 3,
-            "desired_access_labels": {"камера въезда", "камера выезда"},
-            "current_access_labels": set(),
-        },
+        lambda **kwargs: next(contexts),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_upsert_real_user",
+        lambda cursor, **kwargs: calls.append(("bootstrap", cursor, kwargs)) or 8881,
     )
     monkeypatch.setattr(gate_runtime, "_connect_or_start_gateterm_application", lambda: calls.append("connect") or fake_app)
     monkeypatch.setattr(gate_runtime, "_prepare_gateterm_users_workspace", lambda app: calls.append(("prepare", app)))
@@ -4555,16 +4570,6 @@ def test_add_vehicle_key_via_gateterm_ui_creates_new_user(monkeypatch):
         gate_runtime,
         "_search_gateterm_user_by_key_number",
         lambda app, users_window, key: calls.append(("search", app, users_window, key)),
-    )
-    monkeypatch.setattr(
-        gate_runtime,
-        "_resolve_gateterm_search_init_probe_value",
-        lambda: "INIT-PROBE-FAKE",
-    )
-    monkeypatch.setattr(
-        gate_runtime,
-        "_open_gateterm_new_user_window",
-        lambda app, users_window: calls.append(("open_new", app, users_window)) or fake_new_window,
     )
     monkeypatch.setattr(
         gate_runtime,
@@ -4595,7 +4600,13 @@ def test_add_vehicle_key_via_gateterm_ui_creates_new_user(monkeypatch):
         "_verify_vehicle_identity_persisted",
         lambda user_ptr, key, number_u: calls.append(("verify", user_ptr, key, number_u)),
     )
-    monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(_fake_noop_cursor()))
+    monkeypatch.setattr(
+        gate_runtime,
+        "_ensure_vehicle_access_persisted",
+        lambda user_ptr, access_point_ids: calls.append(("ensure_access", user_ptr, list(access_point_ids))),
+    )
+    fake_cursor = _fake_noop_cursor()
+    monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(fake_cursor))
 
     result = gate_runtime.add_vehicle_key_via_gateterm_ui(
         key_value="A123AA77",
@@ -4607,34 +4618,28 @@ def test_add_vehicle_key_via_gateterm_ui_creates_new_user(monkeypatch):
     )
 
     assert result == 8881
-    # search before Add is the first GateTerm action after opening the users window
+    bootstrap = next(c for c in calls if isinstance(c, tuple) and c[0] == "bootstrap")
+    assert bootstrap[2]["key_type"] == "VehicleNumber"
+    assert bootstrap[2]["access_point_ids"] == [19, 20]
+
+    # The materialized row is searched and opened through Edit; Add is never used.
     open_users_idx = calls.index(("open_users", fake_app))
     search_idx = next(i for i, c in enumerate(calls) if isinstance(c, tuple) and c[0] == "search")
-    open_new_idx = next(i for i, c in enumerate(calls) if isinstance(c, tuple) and c[0] == "open_new")
     assert search_idx == open_users_idx + 1, "search must immediately follow open_users for new users"
-    assert open_new_idx == search_idx + 1, "open_new must immediately follow the initial search"
+    edit_idx = next(i for i, c in enumerate(calls) if isinstance(c, tuple) and c[0] == "open_edit")
+    assert edit_idx == search_idx + 1
+    assert calls[search_idx][3] == "A123AA77"
+    assert not any(isinstance(c, tuple) and c[0] == "open_new" for c in calls)
 
-    # the pre-Add search must use the resolved probe value, NOT the real plate number
-    init_search = calls[search_idx]
-    assert init_search[3] == "INIT-PROBE-FAKE", (
-        "pre-Add search must use the resolved probe value, not the real plate number"
-    )
-
-    # populate first call uses new-user window
+    # The GateTerm edit dialog receives the authoritative desired checkbox set.
     first_populate = next(c for c in calls if isinstance(c, tuple) and c[0] == "populate")
-    assert first_populate[1] is fake_new_window
+    assert first_populate[1] is fake_edit_window
     assert first_populate[2]["phone_number"] == "+79991234567"
     assert first_populate[2]["desired_access_labels"] == {"камера въезда", "камера выезда"}
-    assert first_populate[2]["current_access_labels"] == set()
-
-    # access fix pass happens after wait_user_ptr (current set() != desired)
-    wait_idx = next(i for i, c in enumerate(calls) if isinstance(c, tuple) and c[0] == "wait_user_ptr")
-    searches_after_wait = [c for c in calls[wait_idx:] if isinstance(c, tuple) and c[0] == "search"]
-    assert searches_after_wait, "access fix pass must search after creation"
-    edits_after_wait = [c for c in calls[wait_idx:] if isinstance(c, tuple) and c[0] == "open_edit"]
-    assert edits_after_wait, "access fix pass must open edit window"
+    assert first_populate[2]["current_access_labels"] == {"камера въезда", "камера выезда"}
 
     assert ("verify", 8881, "A123AA77", None) in calls
+    assert ("ensure_access", 8881, [19, 20]) in calls
 
 
 def test_add_vehicle_key_via_gateterm_ui_updates_existing_user(monkeypatch):
@@ -4690,6 +4695,7 @@ def test_add_vehicle_key_via_gateterm_ui_updates_existing_user(monkeypatch):
         "_verify_vehicle_identity_persisted",
         lambda user_ptr, key, number_u: calls.append(("verify", user_ptr, key, number_u)),
     )
+    monkeypatch.setattr(gate_runtime, "_ensure_vehicle_access_persisted", lambda *args: None)
     monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(_fake_noop_cursor()))
 
     result = gate_runtime.add_vehicle_key_via_gateterm_ui(
@@ -4735,7 +4741,7 @@ def test_add_vehicle_key_via_gateterm_ui_mdb_patch_sets_expiry_only(monkeypatch)
         gate_runtime,
         "_load_vehicle_ui_provisioning_context",
         lambda **kwargs: {
-            "existing_user_ptr": None,
+            "existing_user_ptr": 9999,
             "vehicle_key_type_value": 3,
             "desired_access_labels": set(),
             "current_access_labels": set(),
@@ -4746,14 +4752,14 @@ def test_add_vehicle_key_via_gateterm_ui_mdb_patch_sets_expiry_only(monkeypatch)
     monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: fake_users_window)
     monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: None)
     monkeypatch.setattr(gate_runtime, "_search_gateterm_user_by_key_number", lambda *a: None)
-    monkeypatch.setattr(gate_runtime, "_resolve_gateterm_search_init_probe_value", lambda: "INIT-PROBE-FAKE")
-    monkeypatch.setattr(gate_runtime, "_open_gateterm_new_user_window", lambda *a: fake_window)
+    monkeypatch.setattr(gate_runtime, "_open_gateterm_user_edit_window", lambda *a: fake_window)
     monkeypatch.setattr(gate_runtime, "_populate_gateterm_vehicle_pass_editor", lambda *a, **kw: None)
     monkeypatch.setattr(gate_runtime, "_click_gateterm_control", lambda *a: None)
     monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_new_user_save", lambda app: None)
+    monkeypatch.setattr(gate_runtime, "_finalize_gateterm_vehicle_user_edit_save", lambda app: None)
     monkeypatch.setattr(gate_runtime, "_wait_for_vehicle_user_ptr", lambda **kw: 9999)
     monkeypatch.setattr(gate_runtime, "_verify_vehicle_identity_persisted", lambda *a: None)
+    monkeypatch.setattr(gate_runtime, "_ensure_vehicle_access_persisted", lambda *args: None)
     monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(mdb_cursor))
 
     gate_runtime.add_vehicle_key_via_gateterm_ui(

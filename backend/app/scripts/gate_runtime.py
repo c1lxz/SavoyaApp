@@ -2176,6 +2176,30 @@ def add_vehicle_key_via_gateterm_ui(
     attempts = max(1, _env_int("GATE_GATETERM_UI_CREATE_ATTEMPTS", 3))
     last_error: Exception | None = None
 
+    initial_context = _load_vehicle_ui_provisioning_context(
+        normalized_key_value=normalized_key_value,
+        access_point_ids=validated_points,
+    )
+    if initial_context["existing_user_ptr"] is None:
+        # Live GateTerm 1.22.99 reproducibly raises VB6 Error 91 when Add is
+        # opened from the users list, even after a successful probe search.
+        # Materialize the row transactionally first, then use GateTerm's edit
+        # dialog for the normal field/checklist save. This is the same proven
+        # recovery path used for new phone passes and avoids three doomed Add
+        # attempts while preserving the GateTerm UI verification step.
+        with _transaction_cursor() as (_, cursor):
+            _upsert_real_user(
+                cursor,
+                key_type="VehicleNumber",
+                normalized_key_value=normalized_key_value,
+                phone_number=phone_number,
+                resident_name=resident_name,
+                plot_number=plot_number,
+                is_visitor=is_visitor,
+                expires_at=expires_at,
+                access_point_ids=validated_points,
+            )
+
     user_ptr: int | None = None
     for attempt_index in range(attempts):
         context = _load_vehicle_ui_provisioning_context(
@@ -2284,6 +2308,13 @@ def add_vehicle_key_via_gateterm_ui(
                 _close_gateterm_users_window_if_open(app)
             except Exception:
                 pass
+
+            # GateTerm can close the VB6 editor without persisting every
+            # checked item (or can write an older list shortly afterward).
+            # Let the UI write drain, then enforce and verify the required
+            # readers while preserving any optional permissions such as GSM.
+            time_module.sleep(_env_float("GATE_GATETERM_UI_POST_SAVE_SETTLE_SECONDS", 1.25))
+            _ensure_vehicle_access_persisted(user_ptr, validated_points)
 
             break  # GateTerm UI step succeeded; MDB patch is handled below
         except Exception as exc:
@@ -5533,6 +5564,45 @@ def _ensure_phone_identity_and_access_persisted(
             )
         if pass_index + 1 < persistence_passes:
             time_module.sleep(_env_float("GATE_PHONE_ACCESS_PERSISTENCE_VERIFY_DELAY_SECONDS", 0.75))
+
+
+def _ensure_vehicle_access_persisted(
+    user_ptr: int,
+    access_point_ids: Iterable[int],
+) -> None:
+    """Persist every required vehicle reader after GateTerm's VB6 UI save.
+
+    Optional existing readers are deliberately preserved. Repeating the pass
+    protects against GateTerm's observed delayed write of an older checklist.
+    """
+
+    required_access_point_ids = [int(item) for item in access_point_ids]
+    persistence_passes = max(1, _env_int("GATE_VEHICLE_ACCESS_PERSISTENCE_PASSES", 2))
+    for pass_index in range(persistence_passes):
+        with _transaction_cursor() as (_, cursor):
+            _ensure_access_permissions(
+                cursor,
+                int(user_ptr),
+                required_access_point_ids,
+                key_type="VehicleNumber",
+            )
+            rows = cursor.execute(
+                "SELECT RdrPtr FROM AccessTable WHERE UserPtr = ?",
+                (int(user_ptr),),
+            ).fetchall()
+            persisted_ids: set[int] = set()
+            for row in rows:
+                raw_point_id = getattr(row, "RdrPtr", None)
+                if raw_point_id is None:
+                    raw_point_id = row[0]
+                persisted_ids.add(int(raw_point_id))
+            missing_ids = sorted(set(required_access_point_ids) - persisted_ids)
+            if missing_ids:
+                raise RuntimeError(
+                    f"GateTerm vehicle access permissions were not persisted for UserPtr={user_ptr}: {missing_ids!r}"
+                )
+        if pass_index + 1 < persistence_passes:
+            time_module.sleep(_env_float("GATE_VEHICLE_ACCESS_PERSISTENCE_VERIFY_DELAY_SECONDS", 0.75))
 
 
 def _wait_for_phone_user_ptr(
