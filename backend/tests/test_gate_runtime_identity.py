@@ -1386,6 +1386,7 @@ def test_add_phone_permanent_key_via_gateterm_ui_bootstraps_new_user_then_edits(
             ("verify", user_ptr, normalized_key_value, phone_key_type_value, list(access_point_ids))
         ),
     )
+    monkeypatch.setattr(gate_runtime, "_drain_gateterm_workspace_after_success", lambda app: None)
 
     result = gate_runtime.add_phone_permanent_key_via_gateterm_ui(
         key_value="+79991234567",
@@ -1498,6 +1499,7 @@ def test_add_phone_permanent_key_via_gateterm_ui_updates_existing_user(monkeypat
             ("verify", user_ptr, normalized_key_value, phone_key_type_value, list(access_point_ids))
         ),
     )
+    monkeypatch.setattr(gate_runtime, "_drain_gateterm_workspace_after_success", lambda app: None)
 
     result = gate_runtime.add_phone_permanent_key_via_gateterm_ui(
         key_value="+79128152001",
@@ -4365,6 +4367,43 @@ def test_try_wait_for_gateterm_window_dismisses_error_91_and_fails_fast(monkeypa
     assert dismissed == [app]
 
 
+def test_success_drain_recovers_late_error_91_before_returning(monkeypatch) -> None:
+    dialog = object()
+    dialog_reads = iter([[dialog], [], [], [], [], [], [], []])
+    calls: list[str] = []
+    clock = [0.0]
+
+    def monotonic() -> float:
+        clock[0] += 0.2
+        return clock[0]
+
+    monkeypatch.setenv("GATE_GATETERM_UI_SUCCESS_DRAIN_TIMEOUT_SECONDS", "5")
+    monkeypatch.setenv("GATE_GATETERM_UI_SUCCESS_DRAIN_STABLE_SECONDS", "0.5")
+    monkeypatch.setattr(gate_runtime.time_module, "monotonic", monotonic)
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args: None)
+    monkeypatch.setattr(gate_runtime, "_gateterm_dialog_windows", lambda app: next(dialog_reads, []))
+    monkeypatch.setattr(gate_runtime, "_find_gateterm_window", lambda app, title: None)
+    monkeypatch.setattr(
+        gate_runtime,
+        "_find_gateterm_main_window",
+        lambda app: SimpleNamespace(is_enabled=lambda: True),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_close_gateterm_message_boxes_if_open",
+        lambda app: calls.append("dismiss"),
+    )
+    monkeypatch.setattr(
+        gate_runtime,
+        "_prepare_gateterm_users_workspace",
+        lambda app: calls.append("prepare"),
+    )
+
+    gate_runtime._drain_gateterm_workspace_after_success(object())
+
+    assert calls == ["dismiss", "prepare"]
+
+
 def test_open_gateterm_new_user_window_dismisses_dialog_on_hotkey_attempt(monkeypatch):
     """Error dialog that appears on the hotkey (Ctrl+N) attempt is also dismissed."""
     call_count = [0]
@@ -4605,6 +4644,7 @@ def test_add_vehicle_key_via_gateterm_ui_creates_new_user(monkeypatch):
         "_ensure_vehicle_access_persisted",
         lambda user_ptr, access_point_ids: calls.append(("ensure_access", user_ptr, list(access_point_ids))),
     )
+    monkeypatch.setattr(gate_runtime, "_drain_gateterm_workspace_after_success", lambda app: None)
     fake_cursor = _fake_noop_cursor()
     monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(fake_cursor))
 
@@ -4696,6 +4736,7 @@ def test_add_vehicle_key_via_gateterm_ui_updates_existing_user(monkeypatch):
         lambda user_ptr, key, number_u: calls.append(("verify", user_ptr, key, number_u)),
     )
     monkeypatch.setattr(gate_runtime, "_ensure_vehicle_access_persisted", lambda *args: None)
+    monkeypatch.setattr(gate_runtime, "_drain_gateterm_workspace_after_success", lambda app: None)
     monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(_fake_noop_cursor()))
 
     result = gate_runtime.add_vehicle_key_via_gateterm_ui(
@@ -4760,6 +4801,7 @@ def test_add_vehicle_key_via_gateterm_ui_mdb_patch_sets_expiry_only(monkeypatch)
     monkeypatch.setattr(gate_runtime, "_wait_for_vehicle_user_ptr", lambda **kw: 9999)
     monkeypatch.setattr(gate_runtime, "_verify_vehicle_identity_persisted", lambda *a: None)
     monkeypatch.setattr(gate_runtime, "_ensure_vehicle_access_persisted", lambda *args: None)
+    monkeypatch.setattr(gate_runtime, "_drain_gateterm_workspace_after_success", lambda app: None)
     monkeypatch.setattr(gate_runtime, "_transaction_cursor", lambda: _fake_transaction_cursor(mdb_cursor))
 
     gate_runtime.add_vehicle_key_via_gateterm_ui(

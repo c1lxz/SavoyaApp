@@ -2143,6 +2143,7 @@ def add_phone_permanent_key_via_gateterm_ui(
                 context["phone_key_type_value"],
                 validated_points,
             )
+            _drain_gateterm_workspace_after_success(app)
             return user_ptr
         except Exception as exc:
             last_error = exc
@@ -2304,17 +2305,13 @@ def add_vehicle_key_via_gateterm_ui(
                 normalized_key_value,
                 None,
             )
-            try:
-                _close_gateterm_users_window_if_open(app)
-            except Exception:
-                pass
-
             # GateTerm can close the VB6 editor without persisting every
             # checked item (or can write an older list shortly afterward).
             # Let the UI write drain, then enforce and verify the required
             # readers while preserving any optional permissions such as GSM.
             time_module.sleep(_env_float("GATE_GATETERM_UI_POST_SAVE_SETTLE_SECONDS", 1.25))
             _ensure_vehicle_access_persisted(user_ptr, validated_points)
+            _drain_gateterm_workspace_after_success(app)
 
             break  # GateTerm UI step succeeded; MDB patch is handled below
         except Exception as exc:
@@ -4544,6 +4541,71 @@ def _prepare_gateterm_users_workspace(app: Any) -> None:
     _close_gateterm_message_boxes_if_open(app)
     _close_gateterm_users_window_if_open(app)
     _close_gateterm_message_boxes_if_open(app)
+
+
+def _drain_gateterm_workspace_after_success(app: Any) -> None:
+    """Return only after GateTerm has remained modal-free and enabled.
+
+    GateTerm can raise Error 91 asynchronously after the users window appears
+    to have closed. Previously the bridge returned success and released its UI
+    lock first, leaving the visible error for the background guard. Keep
+    ownership until the workspace is clean for a continuous stability window.
+    """
+
+    timeout_seconds = _env_float("GATE_GATETERM_UI_SUCCESS_DRAIN_TIMEOUT_SECONDS", 5.0)
+    stable_seconds = _env_float("GATE_GATETERM_UI_SUCCESS_DRAIN_STABLE_SECONDS", 0.9)
+    deadline = time_module.monotonic() + max(timeout_seconds, 0.0)
+    clean_since: float | None = None
+    last_error: Exception | None = None
+
+    while True:
+        dialogs = _gateterm_dialog_windows(app)
+        dirty_window_open = any(
+            _find_gateterm_window(app, title) is not None
+            for title in (
+                _GATETERM_ACCESS_WINDOW_TITLE,
+                _GATETERM_USER_SEARCH_WINDOW_TITLE,
+                _GATETERM_NEW_USER_WINDOW_TITLE,
+                _GATETERM_USER_EDIT_WINDOW_TITLE,
+                _GATETERM_USERS_WINDOW_TITLE,
+            )
+        )
+        main_window = _find_gateterm_main_window(app)
+        main_enabled = False
+        if main_window is not None:
+            try:
+                main_enabled = bool(main_window.is_enabled())
+            except Exception:
+                main_enabled = False
+
+        if not dialogs and not dirty_window_open and main_enabled:
+            now = time_module.monotonic()
+            if clean_since is None:
+                clean_since = now
+            if now - clean_since >= max(stable_seconds, 0.0):
+                return
+        else:
+            clean_since = None
+            try:
+                _close_gateterm_message_boxes_if_open(app)
+                _prepare_gateterm_users_workspace(app)
+                last_error = None
+            except Exception as exc:
+                last_error = exc
+                # A modal may surface between any two cleanup operations.
+                # Dismiss it and let the next polling iteration retry cleanup.
+                try:
+                    _close_gateterm_message_boxes_if_open(app)
+                except Exception:
+                    pass
+
+        if time_module.monotonic() >= deadline:
+            detail = f"; last_error={last_error}" if last_error is not None else ""
+            raise RuntimeError(
+                "GateTerm workspace did not become stable after a successful save; "
+                f"open windows={_list_gateterm_windows(app)!r}{detail}"
+            )
+        time_module.sleep(0.1)
 
 
 def _window_contains_vehicle_key(values: Iterable[Any], normalized_key_value: str) -> bool:
