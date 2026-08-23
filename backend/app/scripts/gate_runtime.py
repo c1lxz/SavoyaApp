@@ -3905,6 +3905,30 @@ def _list_gateterm_windows(app: Any) -> list[str]:
     return labels
 
 
+_GATETERM_ERROR_91_TEXT = "object variable or with block variable not set"
+
+
+def _is_gateterm_error_91_dialog(dialog: Any) -> bool:
+    # VB6 exposes only the title through dialog.texts(); the actual Error 91
+    # message lives in a child Static control (live control_id=65535).
+    values = _collect_gateterm_window_values(dialog)
+    normalized_text = " ".join(str(value or "") for value in values).casefold()
+    return _GATETERM_ERROR_91_TEXT in normalized_text
+
+
+def _raise_if_gateterm_error_91_dialog(app: Any, *, context: str) -> None:
+    dialogs = _gateterm_dialog_windows(app)
+    if not any(_is_gateterm_error_91_dialog(dialog) for dialog in dialogs):
+        return
+
+    # Dismiss immediately while the bridge still owns the UI lock. Raising
+    # transfers control to the existing outer retry loop, which performs a full
+    # workspace cleanup before trying again. This prevents the active bridge
+    # from hanging indefinitely behind an invisible modal dialog.
+    _close_gateterm_message_boxes_if_open(app)
+    raise RuntimeError(f"GateTerm VB6 Error 91 during {context}; workspace reset required")
+
+
 def _try_wait_for_gateterm_window(app: Any, title_fragment: str, *, timeout_seconds: float | None = None) -> Any | None:
     timeout = _env_float("GATE_GATETERM_UI_WINDOW_WAIT_TIMEOUT_SECONDS", 3.0)
     if timeout_seconds is not None:
@@ -3912,6 +3936,7 @@ def _try_wait_for_gateterm_window(app: Any, title_fragment: str, *, timeout_seco
     deadline = time_module.monotonic() + max(timeout, 0.0)
 
     while True:
+        _raise_if_gateterm_error_91_dialog(app, context=f"waiting for {title_fragment!r}")
         window = _find_gateterm_window(app, title_fragment)
         if window is not None:
             return window
@@ -3927,6 +3952,7 @@ def _wait_for_gateterm_window_to_close(app: Any, title_fragment: str, *, timeout
     deadline = time_module.monotonic() + max(timeout, 0.0)
 
     while True:
+        _raise_if_gateterm_error_91_dialog(app, context=f"closing {title_fragment!r}")
         if _find_gateterm_window(app, title_fragment) is None:
             return
         if time_module.monotonic() >= deadline:
@@ -3943,6 +3969,7 @@ def _wait_for_enabled_gateterm_window(app: Any, title_fragment: str, *, timeout_
     deadline = time_module.monotonic() + max(timeout, 0.0)
 
     while True:
+        _raise_if_gateterm_error_91_dialog(app, context=f"enabling {title_fragment!r}")
         window = _find_gateterm_window(app, title_fragment)
         if window is not None:
             try:

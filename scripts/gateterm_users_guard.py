@@ -39,17 +39,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _is_interrupted_vb6_recordset_dialog(window: object) -> bool:
     """Identify the exact Error 91 dialog left by an interrupted users edit."""
 
-    fragments: list[str] = []
     try:
-        fragments.append(str(window.window_text() or ""))
+        return bool(gate_runtime._is_gateterm_error_91_dialog(window))
     except Exception:
-        pass
-    try:
-        fragments.extend(str(item or "") for item in window.texts())
-    except Exception:
-        pass
-    normalized_text = " ".join(fragments).casefold()
-    return _INTERRUPTED_VB6_RECORDSET_ERROR in normalized_text
+        # Keep a minimal fallback for tests or reduced pywinauto wrappers.
+        fragments: list[str] = []
+        try:
+            fragments.append(str(window.window_text() or ""))
+        except Exception:
+            pass
+        try:
+            fragments.extend(str(item or "") for item in window.texts())
+        except Exception:
+            pass
+        normalized_text = " ".join(fragments).casefold()
+        return _INTERRUPTED_VB6_RECORDSET_ERROR in normalized_text
 
 
 def _parent_pid_is_alive(parent_pid: int) -> bool:

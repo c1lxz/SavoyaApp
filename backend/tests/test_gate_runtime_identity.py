@@ -4333,6 +4333,38 @@ def test_open_gateterm_new_user_window_raises_when_error_dialog_appears(monkeypa
     assert dismissed, "error dialog must be dismissed before raising"
 
 
+def test_error_91_dialog_reads_message_from_child_static_control() -> None:
+    dialog = SimpleNamespace(
+        texts=lambda: ["GateTerm"],
+        descendants=lambda: [
+            SimpleNamespace(window_text=lambda: "Object variable or With block variable not set"),
+            SimpleNamespace(window_text=lambda: "OK"),
+        ],
+    )
+
+    assert gate_runtime._is_gateterm_error_91_dialog(dialog) is True
+
+
+def test_try_wait_for_gateterm_window_dismisses_error_91_and_fails_fast(monkeypatch) -> None:
+    dialog = SimpleNamespace(
+        texts=lambda: ["GateTerm"],
+        descendants=lambda: [SimpleNamespace(window_text=lambda: "Object variable or With block variable not set")],
+    )
+    dismissed: list[object] = []
+    monkeypatch.setattr(gate_runtime, "_gateterm_dialog_windows", lambda app: [dialog])
+    monkeypatch.setattr(
+        gate_runtime,
+        "_close_gateterm_message_boxes_if_open",
+        lambda app: dismissed.append(app),
+    )
+
+    app = object()
+    with pytest.raises(RuntimeError, match="VB6 Error 91"):
+        gate_runtime._try_wait_for_gateterm_window(app, "Поиск пользователя", timeout_seconds=10.0)
+
+    assert dismissed == [app]
+
+
 def test_open_gateterm_new_user_window_dismisses_dialog_on_hotkey_attempt(monkeypatch):
     """Error dialog that appears on the hotkey (Ctrl+N) attempt is also dismissed."""
     call_count = [0]
@@ -4550,6 +4582,7 @@ def test_add_vehicle_key_via_gateterm_ui_creates_new_user(monkeypatch):
         lambda window, control_id, *class_names: calls.append(("click", window, control_id, class_names)),
     )
     monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gate_runtime, "_window_still_open", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(gate_runtime, "_finalize_gateterm_new_user_save", lambda app: calls.append(("finalize_new", app)))
     monkeypatch.setattr(gate_runtime, "_finalize_gateterm_vehicle_user_edit_save", lambda app: calls.append(("finalize_vehicle_edit", app)))
     monkeypatch.setattr(
@@ -4713,6 +4746,7 @@ def test_add_vehicle_key_via_gateterm_ui_mdb_patch_sets_expiry_only(monkeypatch)
     monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: fake_users_window)
     monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: None)
     monkeypatch.setattr(gate_runtime, "_search_gateterm_user_by_key_number", lambda *a: None)
+    monkeypatch.setattr(gate_runtime, "_resolve_gateterm_search_init_probe_value", lambda: "INIT-PROBE-FAKE")
     monkeypatch.setattr(gate_runtime, "_open_gateterm_new_user_window", lambda *a: fake_window)
     monkeypatch.setattr(gate_runtime, "_populate_gateterm_vehicle_pass_editor", lambda *a, **kw: None)
     monkeypatch.setattr(gate_runtime, "_click_gateterm_control", lambda *a: None)
