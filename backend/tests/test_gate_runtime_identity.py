@@ -628,7 +628,14 @@ def test_open_gateterm_users_view_falls_back_to_menu_click(monkeypatch):
 
 def test_open_access_point_via_gateterm_ui_closes_access_window_after_success(monkeypatch):
     calls: list[object] = []
-    fake_app = object()
+    fake_app = _FakeGateUiApp([
+        _FakeGateUiWindow(
+            title="GATE Terminal. Версия 1.22.99",
+            class_name="ThunderRT6FormDC",
+            handle=10,
+            menu_items=[_FakeMenuItem()],
+        ),
+    ])
 
     class _FakeGrid:
         def rectangle(self):
@@ -661,6 +668,8 @@ def test_open_access_point_via_gateterm_ui_closes_access_window_after_success(mo
             return fake_app
 
     monkeypatch.setitem(sys.modules, "pywinauto", SimpleNamespace(Application=_FakeApplication))
+    monkeypatch.setattr(gate_runtime, "_complete_gateterm_operator_login_if_needed", lambda app: None)
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         gate_runtime,
         "_env",
@@ -682,12 +691,20 @@ def test_open_access_point_via_gateterm_ui_closes_access_window_after_success(mo
     result = gate_runtime._open_access_point_via_gateterm_ui(object(), 5, external_key_id="key-1")
 
     assert result.success is True
-    assert ("close_access_window", fake_app) in calls
+    assert "button_click" in calls
+    assert calls[-1] == ("close_access_window", fake_app)
 
 
 def test_open_access_point_via_gateterm_ui_closes_access_window_after_failure(monkeypatch):
     calls: list[object] = []
-    fake_app = object()
+    fake_app = _FakeGateUiApp([
+        _FakeGateUiWindow(
+            title="GATE Terminal. Версия 1.22.99",
+            class_name="ThunderRT6FormDC",
+            handle=10,
+            menu_items=[_FakeMenuItem()],
+        ),
+    ])
 
     class _BrokenGrid:
         def rectangle(self):
@@ -721,6 +738,8 @@ def test_open_access_point_via_gateterm_ui_closes_access_window_after_failure(mo
             return fake_app
 
     monkeypatch.setitem(sys.modules, "pywinauto", SimpleNamespace(Application=_FakeApplication))
+    monkeypatch.setattr(gate_runtime, "_complete_gateterm_operator_login_if_needed", lambda app: None)
+    monkeypatch.setattr(gate_runtime.time_module, "sleep", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         gate_runtime,
         "_env",
@@ -742,7 +761,9 @@ def test_open_access_point_via_gateterm_ui_closes_access_window_after_failure(mo
 
     assert result.success is False
     assert result.error_code == "gateterm_ui_error"
-    assert ("close_access_window", fake_app) in calls
+    assert "boom" in result.message
+    assert "button_click" not in calls
+    assert calls[-1] == ("close_access_window", fake_app)
 
 
 def test_post_sync_vehicle_key_via_gateterm_ui_uses_clean_search_then_edit_flow(monkeypatch):
@@ -929,18 +950,22 @@ def test_set_gateterm_user_key_number_updates_labeled_edit():
     assert edit_calls == ["focus", ("set_edit_text", "A777AA77"), ("type_keys", "{TAB}")]
 
 
-def test_prepare_gateterm_users_workspace_closes_dialogs_and_user_windows_in_safe_order(monkeypatch):
+@pytest.mark.parametrize("close_users", [True, False])
+def test_prepare_gateterm_users_workspace_closes_dialogs_and_user_windows_in_safe_order(monkeypatch, close_users):
     calls: list[object] = []
 
     monkeypatch.setattr(gate_runtime, "_close_gateterm_message_boxes_if_open", lambda app: calls.append(("messages", app)))
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_access_window_if_open", lambda app: calls.append(("access", app)))
     monkeypatch.setattr(gate_runtime, "_close_gateterm_search_window_if_open", lambda app: calls.append(("search", app)))
     monkeypatch.setattr(gate_runtime, "_close_gateterm_new_user_window_if_open", lambda app: calls.append(("new_user", app)))
     monkeypatch.setattr(gate_runtime, "_close_gateterm_user_edit_window_if_open", lambda app: calls.append(("edit", app)))
     monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: calls.append(("users", app)))
 
-    gate_runtime._prepare_gateterm_users_workspace("app")
+    gate_runtime._prepare_gateterm_users_workspace("app", close_users=close_users)
 
     assert calls == [
+        ("messages", "app"),
+        ("access", "app"),
         ("messages", "app"),
         ("search", "app"),
         ("messages", "app"),
@@ -948,7 +973,7 @@ def test_prepare_gateterm_users_workspace_closes_dialogs_and_user_windows_in_saf
         ("messages", "app"),
         ("edit", "app"),
         ("messages", "app"),
-        ("users", "app"),
+        *([("users", "app")] if close_users else []),
         ("messages", "app"),
     ]
 
@@ -4504,7 +4529,7 @@ def test_close_gateterm_new_user_window_clicks_cancel_button(monkeypatch):
     monkeypatch.setattr(gate_runtime, "_close_gateterm_message_boxes_if_open", lambda app: None)
     monkeypatch.setattr(gate_runtime, "_window_still_open", lambda app, title: False)
 
-    gate_runtime._close_gateterm_new_user_window_if_open(object())
+    gate_runtime._close_gateterm_new_user_window_if_open(_FakeGateUiApp([]))
 
     assert any(cid == 2 for cid, _ in clicked_controls), "Cancel button (id=2) must be clicked"
 
@@ -4533,7 +4558,7 @@ def test_close_gateterm_new_user_window_uses_escape_when_cancel_fails(monkeypatc
     monkeypatch.setattr(gate_runtime, "_window_still_open", fake_window_still_open)
     monkeypatch.setattr(gate_runtime, "_dismiss_gateterm_window_via_escape", fake_dismiss_via_escape)
 
-    gate_runtime._close_gateterm_new_user_window_if_open(object())
+    gate_runtime._close_gateterm_new_user_window_if_open(_FakeGateUiApp([]))
 
     assert escape_sent, "ESC fallback must be used when Cancel button click fails"
 

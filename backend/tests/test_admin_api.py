@@ -1692,6 +1692,10 @@ def test_startup_expands_existing_permanent_phone_access_points(monkeypatch):
 
 
 def test_admin_monitor_endpoint_returns_app_open_events(client, monkeypatch):
+    monkeypatch.setattr(
+        'backend.app.services.access.gate_client.get_access_points',
+        lambda: [{'id': 1, 'name': 'Monitor Test Gate'}],
+    )
     admin_login = f'admin_monitor_{uuid4().hex[:6]}'
     resident_login = f'resident_monitor_{uuid4().hex[:6]}'
     password = 'demo123'
@@ -1748,6 +1752,10 @@ def test_admin_monitor_endpoint_returns_app_open_events(client, monkeypatch):
 
 
 def test_admin_monitor_enriches_gate_events_with_app_actor(client, monkeypatch):
+    monkeypatch.setattr(
+        'backend.app.services.access.gate_client.get_access_points',
+        lambda: [{'id': 1, 'name': 'Gate Entry'}],
+    )
     admin_login = f'admin_monitor_link_{uuid4().hex[:6]}'
     resident_login = f'resident_monitor_link_{uuid4().hex[:6]}'
     password = 'demo123'
