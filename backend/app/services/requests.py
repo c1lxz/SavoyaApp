@@ -20,6 +20,7 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 _ACTIVE_REQUEST_STATUSES = ("active",)
+_request_deletion_lock = asyncio.Lock()
 
 
 class RequestConflictError(Exception):
@@ -486,6 +487,13 @@ async def delete_own_request(session: AsyncSession, user_id: int, request_id: in
 
 
 async def delete_request_for_admin(session: AsyncSession, request_id: int) -> Request | None:
+    # The background sweep and admin list refresh can target the same pass.
+    # Serialize them before fetching its state or starting GateTerm automation.
+    async with _request_deletion_lock:
+        return await _delete_request_for_admin_unlocked(session, request_id)
+
+
+async def _delete_request_for_admin_unlocked(session: AsyncSession, request_id: int) -> Request | None:
     query = await session.execute(select(Request).where(Request.id == request_id))
     request = query.scalar_one_or_none()
     if request is None:
@@ -515,6 +523,11 @@ async def delete_request_for_admin(session: AsyncSession, request_id: int) -> Re
         )
         other_active_count = int(other_query.scalar_one() or 0)
 
+    if other_active_count == 0 and gate_key_id is not None:
+        # Revoke before writing app rows: GateTerm may take tens of seconds,
+        # and a SQLite writer lock must not be held throughout that UI operation.
+        await asyncio.to_thread(gate_client.remove_key, gate_key_id)
+
     user = await session.get(User, request.resident_id)
     if user is not None and gate_key_id is not None and user.gate_user_id == gate_key_id:
         user.gate_user_id = None
@@ -528,11 +541,6 @@ async def delete_request_for_admin(session: AsyncSession, request_id: int) -> Re
     await session.delete(request)
     await session.flush()
 
-    if other_active_count == 0 and gate_key_id is not None:
-        # FIX: use asyncio.to_thread so the blocking subprocess does not freeze
-        # the async event loop (gate_bridge can take 20-30 s for UI operations).
-        await asyncio.to_thread(gate_client.remove_key, gate_key_id)
-
     await session.commit()
     return request
 
@@ -545,6 +553,8 @@ async def delete_expired_requests(session: AsyncSession) -> int:
     "expired". Rows already flagged "expired" (e.g. by ``cleanup_expired_requests``)
     are picked up too, so a Gate key can no longer outlive the app's view of the pass.
     """
+    if not settings.gate_expiry_cleanup_enabled:
+        return 0
     now = utcnow()
     query = await session.execute(
         select(Request.id).where(

@@ -889,6 +889,10 @@ def _looks_like_phone_identity_number(value: Any) -> bool:
     raw = str(value or "").strip()
     if not raw:
         return False
+    # Internal NumberU values are hexadecimal. Stripping their letters can
+    # accidentally produce a ten-digit "phone" starting with 9.
+    if any(ch not in "0123456789+()-" and not ch.isspace() for ch in raw):
+        return False
     digits = "".join(ch for ch in raw if ch.isdigit())
     if not digits:
         return False
@@ -2455,17 +2459,10 @@ def _mark_gate_user_deleted(key_id: int) -> bool:
 def _resolve_gateterm_user_search_key(cursor: pyodbc.Cursor, row: Any) -> str:
     phone_key_type_value = _sample_key_type(cursor, "Phone")
     vehicle_key_type_value = _sample_key_type(cursor, "VehicleNumber")
-    if _is_phone_identity_row(row, phone_key_type_value=phone_key_type_value):
-        return _normalize_phone(
-            str(
-                getattr(row, "Number", None)
-                or getattr(row, "NumberU", None)
-                or getattr(row, "Phone", None)
-                or ""
-            )
-        )
     if _is_vehicle_identity_row(row, vehicle_key_type_value=vehicle_key_type_value):
         return _normalize_vehicle(str(getattr(row, "Number", None) or getattr(row, "NumberU", None) or ""))
+    if _is_phone_identity_row(row, phone_key_type_value=phone_key_type_value):
+        return _normalize_phone(_preferred_phone_identity_value(row, phone_key_type_value=phone_key_type_value))
 
     normalized_number = _normalize_optional_text(getattr(row, "Number", None))
     if normalized_number:
@@ -3789,6 +3786,64 @@ def post_sync_vehicle_key(key_id: int) -> dict[str, Any]:
     )
 
 
+def _verify_gateterm_delete_selection(app: Any, users_window: Any, *, key_id: int, normalized_key_value: str) -> None:
+    # A failed search can leave an unrelated row selected. Verify the dedicated
+    # key-number field, never arbitrary card text (e.g. a name or a comment).
+    edit_window = _open_gateterm_user_edit_window(app, users_window)
+    try:
+        key_control = _visible_gateterm_control_by_id(edit_window, 88, "ThunderRT6TextBox", "Edit")
+        selected_key = _normalize_optional_text(key_control.window_text())
+        if not selected_key or selected_key != normalized_key_value:
+            raise RuntimeError("Refusing GateTerm deletion: selected key does not match the requested key")
+
+        with _readonly_cursor() as (_, cursor):
+            row = cursor.execute(
+                "SELECT TOP 1 UserPtr, KeyType, Number, NumberU, Phone, Deleted FROM Users WHERE UserPtr = ?",
+                (int(key_id),),
+            ).fetchone()
+            if row is None or bool(getattr(row, "Deleted", False)):
+                raise RuntimeError("Refusing GateTerm deletion: requested key is no longer live")
+            if _resolve_gateterm_user_search_key(cursor, row) != normalized_key_value:
+                raise RuntimeError("Refusing GateTerm deletion: requested key identity changed")
+
+            # Search is by number, not UserPtr. Duplicates make UI selection
+            # ambiguous even when the visible number matches.
+            values = sorted({normalized_key_value, *(
+                str(value) for value in (getattr(row, "Number", None), getattr(row, "NumberU", None))
+                if value is not None and str(value).strip()
+            )})
+            placeholders = ", ".join("?" for _ in values)
+            matches = cursor.execute(
+                f"SELECT UserPtr FROM Users WHERE (Deleted = False OR Deleted IS NULL) "
+                f"AND ([Number] IN ({placeholders}) OR NumberU IN ({placeholders}))",
+                tuple(values + values),
+            ).fetchall()
+            if {int(item.UserPtr) for item in matches} != {int(key_id)}:
+                raise RuntimeError("Refusing GateTerm deletion: key number is ambiguous")
+    finally:
+        _close_gateterm_user_edit_window_if_open(app)
+
+
+def _verify_gateterm_delete_confirmation(dialog: Any, *, key_id: int) -> None:
+    with _readonly_cursor() as (_, cursor):
+        row = cursor.execute(
+            "SELECT TOP 1 LastName, FirstName, FatherName, Deleted FROM Users WHERE UserPtr = ?",
+            (int(key_id),),
+        ).fetchone()
+    expected_name = None if row is None else _compose_gate_user_name(
+        None, getattr(row, "LastName", None), getattr(row, "FirstName", None), getattr(row, "FatherName", None),
+    )
+    if (
+        row is None or bool(getattr(row, "Deleted", False)) or not expected_name
+        or _normalize_gate_detail(dialog.window_text()) != expected_name
+    ):
+        # The list selection may change while the verified editor is closing.
+        # GateTerm uses the resident's full name as the confirmation title.
+        if not _click_gateterm_dialog_button(dialog, 7, 2):
+            dialog.type_keys("{ESC}")
+        raise RuntimeError("Refusing GateTerm deletion: confirmation does not match the requested user")
+
+
 def _remove_key_via_gateterm_ui(*, key_id: int, normalized_key_value: str) -> bool:
     attempts = max(1, _env_int("GATE_GATETERM_UI_DELETE_ATTEMPTS", 3))
     last_error: Exception | None = None
@@ -3797,14 +3852,12 @@ def _remove_key_via_gateterm_ui(*, key_id: int, normalized_key_value: str) -> bo
         app: Any | None = None
         try:
             app = _connect_or_start_gateterm_application()
-            _prepare_gateterm_users_workspace(app)
+            _prepare_gateterm_users_workspace(app, close_users=False)
             users_window = _open_gateterm_users_view(app)
-            # Fast path: search selects the matching user in the list, then delete it
-            # straight away.  We do NOT open the user card to re-verify the number —
-            # that round-trip is what made deletion take minutes.  Correctness is
-            # guaranteed below by _wait_for_gate_user_deleted, which confirms this exact
-            # UserPtr is gone (so a wrong row could never be reported as deleted).
             _search_gateterm_user_by_key_number(app, users_window, normalized_key_value)
+            _verify_gateterm_delete_selection(
+                app, users_window, key_id=key_id, normalized_key_value=normalized_key_value,
+            )
             _safe_set_focus(users_window)
             try:
                 users_window.menu().items()[0].sub_menu().items()[2].click()
@@ -3830,6 +3883,7 @@ def _remove_key_via_gateterm_ui(*, key_id: int, normalized_key_value: str) -> bo
                         pass
                     return True
                 raise
+            _verify_gateterm_delete_confirmation(dialog, key_id=key_id)
             _confirm_gateterm_dialog(dialog)
             _confirm_gateterm_message_boxes_if_open(app)
             _wait_for_gate_user_deleted(
@@ -4526,7 +4580,7 @@ def _finalize_gateterm_new_user_save(app: Any) -> None:
             _close_gateterm_new_user_window_if_open(app)
 
 
-def _prepare_gateterm_users_workspace(app: Any) -> None:
+def _prepare_gateterm_users_workspace(app: Any, *, close_users: bool = True) -> None:
     _close_gateterm_message_boxes_if_open(app)
     # An interrupted open_access_point attempt (e.g. killed by the bridge's external
     # call timeout before its own `finally` cleanup runs) can leave this window open,
@@ -4539,7 +4593,10 @@ def _prepare_gateterm_users_workspace(app: Any) -> None:
     _close_gateterm_message_boxes_if_open(app)
     _close_gateterm_user_edit_window_if_open(app)
     _close_gateterm_message_boxes_if_open(app)
-    _close_gateterm_users_window_if_open(app)
+    # Closing and reopening the VB6 users list can discard its recordset and
+    # invalidate the selection. Deletion keeps the existing list initialized.
+    if close_users:
+        _close_gateterm_users_window_if_open(app)
     _close_gateterm_message_boxes_if_open(app)
 
 

@@ -58,6 +58,7 @@ const linking: LinkingOptions<RootStackParamList> = {
 
 export const RootNavigator = () => {
   const user = useAuthStore((state) => state.user);
+  const sessionUserId = user?.id;
   const requiresProfileCompletion = useAuthStore((state) => state.requiresProfileCompletion);
   const restoreSession = useAuthStore((state) => state.restoreSession);
   const restoreState = useAuthStore((state) => state.restoreState);
@@ -70,7 +71,7 @@ export const RootNavigator = () => {
   }, [restoreSession, restoreState]);
 
   useEffect(() => {
-    if (!user) {
+    if (sessionUserId === undefined) {
       return undefined;
     }
 
@@ -82,10 +83,10 @@ export const RootNavigator = () => {
     return () => {
       clearInterval(intervalId);
     };
-  }, [user, validateSession]);
+  }, [sessionUserId, validateSession]);
 
   useEffect(() => {
-    if (!user) {
+    if (sessionUserId === undefined) {
       return undefined;
     }
 
@@ -126,7 +127,7 @@ export const RootNavigator = () => {
     return () => {
       subscription.remove();
     };
-  }, [user, validateSession]);
+  }, [sessionUserId, validateSession]);
 
   if (restoreState === 'idle' || restoreState === 'loading') {
     return (
