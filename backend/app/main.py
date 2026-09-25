@@ -13,7 +13,9 @@ from fastapi.responses import FileResponse, PlainTextResponse
 
 from .config import get_settings
 from .database import Base, SessionLocal, engine
-from .routers import access, admin, auth, compatibility, gate, requests, user
+from .routers import access, admin, auth, compatibility, gate, news, requests, user
+from .services.news_media import NewsUploadLimitMiddleware
+from .services.news_notifications import news_worker
 from .security import LoginRateLimiter
 from .services.auth import ensure_admin_user, ensure_bootstrap_test_users, ensure_demo_user
 from .services.gate_event_worker import courier_gate_event_worker
@@ -241,9 +243,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_allow_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_methods=["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Range"],
+    expose_headers=["Content-Range", "Accept-Ranges", "Content-Disposition"],
 )
+app.add_middleware(NewsUploadLimitMiddleware)
 app.state.login_rate_limiter = LoginRateLimiter(
     attempts=settings.login_rate_limit_attempts,
     window_seconds=settings.login_rate_limit_window_seconds,
@@ -317,9 +321,19 @@ async def startup_event() -> None:
         except Exception:
             logging.exception("Failed to start GateTerm users guard")
 
+    if settings.news_worker_enabled:
+        app.state.news_worker_task = asyncio.create_task(news_worker())
+
 
 @app.on_event("shutdown")
 async def shutdown_event() -> None:
+    news_task = getattr(app.state, "news_worker_task", None)
+    if news_task is not None:
+        news_task.cancel()
+        try:
+            await news_task
+        except asyncio.CancelledError:
+            pass
     repair_task = getattr(app.state, "gate_startup_sync_task", None)
     if repair_task is not None and not repair_task.done():
         repair_task.cancel()
@@ -345,6 +359,7 @@ app.include_router(gate.router, prefix=settings.api_prefix)
 app.include_router(requests.router, prefix=settings.api_prefix)
 app.include_router(user.router, prefix=settings.api_prefix)
 app.include_router(admin.router, prefix=settings.api_prefix)
+app.include_router(news.router, prefix=settings.api_prefix)
 app.include_router(compatibility.router)
 
 

@@ -37,6 +37,12 @@ services:
       ALLOWED_HOSTS_JSON: ${ALLOWED_HOSTS_JSON:?Set ALLOWED_HOSTS_JSON in .env}
       CORS_ALLOW_ORIGINS_JSON: ${CORS_ALLOW_ORIGINS_JSON:?Set CORS_ALLOW_ORIGINS_JSON in .env}
       BOOTSTRAP_DEMO_USER: ${BOOTSTRAP_DEMO_USER:-false}
+      NEWS_MEDIA_DIR: /data/news-media
+      NEWS_FCM_SERVICE_ACCOUNT_FILE: ${NEWS_FCM_SERVICE_ACCOUNT_FILE:-}
+      NEWS_FCM_PROJECT_ID: ${NEWS_FCM_PROJECT_ID:-}
+    volumes:
+      - news_media:/data/news-media
+      # Mount the service account separately as a read-only secret if push is enabled.
     ports:
       - "8000:8000"
 
@@ -57,3 +63,4 @@ services:
 
 volumes:
   pg_data:
+  news_media:

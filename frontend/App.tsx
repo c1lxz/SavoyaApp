@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { RootNavigator } from './src/navigation/RootNavigator';
+import { PushNotificationBridge } from './src/components/PushNotificationBridge';
 
 const WEB_VIEWPORT_STYLE_ID = 'savoya-web-viewport-styles';
 const WEB_VIEWPORT_META_ID = 'savoya-web-viewport-meta';
@@ -90,6 +91,7 @@ export default function App() {
     <SafeAreaProvider>
       <StatusBar style="light" />
       <RootNavigator />
+      <PushNotificationBridge />
     </SafeAreaProvider>
   );
 }

@@ -170,7 +170,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
     });
 
     if (success) {
-      navigation.navigate('Home');
+      navigation.navigate('Home', { screen: 'MyPasses' });
     }
   };
 

@@ -1,27 +1,29 @@
 import React, { useCallback, useMemo } from 'react';
 import { Alert, FlatList, Platform, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppBackground } from '@/components/AppBackground';
+import { AppButton } from '@/components/AppButton';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingOverlay } from '@/components/LoadingOverlay';
 import { PassCard } from '@/components/PassCard';
 import { ScreenHeader } from '@/components/ScreenHeader';
-import { RootStackParamList } from '@/navigation/types';
+import { MainTabScreenProps } from '@/navigation/types';
+import { useAuthStore } from '@/store/authStore';
 import { usePassesStore } from '@/store/passesStore';
 import { theme } from '@/theme';
 import { PassItem } from '@/types';
-import { goBackOrHome } from '@/utils/backNavigation';
 import { formatVehicleLabel } from '@/utils/vehicleCountry';
 import { getLayoutMetrics } from '@/utils/layout';
 
-type Props = NativeStackScreenProps<RootStackParamList, 'MyPasses'>;
+type Props = MainTabScreenProps<'MyPasses'>;
 
 export const MyPassesScreen = ({ navigation }: Props) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
+  const isAdmin = useAuthStore((state) => state.user?.isAdmin);
 
   const passes = usePassesStore((state) => state.passes);
   const loadMyPasses = usePassesStore((state) => state.loadMyPasses);
@@ -60,15 +62,40 @@ export const MyPassesScreen = ({ navigation }: Props) => {
 
   useFocusEffect(
     useCallback(() => {
-      void loadMyPasses();
-    }, [loadMyPasses]),
+      if (!isAdmin) void loadMyPasses();
+    }, [loadMyPasses, isAdmin]),
   );
+
+  if (isAdmin) {
+    return (
+      <AppBackground>
+        <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
+          <View style={[styles.content, { maxWidth: metrics.formMaxWidth }]}>
+            <ScreenHeader title="Пропуски" />
+            <Text style={styles.description}>Заявки жителей и действующие пропуска посёлка.</Text>
+            <AppButton
+              title="Все пропуски"
+              onPress={() => navigation.navigate('AdminRequests')}
+              leftIcon={<MaterialCommunityIcons name="clipboard-text-outline" size={22} color={theme.colors.textPrimary} />}
+            />
+          </View>
+        </SafeAreaView>
+      </AppBackground>
+    );
+  }
 
   return (
     <AppBackground>
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
         <View style={[styles.content, { maxWidth: metrics.contentMaxWidth }]}>
-          <ScreenHeader title="Мои пропуски" onBack={() => goBackOrHome(navigation)} />
+          <ScreenHeader title="Мои пропуски" />
+          <View style={styles.createAction}>
+            <AppButton
+              title="Создать пропуск"
+              onPress={() => navigation.navigate('CreatePass')}
+              leftIcon={<MaterialCommunityIcons name="plus" size={23} color={theme.colors.textPrimary} />}
+            />
+          </View>
 
           <FlatList
             style={styles.list}
@@ -82,6 +109,8 @@ export const MyPassesScreen = ({ navigation }: Props) => {
             removeClippedSubviews
             contentContainerStyle={styles.listContent}
             ListEmptyComponent={emptyState}
+            refreshing={loadState === 'loading'}
+            onRefresh={() => void loadMyPasses()}
             showsVerticalScrollIndicator={true}
             bounces={true}
             alwaysBounceVertical={false}
@@ -109,6 +138,8 @@ const styles = StyleSheet.create({
   list: {
     flex: 1,
   },
+  createAction: { marginBottom: 16 },
+  description: { color: theme.colors.textSecondary, fontSize: 16, lineHeight: 24, marginBottom: 20 },
   listContent: {
     flexGrow: 1,
     paddingBottom: theme.spacing.xl,

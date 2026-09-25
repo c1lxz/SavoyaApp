@@ -32,3 +32,9 @@ certificate*.key
 *.apk
 *.aab
 frontend/android/
+frontend/google-services.json
+**/*service-account*.json
+*.jks
+*.keystore
+news_uploads/
+data/news-media/

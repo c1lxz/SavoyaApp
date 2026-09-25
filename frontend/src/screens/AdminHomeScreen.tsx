@@ -11,6 +11,7 @@ import { RootStackParamList } from '@/navigation/types';
 import { useAuthStore } from '@/store/authStore';
 import { theme } from '@/theme';
 import { getLayoutMetrics } from '@/utils/layout';
+import { goBackOrHome } from '@/utils/backNavigation';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Admin'>;
 
@@ -36,17 +37,26 @@ export const AdminHomeScreen = ({ navigation }: Props) => {
           alwaysBounceVertical={false}
           overScrollMode="never"
         >
-          <ScreenHeader title="Админка" />
+          <ScreenHeader title="Управление" onBack={() => goBackOrHome(navigation)} />
 
           <View style={[styles.summaryCard, { gap: metrics.isDesktop ? 12 : 10 }]}>
-            <Text style={[styles.summaryTitle, { fontSize: metrics.isDesktop ? 24 : 21 }]}>Управление доступом</Text>
+            <Text style={[styles.summaryTitle, { fontSize: metrics.isDesktop ? 24 : 21 }]}>Панель председателя</Text>
             <Text style={styles.summaryText}>
-              Админу доступны просмотр заявок и открытие точек доступа. Создание пропусков и список личных пропусков
-              здесь скрыты.
+              Новости посёлка, заявки жителей, пользователи и управление доступом.
             </Text>
           </View>
 
           <View style={[styles.actions, { gap: metrics.panelGap }]}>
+            <AppButton
+              title="Опубликовать новость"
+              onPress={() => navigation.navigate('NewsEditor')}
+              leftIcon={<MaterialCommunityIcons name="newspaper-plus" size={22} color={theme.colors.textPrimary} />}
+            />
+            <AppButton
+              title="Новости посёлка"
+              onPress={() => navigation.navigate('Home', { screen: 'News' })}
+              leftIcon={<MaterialCommunityIcons name="newspaper-variant-outline" size={22} color={theme.colors.textPrimary} />}
+            />
             <AppButton
               title="Мониторинг"
               onPress={() => navigation.push('AdminMonitor')}
@@ -64,12 +74,12 @@ export const AdminHomeScreen = ({ navigation }: Props) => {
             />
             <AppButton
               title="Открыть шлагбаум"
-              onPress={() => navigation.push('OpenBarrier')}
+              onPress={() => navigation.navigate('Home', { screen: 'OpenBarrier' })}
               leftIcon={<MaterialCommunityIcons name="gate-open" size={22} color={theme.colors.textPrimary} />}
             />
             <AppButton
               title="Калитки"
-              onPress={() => navigation.push('Wickets')}
+              onPress={() => navigation.navigate('Home', { screen: 'Wickets' })}
               leftIcon={<MaterialCommunityIcons name="door" size={22} color={theme.colors.textPrimary} />}
             />
             <AppButton

@@ -28,6 +28,17 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://user:password@localhost:5432/gate_app"
 
+    # Keep this directory on persistent storage, outside the public frontend tree.
+    news_media_dir: str = "./data/news-media"
+    news_max_upload_bytes: int = Field(default=100 * 1024 * 1024, ge=1024, le=1024 * 1024 * 1024)
+    news_media_url_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
+    news_unattached_ttl_hours: int = Field(default=24, ge=1)
+    news_max_unattached_uploads: int = Field(default=30, ge=10, le=1000)
+    news_worker_enabled: bool = True
+    news_device_ttl_days: int = Field(default=30, ge=1, le=365)
+    news_fcm_service_account_file: str = ""
+    news_fcm_project_id: str = ""
+
     secret_key: str = "change-me"
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 365

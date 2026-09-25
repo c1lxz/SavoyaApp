@@ -1,6 +1,7 @@
 import { AuthResult, ChangePasswordPayload, User } from '@/types';
 import { apiRequest } from '@/services/api/httpClient';
 import { getAccessToken, restoreAccessToken, setAccessToken } from '@/services/api/tokenStore';
+import { unregisterNewsNotifications } from '@/services/newsNotifications';
 
 type CompatLoginResponse = {
   success: boolean;
@@ -129,6 +130,7 @@ export const apiAuthService = {
   },
 
   async logout(): Promise<void> {
+    await unregisterNewsNotifications().catch(() => { /* Allow offline logout. Invalid tokens expire server-side. */ });
     await setAccessToken(null);
     currentUser = null;
   },

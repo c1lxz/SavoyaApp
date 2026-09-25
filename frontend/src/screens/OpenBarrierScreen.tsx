@@ -11,20 +11,18 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppBackground } from '@/components/AppBackground';
 import { ScreenHeader } from '@/components/ScreenHeader';
-import { RootStackParamList } from '@/navigation/types';
+import { MainTabScreenProps } from '@/navigation/types';
 import { useAuthStore } from '@/store/authStore';
 import { useGateStore } from '@/store/gateStore';
 import { theme } from '@/theme';
-import { goBackOrHome } from '@/utils/backNavigation';
 import { getGateActionFeedback } from '@/utils/gateActionFeedback';
 import { getLayoutMetrics } from '@/utils/layout';
 
-type Props = NativeStackScreenProps<RootStackParamList, 'OpenBarrier'>;
+type Props = MainTabScreenProps<'OpenBarrier'>;
 
 type BarrierButtonProps = {
   title: string;
@@ -105,7 +103,7 @@ const BarrierActionButton = memo(({ title, onPress, disabled, iconSource, isLoad
 });
 BarrierActionButton.displayName = 'BarrierActionButton';
 
-export const OpenBarrierScreen = ({ navigation }: Props) => {
+export const OpenBarrierScreen = (_props: Props) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
 
@@ -127,18 +125,17 @@ export const OpenBarrierScreen = ({ navigation }: Props) => {
 
   return (
     <AppBackground>
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
-          scrollEnabled={false}
           showsVerticalScrollIndicator={false}
           bounces={false}
           alwaysBounceVertical={false}
           overScrollMode="never"
         >
           <View style={[styles.panel, { maxWidth: metrics.formMaxWidth }]}>
-            <ScreenHeader title="Открыть шлагбаум" onBack={() => goBackOrHome(navigation)} />
+            <ScreenHeader title="Шлагбаумы" />
 
             <View style={[styles.actions, { gap: metrics.panelGap }]}>
               <BarrierActionButton
@@ -193,6 +190,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     width: '100%',
+    paddingBottom: 16,
   },
   panel: {
     width: '100%',

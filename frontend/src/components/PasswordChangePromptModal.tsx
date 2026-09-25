@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { AppButton } from '@/components/AppButton';
@@ -13,6 +13,7 @@ type PasswordChangePromptModalProps = {
   error: string | null;
   onSubmit: (newPassword: string, repeatPassword: string) => Promise<void>;
   onDismiss: () => void;
+  mode?: 'suggestion' | 'settings';
 };
 
 const validatePasswordStrength = (value: string): string | null => {
@@ -40,6 +41,7 @@ export const PasswordChangePromptModal = ({
   error,
   onSubmit,
   onDismiss,
+  mode = 'suggestion',
 }: PasswordChangePromptModalProps) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
@@ -86,7 +88,8 @@ export const PasswordChangePromptModal = ({
 
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onDismiss}>
-      <View
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={[
           styles.overlay,
           {
@@ -97,16 +100,20 @@ export const PasswordChangePromptModal = ({
       >
         <Pressable style={StyleSheet.absoluteFill} onPress={onDismiss} />
 
-        <View style={[styles.card, { maxWidth: metrics.isDesktop ? 520 : metrics.formMaxWidth }]}>
+        <ScrollView
+          style={[styles.card, { maxWidth: metrics.isDesktop ? 520 : metrics.formMaxWidth }]}
+          contentContainerStyle={styles.cardContent}
+          keyboardShouldPersistTaps="handled"
+        >
           <View style={styles.header}>
-            <Text style={[styles.title, { fontSize: metrics.isDesktop ? 24 : 20 }]}>Вы можете сменить пароль</Text>
-            <Pressable onPress={onDismiss} hitSlop={12}>
+            <Text style={[styles.title, { fontSize: metrics.isDesktop ? 24 : 20 }]}>{mode === 'settings' ? 'Сменить пароль' : 'Вы можете сменить пароль'}</Text>
+            <Pressable onPress={onDismiss} hitSlop={12} accessibilityRole="button" accessibilityLabel="Закрыть">
               <MaterialCommunityIcons name="close" size={24} color={theme.colors.textSecondary} />
             </Pressable>
           </View>
 
           <Text style={styles.description}>
-            Смените пароль сейчас или продолжите работу с временным паролем и сделайте это позже.
+            {mode === 'settings' ? 'Придумайте новый пароль для входа в приложение.' : 'Смените пароль сейчас или продолжите работу с временным паролем и сделайте это позже.'}
           </Text>
 
           <Text style={styles.hint}>Минимум 10 символов: строчная, заглавная, цифра и спецсимвол.</Text>
@@ -154,10 +161,10 @@ export const PasswordChangePromptModal = ({
 
           <View style={styles.actions}>
             <AppButton title="Поменять пароль" onPress={() => void handleSubmit()} loading={loading} />
-            <AppButton title="Оставить" onPress={onDismiss} variant="card" disabled={loading} />
+            <AppButton title={mode === 'settings' ? 'Отмена' : 'Оставить'} onPress={onDismiss} variant="card" disabled={loading} />
           </View>
-        </View>
-      </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };
@@ -171,10 +178,14 @@ const styles = StyleSheet.create({
   card: {
     alignSelf: 'center',
     width: '100%',
+    maxHeight: '100%',
+    flexGrow: 0,
     borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: 'rgba(14, 28, 23, 0.98)',
+  },
+  cardContent: {
     padding: theme.spacing.lg,
     gap: theme.spacing.md,
   },
