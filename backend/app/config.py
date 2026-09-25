@@ -85,6 +85,7 @@ class Settings(BaseSettings):
     courier_default_hours: int = 2
     courier_max_hours: int = 12
     gate_event_poll_enabled: bool = True
+    gate_expiry_cleanup_enabled: bool = True
     gate_event_poll_interval_seconds: float = 10.0
     gate_event_poll_limit: int = 200
     # Total attempts to provision the Gate phone pass when creating a resident before

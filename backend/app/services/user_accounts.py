@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import logging
@@ -300,7 +301,7 @@ async def delete_user_account(
 
     for gate_key_id in sorted(gate_key_ids):
         try:
-            gate_client.remove_key(gate_key_id)
+            await asyncio.to_thread(gate_client.remove_key, gate_key_id)
         except Exception as exc:
             if strict_gate_cleanup:
                 raise UserAccountError(

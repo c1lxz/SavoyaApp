@@ -4968,8 +4968,7 @@ def test_configure_gateterm_phone_access_falls_back_to_db_state_on_lb_error(monk
 
 
 # ---------------------------------------------------------------------------
-# _remove_key_via_gateterm_ui — fast delete: search -> delete -> verify via DB,
-# no user-card round-trip (which used to make deletion take minutes).
+# _remove_key_via_gateterm_ui — verify selection before destructive UI actions.
 # ---------------------------------------------------------------------------
 
 
@@ -5028,18 +5027,17 @@ def _setup_remove_key_mocks(monkeypatch, calls, *, wait_deleted, menu_raises=Fal
     users_window = _FakeDeleteUsersWindow(calls, menu_raises=menu_raises)
 
     monkeypatch.setattr(gate_runtime, "_connect_or_start_gateterm_application", lambda: fake_app)
-    monkeypatch.setattr(gate_runtime, "_prepare_gateterm_users_workspace", lambda app: calls.append("prepare"))
+    monkeypatch.setattr(gate_runtime, "_prepare_gateterm_users_workspace", lambda app, **kwargs: calls.append(("prepare", kwargs)))
     monkeypatch.setattr(gate_runtime, "_open_gateterm_users_view", lambda app: calls.append("open_users") or users_window)
     monkeypatch.setattr(
         gate_runtime,
         "_search_gateterm_user_by_key_number",
         lambda app, window, key: calls.append(("search", key)),
     )
-    # If the card-open helper is ever invoked, record it so the test can fail.
     monkeypatch.setattr(
         gate_runtime,
-        "_open_gateterm_user_edit_window",
-        lambda app, window: calls.append("OPEN_CARD") or object(),
+        "_verify_gateterm_delete_selection",
+        lambda app, window, **kwargs: calls.append(("verify_selection", kwargs["key_id"])),
     )
     monkeypatch.setattr(
         gate_runtime,
@@ -5047,6 +5045,7 @@ def _setup_remove_key_mocks(monkeypatch, calls, *, wait_deleted, menu_raises=Fal
         lambda app, *, timeout_seconds: calls.append("wait_dialog") or object(),
     )
     monkeypatch.setattr(gate_runtime, "_confirm_gateterm_dialog", lambda dialog: calls.append("confirm_dialog"))
+    monkeypatch.setattr(gate_runtime, "_verify_gateterm_delete_confirmation", lambda dialog, **kwargs: calls.append("verify_confirmation"))
     monkeypatch.setattr(gate_runtime, "_confirm_gateterm_message_boxes_if_open", lambda app: calls.append("confirm_boxes"))
     monkeypatch.setattr(gate_runtime, "_close_gateterm_users_window_if_open", lambda app: calls.append("close_users"))
     monkeypatch.setattr(gate_runtime, "_wait_for_gate_user_deleted", wait_deleted)
@@ -5054,7 +5053,25 @@ def _setup_remove_key_mocks(monkeypatch, calls, *, wait_deleted, menu_raises=Fal
     return fake_app, users_window
 
 
-def test_remove_key_via_gateterm_ui_searches_then_deletes_without_opening_card(monkeypatch):
+@pytest.mark.parametrize("internal_number", ["90A000B00000", "9000000000"])
+def test_vehicle_delete_search_uses_plate_instead_of_phone_like_internal_number(monkeypatch, internal_number):
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda cursor, kind: 6 if kind == "Phone" else 3)
+    row = SimpleNamespace(UserPtr=42, KeyType=3, Number="A000AA00", NumberU=internal_number, Phone="+79000000001", Deleted=False)
+    assert gate_runtime._resolve_gateterm_user_search_key(object(), row) == "A000AA00"
+
+
+def test_hexadecimal_internal_number_is_not_a_phone():
+    assert not gate_runtime._looks_like_phone_identity_number("90A000B00000")
+    assert gate_runtime._looks_like_phone_identity_number("79000000000")
+
+
+def test_phone_delete_uses_valid_identity_instead_of_corrupt_number(monkeypatch):
+    monkeypatch.setattr(gate_runtime, "_sample_key_type", lambda cursor, kind: 6 if kind == "Phone" else 3)
+    row = SimpleNamespace(UserPtr=42, KeyType=6, Number="90A000B00000", NumberU="009000000000", Phone="79000000000", Deleted=False)
+    assert gate_runtime._resolve_gateterm_user_search_key(object(), row) == "009000000000"
+
+
+def test_remove_key_via_gateterm_ui_verifies_selection_before_deleting(monkeypatch):
     calls: list = []
 
     def _wait_deleted(user_ptr, *, timeout_seconds):
@@ -5065,12 +5082,9 @@ def test_remove_key_via_gateterm_ui_searches_then_deletes_without_opening_card(m
     result = gate_runtime._remove_key_via_gateterm_ui(key_id=5001, normalized_key_value="A123BC77")
 
     assert result is True
-    # The user card must NOT be opened — that round-trip was the slow part.
-    assert "OPEN_CARD" not in calls, "deletion must not open the user card to re-verify"
-    # Exactly one search, then the delete menu click.
+    assert ("verify_selection", 5001) in calls
     assert [c for c in calls if isinstance(c, tuple) and c[0] == "search"] == [("search", "A123BC77")]
     assert ("delete_menu_click", 2) in calls
-    # Correctness guarantee: confirmed the exact UserPtr was deleted.
     assert ("wait_deleted", 5001) in calls
 
 
@@ -5086,8 +5100,9 @@ def test_remove_key_via_gateterm_ui_order_search_before_delete_before_verify(mon
 
     search_idx = next(i for i, c in enumerate(calls) if isinstance(c, tuple) and c[0] == "search")
     delete_idx = next(i for i, c in enumerate(calls) if isinstance(c, tuple) and c[0] == "delete_menu_click")
+    selection_idx = calls.index(("verify_selection", 42))
     verify_idx = calls.index("wait_deleted")
-    assert search_idx < delete_idx < verify_idx
+    assert search_idx < selection_idx < delete_idx < verify_idx
 
 
 def test_remove_key_via_gateterm_ui_falls_back_to_hotkey_when_menu_click_fails(monkeypatch):
@@ -5167,5 +5182,104 @@ def test_remove_key_via_gateterm_ui_raises_after_all_attempts_fail(monkeypatch):
     with pytest.raises(RuntimeError, match="GateTerm key deletion failed"):
         gate_runtime._remove_key_via_gateterm_ui(key_id=11, normalized_key_value="Q4")
 
-    # Never opened the card on any attempt.
-    assert "OPEN_CARD" not in calls
+    assert calls.count(("verify_selection", 11)) == 3
+
+
+def test_remove_key_refuses_destructive_actions_when_selection_verification_fails(monkeypatch):
+    calls = []
+    _setup_remove_key_mocks(monkeypatch, calls, wait_deleted=lambda *args, **kwargs: calls.append("deleted"))
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("selected key does not match")
+
+    monkeypatch.setattr(gate_runtime, "_verify_gateterm_delete_selection", refuse)
+    with pytest.raises(RuntimeError, match="selected key does not match"):
+        gate_runtime._remove_key_via_gateterm_ui(key_id=42, normalized_key_value="A123BC77")
+    assert not any(isinstance(c, tuple) and c[0] in {"delete_menu_click", "type_keys"} for c in calls)
+    assert "confirm_dialog" not in calls
+    assert "deleted" not in calls
+
+
+def test_remove_key_does_not_confirm_a_different_user(monkeypatch):
+    calls = []
+    _setup_remove_key_mocks(monkeypatch, calls, wait_deleted=lambda *args, **kwargs: calls.append("deleted"))
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("confirmation does not match")
+
+    monkeypatch.setattr(gate_runtime, "_verify_gateterm_delete_confirmation", refuse)
+    with pytest.raises(RuntimeError, match="confirmation does not match"):
+        gate_runtime._remove_key_via_gateterm_ui(key_id=42, normalized_key_value="A123BC77")
+    assert "confirm_dialog" not in calls
+    assert "deleted" not in calls
+
+
+@pytest.mark.parametrize("title,deleted,accept", [("Smith John", False, True), ("Unrelated user", False, False), ("Smith John", True, False)])
+def test_verify_gateterm_delete_confirmation(monkeypatch, title, deleted, accept):
+    row = SimpleNamespace(LastName="Smith", FirstName="John", FatherName=None, Deleted=deleted)
+    calls = []
+
+    class Cursor:
+        def execute(self, sql, params):
+            assert params == (42,)
+            return self
+
+        def fetchone(self):
+            return row
+
+    @contextmanager
+    def readonly():
+        yield object(), Cursor()
+
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", readonly)
+    monkeypatch.setattr(gate_runtime, "_click_gateterm_dialog_button", lambda dialog, *ids: calls.append(ids) or True)
+    dialog = SimpleNamespace(window_text=lambda: title)
+    if accept:
+        gate_runtime._verify_gateterm_delete_confirmation(dialog, key_id=42)
+        assert calls == []
+    else:
+        with pytest.raises(RuntimeError, match="confirmation does not match"):
+            gate_runtime._verify_gateterm_delete_confirmation(dialog, key_id=42)
+        assert calls == [(7, 2)]
+
+
+@pytest.mark.parametrize("selected_key,live,identity,matches,error", [
+    ("wrong", True, "A123BC77", [42], "selected key does not match"),
+    ("", True, "A123BC77", [42], "selected key does not match"),
+    ("A123BC77", False, "A123BC77", [42], "no longer live"),
+    ("A123BC77", True, "different", [42], "identity changed"),
+    ("A123BC77", True, "A123BC77", [42, 99], "ambiguous"),
+    ("A123BC77", True, "A123BC77", [99], "ambiguous"),
+    ("A123BC77", True, "A123BC77", [42], None),
+])
+def test_verify_gateterm_delete_selection(monkeypatch, selected_key, live, identity, matches, error):
+    calls = []
+    row = SimpleNamespace(UserPtr=42, Number="A123BC77", NumberU="00001234", Deleted=False) if live else None
+
+    class Cursor:
+        def execute(self, sql, params):
+            calls.append((sql, params))
+            return self
+
+        def fetchone(self):
+            return row
+
+        def fetchall(self):
+            return [SimpleNamespace(UserPtr=value) for value in matches]
+
+    @contextmanager
+    def readonly():
+        yield object(), Cursor()
+
+    monkeypatch.setattr(gate_runtime, "_open_gateterm_user_edit_window", lambda *args: object())
+    monkeypatch.setattr(gate_runtime, "_visible_gateterm_control_by_id", lambda *args: SimpleNamespace(window_text=lambda: selected_key))
+    monkeypatch.setattr(gate_runtime, "_close_gateterm_user_edit_window_if_open", lambda app: calls.append("close_editor"))
+    monkeypatch.setattr(gate_runtime, "_readonly_cursor", readonly)
+    monkeypatch.setattr(gate_runtime, "_resolve_gateterm_user_search_key", lambda *args: identity)
+
+    if error:
+        with pytest.raises(RuntimeError, match=error):
+            gate_runtime._verify_gateterm_delete_selection(object(), object(), key_id=42, normalized_key_value="A123BC77")
+    else:
+        gate_runtime._verify_gateterm_delete_selection(object(), object(), key_id=42, normalized_key_value="A123BC77")
+    assert calls[-1] == "close_editor"
