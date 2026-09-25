@@ -6,6 +6,9 @@
     "icon": "./assets/app-icon.png",
     "orientation": "default",
     "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0B1D16"
+    },
     "assetBundlePatterns": [
       "**/*"
     ],
