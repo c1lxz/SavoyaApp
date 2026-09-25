@@ -1,4 +1,6 @@
 const MOSCOW_TIMEZONE = 'Europe/Moscow';
+// Moscow has used UTC+3 without seasonal clock changes since 2014.
+const MOSCOW_OFFSET_HOURS = 3;
 const DATE_INPUT_PATTERN = /^(\d{2})\.(\d{2})\.(\d{4})$/;
 
 export const formatDate = (input: string | number | Date): string => {
@@ -25,15 +27,19 @@ export const formatDateTime = (input: string | number | Date): string => {
 
 export const addDays = (input: string | number | Date, days: number): Date => {
   const date = new Date(input);
-  date.setDate(date.getDate() + days);
+  // These are Moscow display dates; device daylight-saving transitions must not
+  // change the duration or move the resulting Moscow date.
+  date.setUTCDate(date.getUTCDate() + days);
   return date;
 };
 
-export const endOfDay = (input: string | number | Date): Date => {
-  const date = new Date(input);
-  date.setHours(23, 59, 59, 999);
-  return date;
-};
+// The picker and parseDateInput use local Date fields as calendar values, not
+// instants. Interpret those fields in the village timezone when creating a pass.
+export const endOfMoscowDay = (date: Date): Date =>
+  new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 23 - MOSCOW_OFFSET_HOURS, 59, 59, 999));
+
+export const formatCalendarDate = (date: Date): string =>
+  `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}.${date.getFullYear()}`;
 
 export const formatDateInput = (value: string): string => {
   const digits = value.replace(/\D/g, '').slice(0, 8);
@@ -74,5 +80,5 @@ export const parseDateInput = (value: string): Date | null => {
 };
 
 export const toIsoDate = (date: Date): string => {
-  return endOfDay(date).toISOString();
+  return endOfMoscowDay(date).toISOString();
 };

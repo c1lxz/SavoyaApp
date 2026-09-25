@@ -16,7 +16,7 @@ import { usePassesStore } from '@/store/passesStore';
 import { theme } from '@/theme';
 import { PassPurpose } from '@/types';
 import { goBackOrHome } from '@/utils/backNavigation';
-import { addDays, endOfDay, formatDate, formatDateInput, formatDateTime, parseDateInput, toIsoDate } from '@/utils/date';
+import { addDays, endOfMoscowDay, formatCalendarDate, formatDate, formatDateInput, formatDateTime, parseDateInput, toIsoDate } from '@/utils/date';
 import { getLayoutMetrics } from '@/utils/layout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CreatePass'>;
@@ -55,8 +55,8 @@ export const CreatePassScreen = ({ navigation }: Props) => {
   const [draftLoaded, setDraftLoaded] = useState(false);
 
   const parsedExpiresAt = parseDateInput(expiresAtInput);
-  const actualExpiresAtPreview = parsedExpiresAt ? endOfDay(parsedExpiresAt) : null;
-  const displayedPassDatePreview = parsedExpiresAt ? addDays(parsedExpiresAt, 1) : null;
+  const actualExpiresAtPreview = parsedExpiresAt ? endOfMoscowDay(parsedExpiresAt) : null;
+  const displayedPassDatePreview = actualExpiresAtPreview ? addDays(actualExpiresAtPreview, 1) : null;
 
   useEffect(() => {
     let isCancelled = false;
@@ -100,7 +100,7 @@ export const CreatePassScreen = ({ navigation }: Props) => {
   };
 
   const onDatePicked = (value: Date) => {
-    setExpiresAtInput(formatDate(value));
+    setExpiresAtInput(formatCalendarDate(value));
     setShowPicker(false);
     if (formError) {
       setFormError(null);
