@@ -35,6 +35,7 @@ import {
   NEWS_TEXT_LIMIT,
   NewsDraft,
   newsError,
+  newsDraftContentKey,
   newsUrl,
   pickNewsWebFiles,
   PublicationError,
@@ -105,6 +106,7 @@ export const NewsEditorScreen = ({
     requestId,
     pendingPayload,
   };
+  const draftContentKey = newsDraftContentKey(draftSnapshot.current);
 
   const persist = useCallback(
     (draft: NewsDraft) => {
@@ -198,7 +200,7 @@ export const NewsEditorScreen = ({
     }, 400);
     autosaveTimer.current = timer;
     return () => clearTimeout(timer);
-  }, [text, attachments, requestId, pendingPayload, loaded, postId, persist]);
+  }, [draftContentKey, loaded, postId, persist]);
 
   useEffect(
     () =>
@@ -549,9 +551,9 @@ export const NewsEditorScreen = ({
                 {pendingPayload ? (
                   <View style={styles.noticeBox}>
                     <Text style={styles.notice}>
-                      Публикация отправлена, но ответ ещё не подтверждён.
-                      Нажмите «Повторить публикацию», чтобы проверить результат.
-                      Текст и вложения сохранены; повторная новость не появится.
+                      Не удалось подтвердить публикацию. Нажмите «Повторить
+                      публикацию», чтобы проверить результат. Текст и вложения
+                      сохранены; повторная новость не появится.
                     </Text>
                   </View>
                 ) : null}

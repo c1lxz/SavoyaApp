@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from uuid import uuid4
+from types import SimpleNamespace
 
+import httpx
 import pytest
 from PIL import Image
 from sqlalchemy import delete, select, update
@@ -16,6 +19,7 @@ from backend.app.models import User
 from backend.app.news_models import NewsDevice, NewsMedia, NewsNotification, NewsPost, utcnow
 from backend.app.routers import news
 from backend.app.services import news_media
+from backend.app.services import news_notifications
 from backend.app.services.news_notifications import PushFailure, process_outbox_once
 from backend.app.utils.jwt import create_access_token, decode_token
 
@@ -321,3 +325,180 @@ def test_saved_draft_media_refresh_permissions_and_expiry(setup, monkeypatch):
     client.delete(f"/api/news/{post['id']}?version=1", headers=admin)
     assert client.get(live_route, headers=admin).status_code == 404
     assert upload(client, admin).status_code == 201  # Deleted post media must not consume draft quota.
+
+
+def test_post_content_limits_and_media_only_publication(setup):
+    client, admin, resident, _other = setup
+    assert publish(client, admin, text=" \n\t").status_code == 422
+    assert publish(client, admin, text="x" * 20001).status_code == 422
+    assert publish(client, admin, text="x" * 20000).status_code == 201
+    media = [upload(client, admin, name=f"{i}.txt", data=str(i).encode()).json() for i in range(11)]
+    ids = [item["id"] for item in media]
+    assert publish(client, admin, text="", ids=ids).status_code == 422
+    assert publish(client, admin, ids=[ids[0], ids[0]]).status_code == 422
+    assert publish(client, admin, ids=["../file"]).status_code == 422
+    result = publish(client, admin, text="", ids=ids[:10])
+    assert result.status_code == 201
+    post = client.get(f"/api/news/{result.json()['id']}", headers=resident).json()
+    assert post["text"] == "" and [item["id"] for item in post["media"]] == ids[:10]
+    assert client.get("/api/news?limit=21", headers=resident).status_code == 422
+    assert client.get("/api/news?before_id=0", headers=resident).status_code == 422
+
+
+def test_failed_publication_and_edit_roll_back_all_changes(setup):
+    client, admin, resident, other = setup
+    client.post("/api/news/devices", headers=resident, json={"token": "rollback-device"})
+    owned = upload(client, admin).json()
+    foreign = upload(client, other).json()
+    assert publish(client, admin, ids=[owned["id"], foreign["id"]]).status_code == 409
+    assert client.get("/api/news", headers=resident).json() == {"items": [], "next_cursor": None}
+    assert run(notifications()) == []
+    initial = publish(client, admin, text="Исходная версия", ids=[owned["id"]]).json()
+    new_media = upload(client, admin).json()
+    failed = client.put(f"/api/news/{initial['id']}", headers=admin, json={
+        "text": "Эта правка не должна сохраниться", "version": 1,
+        "media_ids": [new_media["id"], foreign["id"]],
+    })
+    assert failed.status_code == 409
+    preserved = client.get(f"/api/news/{initial['id']}", headers=resident).json()
+    assert preserved["text"] == initial["text"] and preserved["version"] == 1
+    assert [item["id"] for item in preserved["media"]] == [owned["id"]]
+    assert client.get(owned["url"]).status_code == 200
+    assert publish(client, admin, ids=[new_media["id"]]).status_code == 201
+    assert publish(client, other, ids=[foreign["id"]]).status_code == 201
+    assert len(run(notifications())) == 3  # Failed writes produced no notification jobs.
+
+
+def test_simultaneous_edits_preserve_one_complete_winner(setup):
+    client, admin, resident, other = setup
+    post = publish(client, admin).json()
+    attempts = [(admin, "Правка А"), (other, "Правка Б")]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda edit: client.put(f"/api/news/{post['id']}", headers=edit[0],
+                                                       json={"text": edit[1], "version": 1}), attempts))
+    assert sorted(response.status_code for response in results) == [200, 409]
+    winner = next(response.json() for response in results if response.status_code == 200)
+    stored = client.get(f"/api/news/{post['id']}", headers=resident).json()
+    assert stored["text"] == winner["text"] and stored["version"] == 2
+
+
+def test_exact_upload_limit_multiple_parts_and_signed_scope(setup, monkeypatch):
+    client, admin, _resident, _other = setup
+    monkeypatch.setattr(news.settings, "news_max_upload_bytes", 2048)
+    accepted = upload(client, admin, name="exact.bin", data=b"x" * 2048).json()
+    assert accepted["size_bytes"] == 2048
+    assert upload(client, admin, data=b"x" * 2049).status_code == 413
+    multiple = client.post("/api/news/media", headers=admin,
+                           files=[("file", ("a.txt", b"a")), ("file", ("b.txt", b"b"))])
+    assert multiple.status_code == 400
+    assert len(list(news_media.media_path(accepted["id"]).parent.glob("*.blob"))) == 1
+    url = accepted["url"]
+    for byte_range in ("bytes=", "bytes=-0", "bytes=5-2", "bytes=0-1,4-5", "bytes=" + "9" * 5000 + "-", "items=0-1"):
+        response = client.get(url, headers={"Range": byte_range})
+        assert response.status_code == 416 and response.headers["content-range"] == "bytes */2048"
+    tampered = url[:-1] + ("1" if url[-1] != "1" else "2")
+    assert client.get(tampered).status_code == 403
+    assert client.get(url.replace("/content?", "/thumbnail?")).status_code == 403
+
+
+@pytest.mark.parametrize("invalidation", ["blocked_user", "expired_post", "expired_device"])
+def test_queued_push_rechecks_access_and_age_before_sending(setup, invalidation):
+    client, admin, resident, _other = setup
+    client.post("/api/news/devices", headers=resident, json={"token": "guarded-queue-device"})
+    post = publish(client, admin).json()
+    user_id = int(decode_token(resident["Authorization"].split(" ")[1])["sub"])
+
+    async def invalidate():
+        async with SessionLocal() as session:
+            if invalidation == "blocked_user":
+                await session.execute(update(User).where(User.id == user_id).values(is_active=False))
+            elif invalidation == "expired_post":
+                await session.execute(update(NewsPost).where(NewsPost.id == post["id"]).values(created_at=utcnow() - timedelta(days=2)))
+            else:
+                await session.execute(update(NewsDevice).values(updated_at=utcnow() - timedelta(days=31)))
+            await session.commit()
+
+    run(invalidate())
+    sender = FakeSender()
+    run(process_outbox_once(sender))
+    assert sender.calls == [] and run(notifications())[0].status == "cancelled"
+
+
+def test_device_account_switch_cancels_previous_queue_and_old_logout_is_harmless(setup):
+    client, admin, resident, other = setup
+    token = "shared-installation-token"
+    client.post("/api/news/devices", headers=resident, json={"token": token})
+    publish(client, admin)
+    client.post("/api/news/devices", headers=other, json={"token": token})
+    assert run(notifications())[0].status == "cancelled"
+    client.request("DELETE", "/api/news/devices", headers=resident, json={"token": token})
+    new_post = publish(client, admin).json()
+    sender = FakeSender()
+    assert run(process_outbox_once(sender)) == 1
+    assert sender.calls == [(token, new_post["id"])]
+
+
+def test_worker_recovers_expired_lease_and_stops_after_retry_budget(setup):
+    client, admin, resident, _other = setup
+    client.post("/api/news/devices", headers=resident, json={"token": "recoverable-device"})
+    publish(client, admin)
+
+    async def change_job(**values):
+        async with SessionLocal() as session:
+            latest_id = await session.scalar(select(NewsNotification.id).order_by(NewsNotification.id.desc()).limit(1))
+            await session.execute(update(NewsNotification).where(NewsNotification.id == latest_id).values(**values))
+            await session.commit()
+
+    run(change_job(status="sending", lease_id="a" * 32, next_attempt_at=utcnow() + timedelta(minutes=1)))
+    sender = FakeSender()
+    assert run(process_outbox_once(sender)) == 0  # A still-running worker owns the lease.
+    run(change_job(next_attempt_at=utcnow() - timedelta(seconds=1)))
+    assert run(process_outbox_once(sender)) == 1 and len(sender.calls) == 1
+    assert run(notifications())[0].status == "sent"
+    publish(client, admin)
+    run(change_job(attempts=11))
+    failed_sender = FakeSender(failure=PushFailure("fcm_transport_unknown"))
+    assert run(process_outbox_once(failed_sender)) == 1
+    failed = run(notifications())[-1]
+    assert failed.status == "failed" and failed.attempts == 12 and failed.sent_at is None
+    assert run(process_outbox_once(failed_sender)) == 0
+
+
+@pytest.mark.parametrize("status,error_code,expected", [
+    (200, None, None), (404, "UNREGISTERED", "fcm_unregistered"),
+    (403, "SENDER_ID_MISMATCH", "fcm_sender_mismatch"), (503, None, "fcm_http_503"),
+    (0, None, "fcm_transport_unknown"),
+])
+def test_fcm_transport_payload_privacy_and_provider_errors(setup, monkeypatch, status, error_code, expected):
+    _client, _admin, _resident, _other = setup
+    captured = []
+    original_client = httpx.AsyncClient
+
+    def respond(request):
+        captured.append(json.loads(request.content))
+        if status == 0:
+            raise httpx.ReadTimeout("Synthetic uncertain transport", request=request)
+        if status == 200:
+            return httpx.Response(200, json={"name": "projects/test/messages/accepted"})
+        details = [{"@type": "type.googleapis.com/google.firebase.fcm.v1.FcmError", "errorCode": error_code}] if error_code else []
+        return httpx.Response(status, json={"error": {"details": details}})
+
+    monkeypatch.setattr(news.settings, "news_fcm_service_account_file", "configured-test-only")
+    monkeypatch.setattr(news_notifications.httpx, "AsyncClient", lambda **kwargs: original_client(transport=httpx.MockTransport(respond), **kwargs))
+    sender = news_notifications.FcmSender()
+    sender.credentials = SimpleNamespace(valid=True, token="local-test-oauth", project_id="test-project")
+    private_text = "PRIVATE CONTENT MUST NOT APPEAR ON LOCK SCREEN"
+    post = NewsPost(id=42, text=private_text)
+    if expected:
+        with pytest.raises(PushFailure) as caught:
+            run(sender.send("local-test-device", post))
+        assert caught.value.code == expected
+        assert caught.value.invalid_token is (error_code == "UNREGISTERED")
+        assert caught.value.permanent is (error_code in {"UNREGISTERED", "SENDER_ID_MISMATCH"})
+    else:
+        run(sender.send("local-test-device", post))
+    message = captured[0]["message"]
+    assert private_text not in json.dumps(message)
+    assert message["data"] == {"screen": "news", "news_id": "42"}
+    assert message["android"]["notification"]["channel_id"] == "news"
+    assert message["android"]["notification"]["tag"] == "news-42"

@@ -21,7 +21,12 @@ import { ResizeMode, Video } from "expo-av";
 import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { downloadNewsAttachment } from "@/components/news/newsDownload";
-import { formatFileSize, newsError, newsUrl } from "@/services/newsService";
+import {
+  formatFileSize,
+  newsError,
+  newsUrl,
+  newsViewerSource,
+} from "@/services/newsService";
 import { theme } from "@/theme";
 import { NewsMedia, NewsPost } from "@/types/news";
 
@@ -124,6 +129,10 @@ const PhotoViewer = ({
           data={photos}
           horizontal
           pagingEnabled
+          initialNumToRender={1}
+          maxToRenderPerBatch={1}
+          windowSize={3}
+          extraData={index}
           showsHorizontalScrollIndicator={false}
           initialScrollIndex={initialIndex}
           keyExtractor={(item) => String(item.id)}
@@ -135,25 +144,42 @@ const PhotoViewer = ({
           onMomentumScrollEnd={(event) =>
             setIndex(Math.round(event.nativeEvent.contentOffset.x / width))
           }
-          renderItem={({ item }) => (
-            <ScrollView
-              maximumZoomScale={3}
-              minimumZoomScale={1}
-              centerContent
-              contentContainerStyle={{
-                width,
-                height: Math.max(160, height - 190),
-                justifyContent: "center",
-              }}
-            >
-              <Image
-                accessibilityLabel={item.name}
-                source={{ uri: newsUrl(item.url) }}
-                resizeMode="contain"
-                style={{ width, height: Math.max(160, height - 190) }}
-              />
-            </ScrollView>
-          )}
+          renderItem={({ item, index: photoIndex }) => {
+            const source = newsViewerSource(item, photoIndex === index);
+            return (
+              <ScrollView
+                maximumZoomScale={3}
+                minimumZoomScale={1}
+                centerContent
+                contentContainerStyle={{
+                  width,
+                  height: Math.max(160, height - 190),
+                  justifyContent: "center",
+                }}
+              >
+                {source ? (
+                  <Image
+                    accessibilityLabel={item.name}
+                    source={{ uri: newsUrl(source) }}
+                    resizeMode="contain"
+                    resizeMethod={Platform.OS === "web" ? "auto" : "resize"}
+                    style={{ width, height: Math.max(160, height - 190) }}
+                  />
+                ) : (
+                  <View
+                    style={{
+                      width,
+                      height: Math.max(160, height - 190),
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <ActivityIndicator color={theme.colors.textPrimary} />
+                  </View>
+                )}
+              </ScrollView>
+            );
+          }}
         />
         <View style={styles.viewerFooter}>
           <Pressable

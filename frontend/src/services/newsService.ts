@@ -121,6 +121,12 @@ export const uploadNewsFile = (
   onProgress: (value: number) => void,
 ) => {
   const xhr = new XMLHttpRequest();
+  let reportedProgress = -1;
+  const reportProgress = (value: number) => {
+    if (value <= reportedProgress) return;
+    reportedProgress = value;
+    onProgress(value);
+  };
   const promise = new Promise<NewsMedia>((resolve, reject) => {
     if (file.size && file.size > NEWS_FILE_LIMIT) {
       reject(new Error("Файл больше 100 МБ"));
@@ -144,9 +150,12 @@ export const uploadNewsFile = (
     xhr.setRequestHeader("Authorization", `Bearer ${getAccessToken() || ""}`);
     xhr.timeout = 10 * 60 * 1000;
     xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable)
-        onProgress(
-          Math.min(99, Math.round((event.loaded / event.total) * 100)),
+      if (event.lengthComputable && event.total > 0)
+        reportProgress(
+          Math.max(
+            0,
+            Math.min(99, Math.round((event.loaded / event.total) * 100)),
+          ),
         );
     };
     xhr.onload = () => {
@@ -165,7 +174,7 @@ export const uploadNewsFile = (
       }
       try {
         const media = JSON.parse(xhr.responseText) as NewsMedia;
-        onProgress(100);
+        reportProgress(100);
         resolve(media);
       } catch {
         reject(
@@ -191,6 +200,20 @@ export type NewsDraft = {
   requestId: string;
   pendingPayload?: NewsPayload;
 };
+// Transport progress and renewed signed URLs do not change an author's draft.
+export const newsDraftContentKey = (draft: NewsDraft) =>
+  JSON.stringify({
+    text: draft.text,
+    media_ids: draft.media.map((media) => media.id),
+    requestId: draft.requestId,
+    pendingPayload: draft.pendingPayload,
+  });
+
+// Adjacent gallery pages must never eagerly download the original attachment.
+export const newsViewerSource = (
+  media: NewsMedia,
+  active: boolean,
+): string | null => (active ? media.url : media.thumbnail_url);
 const draftKey = (userId: string | number) => `savoya:news-draft:v1:${userId}`;
 export const loadNewsDraft = async (
   userId: string | number,
