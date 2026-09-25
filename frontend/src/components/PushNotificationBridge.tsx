@@ -1,7 +1,10 @@
 import { useEffect } from "react";
 import { AppState, Platform } from "react-native";
 import { navigationRef } from "@/navigation/RootNavigator";
-import { beginNewsNotificationSession, registerNewsNotifications } from "@/services/newsNotifications";
+import {
+  beginNewsNotificationSession,
+  registerNewsNotifications,
+} from "@/services/newsNotifications";
 import { useAuthStore } from "@/store/authStore";
 
 let handledResponse: string | null = null;
@@ -10,9 +13,13 @@ export const PushNotificationBridge = () => {
   const requiresProfile = useAuthStore(
     (state) => state.requiresProfileCompletion,
   );
+  // Completing a profile rebuilds navigation listeners, not the auth session.
+  // Keep any in-flight permission/token request valid across that transition.
+  useEffect(() => {
+    if (Platform.OS === "android" && userId) beginNewsNotificationSession();
+  }, [userId]);
   useEffect(() => {
     if (Platform.OS !== "android" || !userId) return;
-    beginNewsNotificationSession();
     let cancelled = false;
     let responseSubscription: { remove(): void } | undefined;
     let tokenSubscription: { remove(): void } | undefined;

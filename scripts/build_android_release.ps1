@@ -7,7 +7,8 @@ foreach ($settingName in @('SAVOYA_RELEASE_STORE_FILE', 'SAVOYA_RELEASE_STORE_PA
     if (-not [Environment]::GetEnvironmentVariable($settingName)) { throw "Missing environment setting: $settingName" }
 }
 if (-not (Test-Path -LiteralPath $env:SAVOYA_RELEASE_STORE_FILE -PathType Leaf)) { throw 'Signing keystore does not exist.' }
-if (-not $AllowWithoutPush) { $env:SAVOYA_REQUIRE_PUSH = 'true' }
+$env:SAVOYA_BUILD_VARIANT = 'production'
+$env:SAVOYA_REQUIRE_PUSH = if ($AllowWithoutPush) { 'false' } else { 'true' }
 $env:EXPO_PUBLIC_USE_REAL_API = 'true'
 $env:EXPO_PUBLIC_API_BASE_URL = 'https://ipksavoya.ru'
 Push-Location $frontendRoot
