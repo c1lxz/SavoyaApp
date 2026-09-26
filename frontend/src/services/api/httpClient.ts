@@ -8,6 +8,12 @@ type RequestOptions = {
   timeoutMs?: number;
 };
 
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+  }
+}
+
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 const IS_WEB = Platform.OS === 'web';
 const DEFAULT_REQUEST_TIMEOUT_MS = 45000;
@@ -132,7 +138,7 @@ export const apiRequest = async <T>(path: string, options: RequestOptions = {}):
       await setAccessToken(null);
       await unauthorizedHandler?.();
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
 
   if (response.status === 204) {

@@ -15,6 +15,7 @@ import { AppBackground } from "@/components/AppBackground";
 import { NewsPostCard } from "@/components/news/NewsPostCard";
 import { NewsState, newsStyles as styles } from "@/components/news/NewsState";
 import { ConfirmNewsDelete } from "@/components/news/ConfirmNewsDelete";
+import { ApiError } from "@/services/api/httpClient";
 import { MainTabScreenProps } from "@/navigation/types";
 import {
   deleteNews,
@@ -31,13 +32,19 @@ export const NewsScreen = ({
   route,
 }: MainTabScreenProps<"News">) => {
   const admin = useAuthStore((state) => state.user?.isAdmin);
-  const [post, setPost] = useState<NewsPost | null>(null);
+  const targetId = route.params?.postId;
+  const [loaded, setLoaded] = useState<{
+    targetId: number | undefined;
+    post: NewsPost | null;
+  } | null>(null);
+  // A notification can change the target before its request finishes. Never
+  // render the previous target's card under the new publication route.
+  const post = loaded?.targetId === targetId ? loaded?.post ?? null : null;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const generation = useRef(0);
-  const targetId = route.params?.postId;
   const load = useCallback(async () => {
     const current = ++generation.current;
     setLoading(true);
@@ -46,9 +53,14 @@ export const NewsScreen = ({
       const result = targetId
         ? await getNewsPost(targetId)
         : (await getNews(1)).items[0] || null;
-      if (current === generation.current) setPost(result);
+      if (current === generation.current) setLoaded({ targetId, post: result });
     } catch (reason) {
-      if (current === generation.current) setError(newsError(reason));
+      if (current === generation.current) {
+        if (reason instanceof ApiError && (reason.status === 403 || reason.status === 404)) {
+          setLoaded(null);
+        }
+        setError(newsError(reason));
+      }
     } finally {
       if (current === generation.current) setLoading(false);
     }
@@ -74,7 +86,7 @@ export const NewsScreen = ({
     setError(null);
     try {
       await deleteNews(post);
-      setPost(null);
+      setLoaded(null);
       if (targetId) navigation.setParams({ postId: undefined });
       else await load();
     } catch (reason) {
@@ -187,7 +199,7 @@ export const NewsScreen = ({
             <Pressable
               accessibilityRole="button"
               onPress={() => {
-                setPost(null);
+                setLoaded(null);
                 navigation.setParams({ postId: undefined });
               }}
               style={styles.archive}

@@ -133,6 +133,18 @@ export const registerNewsNotifications = (
         update("denied");
         return;
       }
+      // Android preserves the user's channel settings. The object returned by
+      // setNotificationChannelAsync describes the requested defaults, so read
+      // the stored channel before claiming that news alerts are enabled.
+      const channel = await within(
+        Notifications.getNotificationChannelAsync("news"),
+        NATIVE_TIMEOUT_MS,
+      );
+      if (!isCurrent()) return;
+      if (channel?.importance === Notifications.AndroidImportance.NONE) {
+        update("denied");
+        return;
+      }
       const deviceToken = (
         await within(Notifications.getDevicePushTokenAsync(), NATIVE_TIMEOUT_MS)
       ).data;

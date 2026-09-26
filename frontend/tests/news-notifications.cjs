@@ -34,7 +34,8 @@ function fixture(options = {}) {
   const timers = new Map(),
     requests = [],
     stored = new Map(),
-    states = [];
+    states = [],
+    permissionRequests = [];
   const fakeSetTimeout = (callback, delay) => {
     const id = ++timerId;
     timers.set(id, { at: clock + delay, callback });
@@ -52,10 +53,14 @@ function fixture(options = {}) {
     },
   };
   const native = {
-    AndroidImportance: { DEFAULT: 3 },
-    setNotificationChannelAsync: options.channel || (async () => {}),
-    getPermissionsAsync: async () => ({ granted: true, canAskAgain: true }),
-    requestPermissionsAsync: async () => ({ granted: true, canAskAgain: true }),
+    AndroidImportance: { NONE: 0, DEFAULT: 3 },
+    setNotificationChannelAsync: options.channel || (async () => ({ importance: 3 })),
+    getNotificationChannelAsync: options.storedChannel || (async () => ({ importance: 3 })),
+    getPermissionsAsync: options.permission || (async () => ({ granted: true, canAskAgain: true })),
+    requestPermissionsAsync: async () => {
+      permissionRequests.push(true);
+      return options.requestedPermission || { granted: true, canAskAgain: true };
+    },
     getDevicePushTokenAsync:
       options.nativeToken || (async () => ({ data: "native-device-a" })),
     unregisterForNotificationsAsync: options.unregister || (async () => {}),
@@ -107,6 +112,7 @@ function fixture(options = {}) {
     requests,
     stored,
     states,
+    permissionRequests,
     setAccessToken(value) {
       accessToken = value;
     },
@@ -277,8 +283,49 @@ async function main() {
     );
     assert.equal(f.api.getNotificationStatus(), "enabled");
   }
+  {
+    let importance = 3;
+    const f = fixture({ storedChannel: async () => ({ importance }) });
+    f.api.beginNewsNotificationSession();
+    await f.api.registerNewsNotifications();
+    assert.equal(f.api.getNotificationStatus(), "enabled");
+    importance = 0; // The OS permission stays granted; only this channel is off.
+    await f.api.registerNewsNotifications(true);
+    assert.equal(f.api.getNotificationStatus(), "denied");
+    assert.equal(f.requests.filter((r) => r.method === "POST").length, 1);
+    assert.equal(f.permissionRequests.length, 0, "channel settings need Android settings, not another permission prompt");
+    importance = 2;
+    await f.api.registerNewsNotifications();
+    assert.equal(f.api.getNotificationStatus(), "enabled", "returning from settings recovers registration");
+    assert.equal(f.requests.filter((r) => r.method === "POST").length, 2);
+  }
+  for (const importance of [1, 2, 3, 4, 5, null]) {
+    const f = fixture({
+      storedChannel: async () => importance === null ? null : { importance },
+    });
+    f.api.beginNewsNotificationSession();
+    await f.api.registerNewsNotifications();
+    assert.equal(f.api.getNotificationStatus(), "enabled", `allowed importance ${importance}, including pre-channel Android`);
+    assert.equal(f.requests.filter((r) => r.method === "POST").length, 1);
+  }
+  for (const permissionCase of [
+    { canAskAgain: false, request: true, expectedRequests: 0, enabled: false },
+    { canAskAgain: true, request: false, expectedRequests: 0, enabled: false },
+    { canAskAgain: true, request: true, expectedRequests: 1, enabled: true },
+    { canAskAgain: true, request: true, expectedRequests: 1, enabled: false },
+  ]) {
+    const f = fixture({
+      permission: async () => ({ granted: false, canAskAgain: permissionCase.canAskAgain }),
+      requestedPermission: { granted: permissionCase.enabled, canAskAgain: true },
+    });
+    f.api.beginNewsNotificationSession();
+    await f.api.registerNewsNotifications(permissionCase.request);
+    assert.equal(f.permissionRequests.length, permissionCase.expectedRequests);
+    assert.equal(f.api.getNotificationStatus(), permissionCase.enabled ? "enabled" : "denied");
+    assert.equal(f.requests.filter((r) => r.method === "POST").length, permissionCase.enabled ? 1 : 0);
+  }
   console.log(
-    "PASS 6 notification service scenarios: bounded hung-GMS logout and late native result; late POST compensation; account isolation; in-flight request reuse; native timeout; queued storage ordering",
+    "PASS 17 notification service scenarios: 6 session/timeout races; channel blocked/re-enabled; 6 permitted/legacy channel levels; 4 permission-prompt decisions",
   );
 }
 main().catch((error) => {

@@ -34,6 +34,7 @@ certificate*.key
 frontend/android/
 frontend/google-services.json
 **/*service-account*.json
+**/*firebase-adminsdk*.json
 *.jks
 *.keystore
 news_uploads/
