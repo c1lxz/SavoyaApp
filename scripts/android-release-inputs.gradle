@@ -1,0 +1,27 @@
+// Expo SDK 51 caches app.config without declaring its environment/config inputs.
+// React Native's release JS task also needs the environment when switching builds.
+gradle.projectsEvaluated {
+    def frontendDirectory = rootProject.projectDir.parentFile
+    def configFiles = ['app.json', 'app.config.js'].collect {
+        new File(frontendDirectory, it)
+    }
+    def firebasePath = System.getenv('SAVOYA_GOOGLE_SERVICES_FILE')
+    def firebaseConfig = firebasePath ? new File(firebasePath) : new File(frontendDirectory, 'google-services.json')
+    if (!firebaseConfig.isAbsolute()) {
+        firebaseConfig = new File(frontendDirectory, firebasePath)
+    }
+    // Track creation/removal as well as updates to an existing Android config.
+    def firebaseInputs = firebaseConfig.isFile() ? [firebaseConfig] : []
+    rootProject.allprojects { project ->
+        project.tasks.configureEach { task ->
+            if (task.name in ['createExpoConfig', 'createBundleReleaseJsAndAssets']) {
+                ['SAVOYA_BUILD_VARIANT', 'SAVOYA_REQUIRE_PUSH', 'SAVOYA_GOOGLE_SERVICES_FILE',
+                 'EXPO_PUBLIC_API_BASE_URL', 'EXPO_PUBLIC_SITE_ORIGIN', 'EXPO_PUBLIC_USE_REAL_API', 'NODE_ENV', 'EXPO_NO_DOTENV'].each { setting ->
+                    task.inputs.property("savoya.${setting}", System.getenv(setting) ?: '')
+                }
+                task.inputs.files(configFiles).withPropertyName('savoyaAppConfig')
+                task.inputs.files(firebaseInputs).withPropertyName('savoyaFirebaseConfig')
+            }
+        }
+    }
+}
