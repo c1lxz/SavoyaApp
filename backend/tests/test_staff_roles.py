@@ -26,6 +26,19 @@ def initialized_app(client):
     return client
 
 
+def test_staff_role_update_cors_preflight(client):
+    from backend.app.main import settings
+    origin = settings.cors_allow_origins[0]
+    response = client.options('/api/admin/users/1/role', headers={
+        'Origin': origin,
+        'Access-Control-Request-Method': 'PATCH',
+        'Access-Control-Request-Headers': 'authorization,content-type',
+    })
+    assert response.status_code == 200
+    assert response.headers['access-control-allow-origin'] == origin
+    assert 'PATCH' in response.headers['access-control-allow-methods'].split(', ')
+
+
 def account(role: str | None = None, *, legacy: bool = False) -> tuple[int, dict[str, str]]:
     async def create():
         async with SessionLocal() as session:
