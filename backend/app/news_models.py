@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, ForeignKeyConstraint, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -66,3 +66,40 @@ class NewsNotification(Base):
     lease_id: Mapped[str | None] = mapped_column(String(32))
     last_error: Mapped[str | None] = mapped_column(String(100))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class NewsPoll(Base):
+    __tablename__ = "news_polls"
+    # One optional poll per post, without changing any existing news columns.
+    id: Mapped[int] = mapped_column(ForeignKey("news_posts.id", ondelete="CASCADE"), primary_key=True)
+    question: Mapped[str] = mapped_column(String(300))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class NewsPollOption(Base):
+    __tablename__ = "news_poll_options"
+    __table_args__ = (
+        UniqueConstraint("id", "poll_id", name="uq_news_poll_option_parent"),
+        # A stale client must not vote for a new answer reusing an old answer ID.
+        {"sqlite_autoincrement": True},
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    poll_id: Mapped[int] = mapped_column(ForeignKey("news_polls.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(String(200))
+
+
+class NewsPollVote(Base):
+    __tablename__ = "news_poll_votes"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["option_id", "poll_id"], ["news_poll_options.id", "news_poll_options.poll_id"],
+            ondelete="CASCADE", name="fk_news_poll_vote_option",
+        ),
+    )
+    # Composite primary key enforces a single current answer per account.
+    poll_id: Mapped[int] = mapped_column(ForeignKey("news_polls.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    option_id: Mapped[int] = mapped_column(Integer, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

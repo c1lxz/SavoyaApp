@@ -20,11 +20,13 @@ from ..config import get_settings
 from ..database import get_db_session
 from ..dependencies import get_current_admin_user, get_current_user
 from ..models import User
-from ..news_models import NewsDevice, NewsMedia, NewsNotification, NewsPost, utcnow
+from ..news_models import NewsDevice, NewsMedia, NewsNotification, NewsPoll, NewsPost, utcnow
 from ..services.news_media import (
     UploadTooLarge, delete_files, file_response, inspect_media, media_path,
     safe_filename, serialize_media, verify_signature,
 )
+from ..services import news_polls
+from ..services.news_polls import PollDefinition, PollVoteBody
 from ..utils.datetime import ensure_utc_datetime
 
 router = APIRouter(prefix="/news", tags=["news"])
@@ -34,6 +36,7 @@ settings = get_settings()
 class PostBody(BaseModel):
     text: str = Field(default="", max_length=20000)
     media_ids: list[str] = Field(default_factory=list, max_length=10)
+    poll: PollDefinition | None = None
 
     @field_validator("text")
     @classmethod
@@ -47,15 +50,15 @@ class PostBody(BaseModel):
             raise ValueError("Некорректные вложения")
         return values
 
-    @model_validator(mode="after")
-    def nonempty(self):
-        if not self.text and not self.media_ids:
-            raise ValueError("Добавьте текст или вложение")
-        return self
-
 
 class CreatePostBody(PostBody):
     request_id: str = Field(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+
+    @model_validator(mode="after")
+    def nonempty(self):
+        if not self.text and not self.media_ids and self.poll is None:
+            raise ValueError("Добавьте текст, вложение или опрос")
+        return self
 
 
 class UpdatePostBody(PostBody):
@@ -68,7 +71,7 @@ class DeviceBody(BaseModel):
     platform: Literal["android", "ios"] = "android"
 
 
-async def serialize_posts(session: AsyncSession, posts: list[NewsPost]) -> list[dict]:
+async def serialize_posts(session: AsyncSession, posts: list[NewsPost], user_id: int) -> list[dict]:
     if not posts:
         return []
     media = (await session.scalars(select(NewsMedia).where(
@@ -77,8 +80,10 @@ async def serialize_posts(session: AsyncSession, posts: list[NewsPost]) -> list[
     by_post: dict[int, list] = {}
     for item in media:
         by_post.setdefault(item.post_id, []).append(serialize_media(item))
+    polls = await news_polls.serialize_polls(session, [post.id for post in posts], user_id)
     return [{
         "id": post.id, "text": post.text, "media": by_post.get(post.id, []),
+        "poll": polls.get(post.id),
         "author_name": post.author_name, "version": post.version,
         "created_at": ensure_utc_datetime(post.created_at),
         "updated_at": ensure_utc_datetime(post.updated_at),
@@ -102,7 +107,7 @@ async def list_news(
         query = query.where(NewsPost.id < before_id)
     rows = list((await session.scalars(query.order_by(NewsPost.id.desc()).limit(limit + 1))).all())
     visible = rows[:limit]
-    return {"items": await serialize_posts(session, visible), "next_cursor": visible[-1].id if len(rows) > limit else None}
+    return {"items": await serialize_posts(session, visible, _user.id), "next_cursor": visible[-1].id if len(rows) > limit else None}
 
 
 @router.post("/media", status_code=201)
@@ -202,20 +207,35 @@ async def download_media(
     return await file_response(request, item, variant == "thumbnail")
 
 
+async def lock_current_news_user(session: AsyncSession, user: User) -> int:
+    user_id, generation = user.id, user.auth_generation
+    # Serialize device registration/revocation with account deletion even when
+    # SQLite foreign keys are off. The authorized object may predate a wait for
+    # this lock; a recycled ID must not inherit a previous account's FCM device.
+    current = await session.execute(update(User).where(
+        User.id == user_id, User.is_active.is_(True),
+        User.auth_generation.is_(None) if generation is None else User.auth_generation == generation,
+    ).values(is_active=True).execution_options(synchronize_session=False))
+    if current.rowcount != 1:
+        raise HTTPException(401, "Учётная запись недоступна. Войдите заново")
+    return user_id
+
+
 @router.post("/devices", status_code=204)
 async def register_device(
     body: DeviceBody, session: AsyncSession = Depends(get_db_session), user: User = Depends(get_current_user),
 ):
+    user_id = await lock_current_news_user(session, user)
     device = await session.scalar(select(NewsDevice).where(NewsDevice.token == body.token).with_for_update())
     if device is None:
-        device = NewsDevice(token=body.token, user_id=user.id, platform=body.platform)
+        device = NewsDevice(token=body.token, user_id=user_id, platform=body.platform)
         session.add(device)
     else:
-        if device.user_id != user.id:
+        if device.user_id != user_id:
             await session.execute(update(NewsNotification).where(
                 NewsNotification.device_id == device.id, NewsNotification.status.in_(["pending", "retry", "sending"]),
             ).values(status="cancelled", lease_id=None))
-        device.user_id, device.platform, device.active, device.updated_at = user.id, body.platform, True, utcnow()
+        device.user_id, device.platform, device.active, device.updated_at = user_id, body.platform, True, utcnow()
     try:
         await session.commit()
     except IntegrityError:
@@ -228,7 +248,8 @@ async def register_device(
 async def unregister_device(
     body: DeviceBody, session: AsyncSession = Depends(get_db_session), user: User = Depends(get_current_user),
 ):
-    device = await session.scalar(select(NewsDevice).where(NewsDevice.token == body.token, NewsDevice.user_id == user.id))
+    user_id = await lock_current_news_user(session, user)
+    device = await session.scalar(select(NewsDevice).where(NewsDevice.token == body.token, NewsDevice.user_id == user_id))
     if device:
         device.active = False
         await session.execute(update(NewsNotification).where(
@@ -239,15 +260,20 @@ async def unregister_device(
 
 
 def fingerprint(body: PostBody) -> str:
-    return hashlib.sha256(json.dumps({"text": body.text, "media_ids": body.media_ids}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    content = {"text": body.text, "media_ids": body.media_ids}
+    # Keep historical no-poll request hashes byte-for-byte compatible, including
+    # clients sending explicit null. Only an actual poll adds a fingerprint key.
+    if body.poll is not None:
+        content["poll"] = body.poll.model_dump()
+    return hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
-async def replay(session: AsyncSession, post: NewsPost, digest: str):
+async def replay(session: AsyncSession, post: NewsPost, digest: str, user_id: int):
     if post.request_hash != digest:
         raise HTTPException(409, "Этот идентификатор публикации уже использован с другим содержимым")
     if post.deleted_at:
         raise HTTPException(410, "Эта публикация уже удалена")
-    return (await serialize_posts(session, [post]))[0]
+    return (await serialize_posts(session, [post], user_id))[0]
 
 
 async def attach_media(session: AsyncSession, ids: list[str], post_id: int, admin_id: int):
@@ -271,7 +297,7 @@ async def create_news(
     admin_id = admin.id
     existing = await session.scalar(select(NewsPost).where(NewsPost.author_id == admin_id, NewsPost.request_id == body.request_id))
     if existing:
-        return await replay(session, existing, digest)
+        return await replay(session, existing, digest, admin_id)
     post = NewsPost(author_id=admin_id, author_name=admin.name or "Председатель", text=body.text,
                     request_id=body.request_id, request_hash=digest)
     session.add(post)
@@ -281,21 +307,37 @@ async def create_news(
         await session.rollback()
         existing = await session.scalar(select(NewsPost).where(NewsPost.author_id == admin_id, NewsPost.request_id == body.request_id))
         if existing:
-            return await replay(session, existing, digest)
+            return await replay(session, existing, digest, admin_id)
         raise
     await attach_media(session, body.media_ids, post.id, admin_id)
+    await news_polls.set_poll_definition(session, post.id, body.poll)
     device_ids = (await session.scalars(select(NewsDevice.id).join(User, NewsDevice.user_id == User.id).where(
         NewsDevice.active.is_(True), User.is_active.is_(True),
         NewsDevice.updated_at >= utcnow() - timedelta(days=settings.news_device_ttl_days),
     ))).all()
     session.add_all([NewsNotification(post_id=post.id, device_id=device_id) for device_id in device_ids])
     await session.commit()
-    return (await serialize_posts(session, [post]))[0]
+    return (await serialize_posts(session, [post], admin_id))[0]
 
 
 @router.get("/{post_id}")
 async def read_news(post_id: int, session: AsyncSession = Depends(get_db_session), _user: User = Depends(get_current_user)):
-    return (await serialize_posts(session, [await get_post(session, post_id)]))[0]
+    return (await serialize_posts(session, [await get_post(session, post_id)], _user.id))[0]
+
+
+@router.post("/{post_id}/poll/vote")
+async def vote_in_poll(
+    post_id: int, body: PollVoteBody, session: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+):
+    return await news_polls.vote(session, post_id, user.id, body.option_id, auth_generation=user.auth_generation)
+
+
+@router.post("/{post_id}/poll/close")
+async def close_poll(
+    post_id: int, session: AsyncSession = Depends(get_db_session), admin: User = Depends(get_current_admin_user),
+):
+    return await news_polls.close(session, post_id, admin.id, auth_generation=admin.auth_generation)
 
 
 @router.put("/{post_id}")
@@ -308,6 +350,11 @@ async def edit_news(
     ).values(text=body.text, version=NewsPost.version + 1, updated_at=utcnow()))
     if changed.rowcount != 1:
         raise HTTPException(409, "Новость уже изменена. Обновите её перед редактированием")
+    if "poll" in body.model_fields_set:
+        await news_polls.set_poll_definition(session, post_id, body.poll)
+    if not body.text and not body.media_ids:
+        if await session.get(NewsPoll, post_id) is None:
+            raise HTTPException(422, "Добавьте текст, вложение или опрос")
     await attach_media(session, body.media_ids, post_id, admin.id)
     await session.execute(update(NewsMedia).where(
         NewsMedia.post_id == post_id, NewsMedia.id.not_in(body.media_ids),
@@ -315,7 +362,7 @@ async def edit_news(
     await session.commit()
     post = await get_post(session, post_id)
     await session.refresh(post)
-    return (await serialize_posts(session, [post]))[0]
+    return (await serialize_posts(session, [post], admin.id))[0]
 
 
 @router.delete("/{post_id}", status_code=204)

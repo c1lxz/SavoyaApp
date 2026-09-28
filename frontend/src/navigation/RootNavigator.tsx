@@ -10,6 +10,8 @@ import { AdminHomeScreen } from '@/screens/AdminHomeScreen';
 import { AdminMonitorScreen } from '@/screens/AdminMonitorScreen';
 import { AdminRequestsScreen } from '@/screens/AdminRequestsScreen';
 import { AdminUsersScreen } from '@/screens/AdminUsersScreen';
+import { AdminStaffScreen } from '@/screens/AdminStaffScreen';
+import { canManageNews, canManageStaff, getStaffRole } from '@/utils/roles';
 import { AccountScreen } from '@/screens/AccountScreen';
 import { AuthScreen } from '@/screens/AuthScreen';
 import { CreatePassScreen } from '@/screens/CreatePassScreen';
@@ -49,6 +51,7 @@ const linking: LinkingOptions<RootStackParamList> = {
       AdminMonitor: 'admin/monitor',
       AdminRequests: 'admin/requests',
       AdminUsers: 'admin/users',
+      AdminStaff: 'admin/staff',
       Home: {
         path: '',
         initialRouteName: 'News',
@@ -162,7 +165,7 @@ export const RootNavigator = () => {
         key={
           user
             ? user.isAdmin
-              ? 'admin'
+              ? `staff-${getStaffRole(user)}`
               : requiresProfileCompletion
                 ? 'profile-setup'
                 : 'resident'
@@ -190,7 +193,8 @@ export const RootNavigator = () => {
                   <Stack.Screen name="AdminMonitor" component={AdminMonitorScreen} />
                   <Stack.Screen name="AdminRequests" component={AdminRequestsScreen} />
                   <Stack.Screen name="AdminUsers" component={AdminUsersScreen} />
-                  <Stack.Screen name="NewsEditor" component={NewsEditorScreen} />
+                  {canManageNews(user) ? <Stack.Screen name="NewsEditor" component={NewsEditorScreen} /> : null}
+                  {canManageStaff(user) ? <Stack.Screen name="AdminStaff" component={AdminStaffScreen} /> : null}
                 </>
               ) : (
                 <Stack.Screen name="CreatePass" component={CreatePassScreen} />

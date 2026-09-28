@@ -10,8 +10,9 @@
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "test:notifications": "node tests/news-notifications.cjs",
-    "test:news": "node tests/news-service.cjs && node tests/news-screen.cjs",
-    "test:dates": "node tests/pass-dates.cjs"
+    "test:news": "node tests/news-service.cjs && node tests/news-screen.cjs && node tests/news-poll-ui.cjs",
+    "test:dates": "node tests/pass-dates.cjs",
+    "test:roles": "node tests/staff-roles.cjs && node tests/staff-session.cjs"
   },
   "dependencies": {
     "@expo/metro-runtime": "~3.2.3",

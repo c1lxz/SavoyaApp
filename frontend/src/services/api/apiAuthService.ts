@@ -1,4 +1,4 @@
-import { AuthResult, ChangePasswordPayload, User } from '@/types';
+import { AuthResult, ChangePasswordPayload, StaffRole, User } from '@/types';
 import { apiRequest } from '@/services/api/httpClient';
 import { getAccessToken, restoreAccessToken, setAccessToken } from '@/services/api/tokenStore';
 import { unregisterNewsNotifications } from '@/services/newsNotifications';
@@ -20,6 +20,7 @@ type CompatUserResponse = {
   plotNumber: string;
   phoneNumber: string;
   isAdmin: boolean;
+  staffRole?: StaffRole | null;
   passwordChangeRequired?: boolean;
   passwordChangePromptRequired?: boolean;
 };
@@ -30,6 +31,7 @@ type BackendUser = {
   name?: string | null;
   apartment?: string | null;
   is_admin?: boolean;
+  staff_role?: StaffRole | null;
   password_change_required?: boolean;
   password_change_prompt_required?: boolean;
 };
@@ -43,6 +45,25 @@ type BackendTokenResponse = {
 };
 
 let currentUser: User | null = null;
+let currentUserToken: string | null = null;
+let sessionGeneration = 0;
+let userRequest = 0;
+let signingOut = false;
+let tokenWrites: Promise<void> = Promise.resolve();
+
+const staleSession = () => new Error('Сессия изменилась. Повторите действие.');
+const requireSession = (generation: number, token?: string | null) => {
+  if (generation !== sessionGeneration || (token !== undefined && token !== getAccessToken())) throw staleSession();
+};
+const writeSessionToken = async (token: string | null, generation: number) => {
+  // Keep asynchronous native storage writes in session order as well as JS state.
+  tokenWrites = tokenWrites.catch(() => {}).then(async () => {
+    requireSession(generation);
+    await setAccessToken(token);
+  });
+  await tokenWrites;
+  requireSession(generation, token);
+};
 
 const mapBackendUser = (user: BackendUser): User => ({
   id: String(user.id),
@@ -51,6 +72,7 @@ const mapBackendUser = (user: BackendUser): User => ({
   plotNumber: user.apartment ?? '',
   phoneNumber: user.phone ?? '',
   isAdmin: Boolean(user.is_admin),
+  staffRole: user.staff_role,
   passwordChangeRequired: Boolean(user.password_change_required),
   passwordChangePromptRequired: Boolean(user.password_change_prompt_required),
 });
@@ -62,6 +84,7 @@ const mapCompatUser = (user: CompatUserResponse): User => ({
   plotNumber: user.plotNumber ?? '',
   phoneNumber: user.phoneNumber ?? '',
   isAdmin: Boolean(user.isAdmin),
+  staffRole: user.staffRole,
   passwordChangeRequired: Boolean(user.passwordChangeRequired),
   passwordChangePromptRequired: Boolean(user.passwordChangePromptRequired),
 });
@@ -76,15 +99,23 @@ const mapApiUser = (user: ApiUser): User => {
 
 export const apiAuthService = {
   async login(login: string, password: string): Promise<AuthResult> {
+    const generation = ++sessionGeneration;
+    userRequest += 1;
+    signingOut = false;
+    currentUser = null;
+    currentUserToken = null;
+    await writeSessionToken(null, generation);
     const result = await apiRequest<CompatLoginResponse | BackendTokenResponse>('/auth/login', {
       method: 'POST',
       body: { login, password },
     });
+    requireSession(generation);
 
     if ('token_type' in result && 'access_token' in result) {
       const mappedUser = mapBackendUser(result.user);
-      await setAccessToken(result.access_token);
+      await writeSessionToken(result.access_token, generation);
       currentUser = mappedUser;
+      currentUserToken = result.access_token;
       return {
         success: true,
         user: mappedUser,
@@ -101,8 +132,9 @@ export const apiAuthService = {
           result.passwordChangePromptRequired ?? mappedBaseUser.passwordChangePromptRequired,
         ),
       };
-      await setAccessToken(result.access_token);
+      await writeSessionToken(result.access_token, generation);
       currentUser = mappedUser;
+      currentUserToken = result.access_token;
       return {
         success: result.success,
         user: mappedUser,
@@ -130,54 +162,83 @@ export const apiAuthService = {
   },
 
   async logout(): Promise<void> {
-    await unregisterNewsNotifications().catch(() => { /* Allow offline logout. Invalid tokens expire server-side. */ });
-    await setAccessToken(null);
+    const generation = ++sessionGeneration;
+    userRequest += 1;
+    signingOut = true;
     currentUser = null;
+    currentUserToken = null;
+    await unregisterNewsNotifications().catch(() => { /* Allow offline logout. Invalid tokens expire server-side. */ });
+    // A newer login owns the token if notification revocation finished late.
+    if (generation !== sessionGeneration) return;
+    await writeSessionToken(null, generation);
+    signingOut = false;
   },
 
   async getCurrentUser(forceRefresh = false): Promise<User | null> {
+    const generation = sessionGeneration;
+    if (signingOut) return null;
     await restoreAccessToken();
-    if (!getAccessToken()) {
+    requireSession(generation);
+    const token = getAccessToken();
+    if (!token) {
       currentUser = null;
+      currentUserToken = null;
       return null;
     }
 
-    if (currentUser && !forceRefresh) {
+    if (currentUser && currentUserToken === token && !forceRefresh) {
       return currentUser;
     }
 
+    const request = ++userRequest;
     try {
       const actual = await apiRequest<ApiUser>('/user/me');
+      requireSession(generation, token);
+      if (request !== userRequest) throw staleSession();
       const mappedUser = mapApiUser(actual);
       currentUser = mappedUser;
+      currentUserToken = token;
       return mappedUser;
     } catch (error) {
+      if (generation !== sessionGeneration || request !== userRequest || (getAccessToken() && getAccessToken() !== token)) throw staleSession();
       if (!getAccessToken()) {
         currentUser = null;
+        currentUserToken = null;
         return null;
       }
       currentUser = null;
+      currentUserToken = null;
       throw error;
     }
   },
 
   async updateProfile(fullName: string, plotNumber?: string): Promise<User> {
+    const generation = sessionGeneration;
+    const token = getAccessToken();
     const updated = await apiRequest<ApiUser>('/user/profile', {
       method: 'PUT',
       body: { fullName, plotNumber },
     });
+    requireSession(generation, token);
+    userRequest += 1;
     const mappedUser = mapApiUser(updated);
     currentUser = mappedUser;
+    currentUserToken = token;
     return mappedUser;
   },
 
   async changePassword(payload: ChangePasswordPayload): Promise<User> {
+    const generation = sessionGeneration;
+    const token = getAccessToken();
     const updated = await apiRequest<ApiUser>('/user/password', {
       method: 'PUT',
       body: payload,
     });
+    requireSession(generation, token);
+    userRequest += 1;
     const mappedUser = mapApiUser(updated);
     currentUser = mappedUser;
+    currentUserToken = token;
     return mappedUser;
   },
 };

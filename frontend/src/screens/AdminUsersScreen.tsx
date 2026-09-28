@@ -16,6 +16,8 @@ import { AdminUserItem, RequestState } from '@/types';
 import { goBackOrHome } from '@/utils/backNavigation';
 import { formatDateTime } from '@/utils/date';
 import { getLayoutMetrics } from '@/utils/layout';
+import { useAuthStore } from '@/store/authStore';
+import { canRegisterUsers } from '@/utils/roles';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AdminUsers'>;
 
@@ -193,6 +195,7 @@ const UsersTable = ({
 };
 
 export const AdminUsersScreen = ({ navigation }: Props) => {
+  const canCreate = useAuthStore((state) => canRegisterUsers(state.user));
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
 
@@ -264,6 +267,7 @@ export const AdminUsersScreen = ({ navigation }: Props) => {
   }, [feedback]);
 
   const handleCreateUser = async () => {
+    if (!canCreate || actionState === 'loading') return;
     const normalizedFullName = fullName.trim();
     const normalizedPhoneNumber = phoneNumber.trim();
     const normalizedPlotNumber = plotNumber.trim();
@@ -376,10 +380,10 @@ export const AdminUsersScreen = ({ navigation }: Props) => {
             <View style={styles.summaryCard}>
               <View style={styles.summaryTitleRow}>
                 <MaterialCommunityIcons name="account-multiple-outline" size={24} color={theme.colors.textPrimary} />
-                <Text style={[styles.summaryTitle, { fontSize: metrics.isDesktop ? 22 : 19 }]}>Пользователи в локальной БД</Text>
+                <Text style={[styles.summaryTitle, { fontSize: metrics.isDesktop ? 22 : 19 }]}>Пользователи приложения</Text>
               </View>
               <Text style={styles.summaryText}>
-                Здесь видны логины, текущие пароли, контактные данные и статус блокировки пользователей из SQLite.
+                Учётные записи жителей, контактные данные и статус доступа.
               </Text>
               <View style={styles.summaryMetaRow}>
                 <Text style={styles.summaryMeta}>Пользователей: {total}</Text>
@@ -389,7 +393,7 @@ export const AdminUsersScreen = ({ navigation }: Props) => {
               {error ? <Text style={styles.errorText}>{error}</Text> : null}
             </View>
 
-            <View style={styles.createCard}>
+            {canCreate ? <View style={styles.createCard}>
               <Text style={styles.cardTitle}>Создать пользователя</Text>
               <View style={[styles.createGrid, metrics.isDesktop && styles.createGridDesktop]}>
                 <View style={styles.createField}>
@@ -432,9 +436,13 @@ export const AdminUsersScreen = ({ navigation }: Props) => {
                   <Text style={styles.refreshButtonText}>{actionState === 'loading' ? 'Сохранение...' : 'Создать пользователя'}</Text>
                 </Pressable>
               </View>
-            </View>
+            </View> : (
+              <Pressable style={styles.refreshButton} onPress={() => void loadUsers(true)} accessibilityRole="button">
+                <Text style={styles.refreshButtonText}>Обновить пользователей</Text>
+              </Pressable>
+            )}
 
-            {lastCreatedUser ? (
+            {canCreate && lastCreatedUser ? (
               <View style={styles.credentialsCard}>
                 <View style={styles.credentialsTitleRow}>
                   <MaterialCommunityIcons name="account-key-outline" size={22} color={theme.colors.textPrimary} />

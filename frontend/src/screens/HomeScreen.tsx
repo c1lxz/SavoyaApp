@@ -41,7 +41,7 @@ export const HomeScreen = ({ navigation }: Props) => {
               <Pressable
                 onPress={() => navigation.navigate('Admin')}
                 accessibilityRole="button"
-                accessibilityLabel="Панель председателя"
+                accessibilityLabel="Управление"
                 style={({ pressed }) => [styles.toolbarButton, pressed && styles.pressed]}
               >
                 <MaterialCommunityIcons name="shield-account-outline" size={23} color={theme.colors.textSecondary} />

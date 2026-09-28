@@ -573,6 +573,46 @@ async function main() {
       assert.deepEqual(await f.api.loadNewsDraft(4), refreshed);
     },
   );
+  await scenario("poll draft and frozen publication survive storage without losing option order", async () => {
+    const f = fixture();
+    const poll = { question: "Где провести собрание?", options: ["У въезда", "В клубе"] };
+    const draft = { text: "Обсуждаем", media: [MEDIA], requestId: "poll-draft-123", poll,
+      pendingPayload: { text: "Обсуждаем", media_ids: [MEDIA.id], poll } };
+    await f.api.saveNewsDraft(4, draft);
+    assert.deepEqual(await f.api.loadNewsDraft(4), draft);
+    assert.notEqual(f.api.newsDraftContentKey(draft), f.api.newsDraftContentKey({ ...draft, poll: { ...poll, options: [...poll.options].reverse() } }));
+  });
+  await scenario("unchanged polls are omitted from edits so existing answers are preserved", async () => {
+    const f = fixture();
+    const original = { question: "Собрание?", options: [{ id: 8, text: "Да", votes: 3 }, { id: 9, text: "Нет", votes: 1 }], can_edit: false };
+    assert.deepEqual(f.api.newsPollEditPayload({ question: " Собрание? ", options: ["Да", "Нет"] }, original), {});
+    assert.deepEqual(f.api.newsPollEditPayload(null, null), {});
+    assert.deepEqual(f.api.newsPollEditPayload(null, original), { poll: null });
+    assert.deepEqual(f.api.newsPollEditPayload({ question: "Другой?", options: ["А", "Б"] }, original), { poll: { question: "Другой?", options: ["А", "Б"] } });
+    const payload = { text: "Изменён текст", media_ids: [], ...f.api.newsPollEditPayload(f.api.newsPollDefinition(original), original) };
+    await f.api.updateNews(17, payload, 4);
+    assert.equal(Object.hasOwn(f.apiCalls[0][1].body, "poll"), false);
+  });
+  await scenario("poll validation catches empty, duplicate and oversized input before submission", async () => {
+    const { api } = fixture();
+    assert.equal(api.newsPollError(null), null);
+    assert.equal(api.newsPollError({ question: " Вопрос ", options: [" Да ", "Нет"] }), null);
+    for (const value of [
+      { question: " ", options: ["А", "Б"] }, { question: "x".repeat(301), options: ["А", "Б"] },
+      { question: "?", options: ["А"] }, { question: "?", options: Array.from({ length: 11 }, (_, i) => String(i)) },
+      { question: "?", options: ["А", " "] }, { question: "?", options: ["Да", " да "] },
+      { question: "?", options: ["А", "x".repeat(201)] },
+    ]) assert.equal(typeof api.newsPollError(value), "string");
+  });
+  await scenario("vote and close send only the agreed poll contract", async () => {
+    const f = fixture({ apiResult: { id: 7 } });
+    assert.deepEqual(await f.api.voteNewsPoll(17, 9), { id: 7 });
+    await f.api.closeNewsPoll(17);
+    assert.deepEqual(f.apiCalls, [
+      ["/api/news/17/poll/vote", { method: "POST", body: { option_id: 9 } }],
+      ["/api/news/17/poll/close", { method: "POST" }],
+    ]);
+  });
   console.log(
     `PASS ${passed} news service scenarios. Media UI, native device behavior and real server delivery require separate integration checks.`,
   );

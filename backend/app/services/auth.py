@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,13 +65,14 @@ async def ensure_demo_user(session: AsyncSession) -> None:
     query = await session.execute(select(User).where(User.login == settings.demo_login))
     user = query.scalar_one_or_none()
     if user is None:
-        user = User(login=settings.demo_login)
+        user = User(login=settings.demo_login, auth_generation=uuid4().hex)
         session.add(user)
 
     user.phone = normalize_account_phone(settings.demo_phone)
     user.name = settings.demo_full_name
     user.apartment = settings.demo_plot_number
     user.is_admin = False
+    user.staff_role = None
     user.is_active = True
     user.login = settings.demo_login
     user.plot_number = settings.demo_plot_number
@@ -87,14 +90,15 @@ async def ensure_admin_user(session: AsyncSession) -> None:
     query = await session.execute(select(User).where(User.login == settings.admin_login))
     user = query.scalar_one_or_none()
     if user is None:
-        user = User(login=settings.admin_login)
+        user = User(login=settings.admin_login, is_active=True, auth_generation=uuid4().hex)
         session.add(user)
 
+    # Existing staff blocks and role assignments must survive application restarts.
     user.phone = normalize_account_phone(settings.admin_phone)
     user.name = settings.admin_full_name
     user.apartment = settings.admin_plot_number
     user.is_admin = True
-    user.is_active = True
+    user.staff_role = user.staff_role or "administration"
     user.login = settings.admin_login
     user.plot_number = settings.admin_plot_number
     user.owner_index = None
@@ -111,13 +115,14 @@ async def ensure_bootstrap_test_users(session: AsyncSession) -> None:
         query = await session.execute(select(User).where(User.login == payload["login"]))
         user = query.scalar_one_or_none()
         if user is None:
-            user = User(login=payload["login"])
+            user = User(login=payload["login"], auth_generation=uuid4().hex)
             session.add(user)
 
         user.phone = normalize_account_phone(payload["phone"])
         user.name = payload["name"] or f"Test User {payload['login']}"
         user.apartment = payload["plot_number"] or None
         user.is_admin = False
+        user.staff_role = None
         user.is_active = True
         user.login = payload["login"]
         user.plot_number = payload["plot_number"] or None
@@ -163,7 +168,7 @@ async def login_with_password(session: AsyncSession, login: str, password: str) 
     if not verified.is_active:
         return None, None, "inactive_user"
 
-    token = create_access_token(subject=str(verified.id))
+    token = create_access_token(subject=str(verified.id), auth_generation=verified.auth_generation)
     return verified, token, None
 
 

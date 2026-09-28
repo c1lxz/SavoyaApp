@@ -7,6 +7,7 @@ import logging
 import re
 import secrets
 from datetime import datetime
+from uuid import uuid4
 
 from cryptography.fernet import Fernet, InvalidToken
 from passlib.context import CryptContext
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..models import AccessEventLog, AccessKey, AccessPermission, Log, Request, User
+from ..news_models import NewsDevice, NewsMedia, NewsNotification, NewsPollVote, NewsPost
 from .gate import gate_client
 from ..utils.datetime import ensure_utc_datetime
 from ..utils.input_safety import (
@@ -111,6 +113,8 @@ async def ensure_users_schema(session: AsyncSession) -> None:
 
     columns = await connection.run_sync(_get_columns)
     migration_statements = (
+        ("staff_role", "ALTER TABLE users ADD COLUMN staff_role VARCHAR(24) NULL"),
+        ("auth_generation", "ALTER TABLE users ADD COLUMN auth_generation VARCHAR(32) NULL"),
         ("login", "ALTER TABLE users ADD COLUMN login VARCHAR(100) NULL"),
         ("password_hash", "ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) NULL"),
         ("plot_number", "ALTER TABLE users ADD COLUMN plot_number VARCHAR(20) NULL"),
@@ -129,6 +133,13 @@ async def ensure_users_schema(session: AsyncSession) -> None:
         await session.execute(text(statement))
         await session.commit()
 
+    # Backfill only legacy administrators. Re-running startup must preserve
+    # explicitly assigned dispatcher roles and must never promote residents.
+    await session.execute(
+        update(User).where(User.is_admin.is_(True), User.staff_role.is_(None))
+        .values(staff_role="administration").execution_options(synchronize_session=False)
+    )
+    await session.commit()
     await clear_stale_visible_passwords(session)
 
 
@@ -148,7 +159,7 @@ async def clear_stale_visible_passwords(session: AsyncSession) -> int:
 
 
 def should_show_password_change_prompt(user: User) -> bool:
-    return bool(user.password_change_required and not user.password_change_prompt_shown and not user.is_admin)
+    return bool(user.password_change_required and not user.password_change_prompt_shown)
 
 
 def _validate_full_name_words(full_name: str) -> str:
@@ -205,19 +216,34 @@ async def create_user_account(
     *,
     full_name: str,
     phone_number: str,
-    plot_number: str,
+    plot_number: str | None,
     require_password_change: bool = True,
+    staff_role: str | None = None,
 ) -> tuple[User, str]:
+    if staff_role not in {None, "administration", "dispatcher"}:
+        raise UserAccountError(code="invalid_staff_role", message="Неизвестная роль сотрудника")
     normalized_name = _validate_full_name_words(full_name)
     normalized_phone = normalize_account_phone(phone_number)
-    normalized_plot = normalize_plot_number(plot_number)
+    normalized_plot = normalize_plot_number(plot_number) if plot_number is not None else None
+    if staff_role is None and normalized_plot is None:
+        raise UserAccountError(code="plot_required", message="Для жителя укажите номер участка")
 
     existing_user_id = await _find_existing_user_id_by_phone(session, normalized_phone)
     if existing_user_id is not None:
         raise UserAccountError(code="phone_already_exists", message="Пользователь с таким номером уже существует")
 
-    owner_index = await _next_owner_index(session, normalized_plot)
-    login = await _generate_login(session, full_name=normalized_name, plot_number=normalized_plot, owner_index=owner_index)
+    if staff_role is None:
+        owner_index = await _next_owner_index(session, normalized_plot)
+        login = await _generate_login(session, full_name=normalized_name, plot_number=normalized_plot, owner_index=owner_index)
+    else:
+        owner_index = None
+        surname = _extract_login_surname(normalized_name)
+        base_login = normalize_login(f"{'д' if staff_role == 'dispatcher' else 'а'}{surname}")
+        login = base_login
+        suffix = 2
+        while await session.scalar(select(User.id).where(User.login == login)) is not None:
+            login = normalize_login(f"{base_login}{suffix}")
+            suffix += 1
     password = generate_password()
 
     user = User(
@@ -227,7 +253,9 @@ async def create_user_account(
         plot_number=normalized_plot,
         login=login,
         owner_index=owner_index,
-        is_admin=False,
+        is_admin=staff_role is not None,
+        staff_role=staff_role,
+        auth_generation=uuid4().hex,
         is_active=True,
     )
     set_user_password(user, password, require_change=require_password_change)
@@ -263,6 +291,8 @@ def build_admin_user_payload(
         "plot_number": user.plot_number or user.apartment,
         "owner_index": user.owner_index,
         "is_active": user.is_active,
+        "is_admin": user.is_admin,
+        "staff_role": user.effective_staff_role,
         "password_change_required": user.password_change_required,
         "created_at": ensure_utc_datetime(user.created_at),
     }
@@ -321,5 +351,14 @@ async def delete_user_account(
     await session.execute(delete(AccessKey).where(AccessKey.user_id == user.id))
     await session.execute(delete(Request).where(Request.resident_id == user.id))
     await session.execute(update(Log).where(Log.user_id == user.id).values(user_id=None))
+    # Older SQLite installations run with foreign keys disabled. Reproduce the
+    # declared cascades explicitly, so a reused user/device ID cannot inherit a
+    # deleted account's poll votes or pending push notifications.
+    device_ids = select(NewsDevice.id).where(NewsDevice.user_id == user.id)
+    await session.execute(delete(NewsNotification).where(NewsNotification.device_id.in_(device_ids)))
+    await session.execute(delete(NewsDevice).where(NewsDevice.user_id == user.id))
+    await session.execute(delete(NewsPollVote).where(NewsPollVote.user_id == user.id))
+    await session.execute(update(NewsPost).where(NewsPost.author_id == user.id).values(author_id=None))
+    await session.execute(update(NewsMedia).where(NewsMedia.owner_id == user.id).values(owner_id=None))
     await session.delete(user)
     await session.commit()

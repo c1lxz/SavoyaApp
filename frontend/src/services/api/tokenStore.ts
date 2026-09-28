@@ -6,6 +6,8 @@ const IS_WEB = Platform.OS === 'web';
 
 let accessToken: string | null = null;
 let restorePromise: Promise<string | null> | null = null;
+let tokenGeneration = 0;
+let writeQueue: Promise<void> = Promise.resolve();
 
 const normalizeToken = (value: string | null | undefined): string | null => {
   if (!value) {
@@ -42,7 +44,9 @@ const getLegacyWebStorage = (): Storage | null => {
 
 export const setAccessToken = async (token: string | null): Promise<void> => {
   const normalized = normalizeToken(token);
+  const generation = ++tokenGeneration;
   accessToken = normalized;
+  restorePromise = null;
 
   const webStorage = getWebStorage();
   if (webStorage) {
@@ -60,15 +64,16 @@ export const setAccessToken = async (token: string | null): Promise<void> => {
     }
   }
 
-  try {
-    if (normalized) {
-      await AsyncStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, normalized);
-    } else {
-      await AsyncStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+  writeQueue = writeQueue.catch(() => {}).then(async () => {
+    if (generation !== tokenGeneration) return;
+    try {
+      if (normalized) await AsyncStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, normalized);
+      else await AsyncStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+    } catch {
+      // Keep the in-memory token even if persistent storage is unavailable.
     }
-  } catch {
-    // Keep the in-memory token even if persistent storage is unavailable.
-  }
+  });
+  await writeQueue;
 };
 
 export const restoreAccessToken = async (): Promise<string | null> => {
@@ -77,6 +82,7 @@ export const restoreAccessToken = async (): Promise<string | null> => {
   }
 
   if (!restorePromise) {
+    const generation = tokenGeneration;
     restorePromise = (async () => {
       const webStorage = getWebStorage();
       if (webStorage) {
@@ -96,18 +102,24 @@ export const restoreAccessToken = async (): Promise<string | null> => {
       }
 
       try {
-        accessToken = normalizeToken(await AsyncStorage.getItem(ACCESS_TOKEN_STORAGE_KEY));
+        // A logout write may still be waiting for native storage. Read only
+        // after it finishes, and never install a result from an older session.
+        await writeQueue;
+        if (generation !== tokenGeneration) return accessToken;
+        const restored = normalizeToken(await AsyncStorage.getItem(ACCESS_TOKEN_STORAGE_KEY));
+        if (generation === tokenGeneration) accessToken = restored;
       } catch {
-        accessToken = null;
+        if (generation === tokenGeneration) accessToken = null;
       }
       return accessToken;
     })();
   }
 
+  const pending = restorePromise;
   try {
-    return await restorePromise;
+    return await pending;
   } finally {
-    restorePromise = null;
+    if (restorePromise === pending) restorePromise = null;
   }
 };
 

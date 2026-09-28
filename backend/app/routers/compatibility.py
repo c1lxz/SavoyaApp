@@ -65,6 +65,7 @@ def _compat_user(user: User, *, password_change_prompt_required: bool = False) -
         plotNumber=user.plot_number or user.apartment or "",
         phoneNumber=user.phone or "",
         isAdmin=user.is_admin,
+        staffRole=user.effective_staff_role,
         passwordChangeRequired=user.password_change_required,
         passwordChangePromptRequired=password_change_prompt_required,
     )
@@ -255,7 +256,7 @@ async def compat_login(
 async def compat_get_me(user: User = Depends(get_current_user)) -> CompatUser:
     return _compat_user(
         user,
-        password_change_prompt_required=bool(user.password_change_required and not user.password_change_prompt_shown and not user.is_admin),
+        password_change_prompt_required=bool(user.password_change_required and not user.password_change_prompt_shown),
     )
 
 

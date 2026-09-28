@@ -21,6 +21,7 @@ import * as ImagePicker from "expo-image-picker";
 import { AppBackground } from "@/components/AppBackground";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import { NewsState, newsStyles } from "@/components/news/NewsState";
+import { NewsPollEditor } from "@/components/news/NewsPollEditor";
 import { RootStackParamList } from "@/navigation/types";
 import {
   clearNewsDraft,
@@ -36,6 +37,10 @@ import {
   NewsDraft,
   newsError,
   newsDraftContentKey,
+  newsPollDefinition,
+  newsPollEditPayload,
+  newsPollError,
+  normalizeNewsPoll,
   newsUrl,
   pickNewsWebFiles,
   PublicationError,
@@ -46,7 +51,8 @@ import {
 } from "@/services/newsService";
 import { useAuthStore } from "@/store/authStore";
 import { theme } from "@/theme";
-import { NewsFile, NewsMedia, NewsPayload } from "@/types/news";
+import { canManageNews } from "@/utils/roles";
+import { NewsFile, NewsMedia, NewsPayload, NewsPoll, NewsPollDefinition } from "@/types/news";
 
 type Attachment = {
   key: string;
@@ -69,7 +75,10 @@ export const NewsEditorScreen = ({
 }: NativeStackScreenProps<RootStackParamList, "NewsEditor">) => {
   const user = useAuthStore((state) => state.user);
   const postId = route.params?.postId;
+  const allowed = canManageNews(user);
   const [text, setText] = useState("");
+  const [poll, setPoll] = useState<NewsPollDefinition | null>(null);
+  const [originalPoll, setOriginalPoll] = useState<NewsPoll | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [version, setVersion] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -87,6 +96,7 @@ export const NewsEditorScreen = ({
   const mounted = useRef(true);
   const saved = useRef(false);
   const uploadBusy = useRef(false);
+  const submitBusy = useRef(false);
   const cancels = useRef(new Map<string, () => void>());
   const writeQueue = useRef<Promise<void>>(Promise.resolve());
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -99,12 +109,14 @@ export const NewsEditorScreen = ({
   const signature = JSON.stringify({
     text,
     ids: attachments.map((item) => item.media?.id || item.key),
+    poll,
   });
   draftSnapshot.current = {
     text,
     media: attachments.flatMap((item) => (item.media ? [item.media] : [])),
     requestId,
     pendingPayload,
+    poll,
   };
   const draftContentKey = newsDraftContentKey(draftSnapshot.current);
 
@@ -129,7 +141,7 @@ export const NewsEditorScreen = ({
   }, []);
 
   const restore = useCallback(async () => {
-    if (!user?.isAdmin) {
+    if (!allowed || !user) {
       setLoading(false);
       return;
     }
@@ -140,11 +152,14 @@ export const NewsEditorScreen = ({
         const post = await getNewsPost(postId);
         if (!mounted.current) return;
         setText(post.text);
+        setPoll(newsPollDefinition(post.poll));
+        setOriginalPoll(post.poll || null);
         setAttachments(post.media.map(existingAttachment));
         setVersion(post.version);
         initialSignature.current = JSON.stringify({
           text: post.text,
           ids: post.media.map((media) => media.id),
+          poll: newsPollDefinition(post.poll),
         });
       } else {
         const draft = await loadNewsDraft(user.id);
@@ -167,11 +182,12 @@ export const NewsEditorScreen = ({
             );
           }
           setText(draft.text);
+          setPoll(draft.poll || draft.pendingPayload?.poll || null);
           setAttachments(restoredAttachments);
           setRequestId(draft.requestId);
           setPendingPayload(draft.pendingPayload);
           setRestored(
-            !!draft.text || draft.media.length > 0 || !!draft.pendingPayload,
+            !!draft.text || draft.media.length > 0 || !!draft.poll || !!draft.pendingPayload,
           );
         }
       }
@@ -181,7 +197,7 @@ export const NewsEditorScreen = ({
     } finally {
       if (mounted.current) setLoading(false);
     }
-  }, [postId, user?.id, user?.isAdmin]);
+  }, [postId, user?.id, allowed]);
   useEffect(() => {
     void restore();
   }, [restore]);
@@ -431,17 +447,21 @@ export const NewsEditorScreen = ({
   };
 
   const submit = async () => {
-    if (!user?.isAdmin || saving || hasPending) return;
+    if (!allowed || !user || submitBusy.current || hasPending) return;
+    const invalidPoll = newsPollError(poll);
+    if (!pendingPayload && invalidPoll) { setError(invalidPoll); return; }
     const payload = pendingPayload || {
       text: text.trim(),
       media_ids: attachments.flatMap((item) =>
         item.media ? [item.media.id] : [],
       ),
+      ...(postId ? newsPollEditPayload(poll, originalPoll) : { poll: poll && normalizeNewsPoll(poll) }),
     };
-    if (!payload.text && !payload.media_ids.length) {
-      setError("Добавьте текст или хотя бы одно вложение.");
+    if (!payload.text && !payload.media_ids.length && !poll) {
+      setError("Добавьте текст, вложение или голосование.");
       return;
     }
+    submitBusy.current = true;
     setSaving(true);
     setError(null);
     try {
@@ -452,7 +472,7 @@ export const NewsEditorScreen = ({
         setPendingPayload(payload);
         await persist(snapshot);
       }
-      await (postId
+      const published = await (postId
         ? updateNews(postId, payload, version)
         : publishNews(payload, requestId));
       saved.current = true;
@@ -461,11 +481,9 @@ export const NewsEditorScreen = ({
         await writeQueue.current.catch(() => {});
         await clearNewsDraft(user.id).catch(() => {});
       }
-      if (navigation.canGoBack()) navigation.goBack();
-      else
-        navigation.navigate("Home", {
+      navigation.navigate("Home", {
           screen: "News",
-          params: { postId: undefined },
+          params: { postId: published.id },
         });
     } catch (reason) {
       if (!(reason instanceof PublicationError && reason.uncertain)) {
@@ -478,18 +496,19 @@ export const NewsEditorScreen = ({
       }
       setError(newsError(reason));
     } finally {
+      submitBusy.current = false;
       if (mounted.current) setSaving(false);
     }
   };
 
-  if (!user?.isAdmin)
+  if (!allowed || !user)
     return (
       <AppBackground>
         <SafeAreaView style={newsStyles.safe}>
           <ScreenHeader title="Новости" onBack={() => navigation.goBack()} />
           <NewsState
-            title="Публикации доступны председателю"
-            description="Жители могут читать новости в общей ленте."
+            title="Публикации доступны администрации"
+            description="Новости и голосования доступны для чтения в общей ленте."
           />
         </SafeAreaView>
       </AppBackground>
@@ -552,17 +571,20 @@ export const NewsEditorScreen = ({
                   <View style={styles.noticeBox}>
                     <Text style={styles.notice}>
                       Не удалось подтвердить публикацию. Нажмите «Повторить
-                      публикацию», чтобы проверить результат. Текст и вложения
+                      публикацию», чтобы проверить результат. Текст, голосование и вложения
                       сохранены; повторная новость не появится.
                     </Text>
                   </View>
                 ) : null}
                 <View style={styles.textPanel}>
+                  <Text style={styles.textLabel}>Текст новости</Text>
                   <TextInput
                     accessibilityLabel="Текст новости"
                     placeholder="Что нового в посёлке?"
-                    placeholderTextColor="rgba(242,228,184,0.46)"
+                    placeholderTextColor="#A9B6AC"
                     multiline
+                    scrollEnabled
+                    selectionColor="#DCCA96"
                     textAlignVertical="top"
                     value={text}
                     onChangeText={setText}
@@ -574,6 +596,8 @@ export const NewsEditorScreen = ({
                     {text.length.toLocaleString("ru-RU")} / 20 000
                   </Text>
                 </View>
+                <NewsPollEditor value={poll} onChange={setPoll} disabled={frozen}
+                  locked={!!postId && !!originalPoll && !originalPoll.can_edit} />
                 <View style={styles.toolbar}>
                   <Pressable
                     accessibilityRole="button"
@@ -756,7 +780,7 @@ export const NewsEditorScreen = ({
                   disabled={
                     saving ||
                     hasPending ||
-                    (!text.trim() && !attachments.length)
+                    (!text.trim() && !attachments.length && !poll)
                   }
                   onPress={() => void submit()}
                   style={[
@@ -764,7 +788,7 @@ export const NewsEditorScreen = ({
                     styles.publish,
                     (saving ||
                       hasPending ||
-                      (!text.trim() && !attachments.length)) &&
+                      (!text.trim() && !attachments.length && !poll)) &&
                       styles.disabled,
                   ]}
                 >
@@ -807,7 +831,7 @@ export const NewsEditorScreen = ({
                 <Text style={styles.notice}>
                   {postId
                     ? "Несохранённые изменения будут потеряны."
-                    : "Текст и загруженные вложения останутся в черновике."}{" "}
+                    : "Текст, голосование и загруженные вложения останутся в черновике."}{" "}
                   {hasPending
                     ? "Незавершённые загрузки остановятся; эти файлы нужно будет выбрать заново."
                     : ""}
@@ -870,17 +894,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.border,
     borderRadius: 20,
-    backgroundColor: "rgba(23,42,34,0.96)",
+    backgroundColor: "#102218",
     overflow: "hidden",
   },
   input: {
-    minHeight: 240,
+    minHeight: 200,
     maxHeight: 540,
+    width: "100%",
+    backgroundColor: "#102218",
     padding: 18,
     fontSize: 16,
     lineHeight: 26,
-    color: theme.colors.textPrimary,
+    color: "#FFF5DB",
   },
+  textLabel: { color: "#EAD7A8", fontSize: 13, fontWeight: "600", paddingHorizontal: 18, paddingTop: 16 },
   counter: {
     color: theme.colors.textMuted,
     fontSize: 11,

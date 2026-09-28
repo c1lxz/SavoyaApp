@@ -29,10 +29,20 @@ async def get_current_user(
     user = query.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    # Legacy accounts/tokens both have no generation. New accounts always get
+    # one, preventing a deleted account's JWT from authenticating a reused ID.
+    if payload.get("auth_generation") != user.auth_generation:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     return user
 
 
 async def get_current_admin_user(user: User = Depends(get_current_user)) -> User:
-    if not user.is_admin:
+    if user.effective_staff_role != "administration":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return user
+
+
+async def get_current_staff_user(user: User = Depends(get_current_user)) -> User:
+    if user.effective_staff_role not in {"administration", "dispatcher"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return user

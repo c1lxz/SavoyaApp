@@ -13,6 +13,7 @@ import { useAuthStore } from '@/store/authStore';
 import { theme } from '@/theme';
 import { goBackOrHome } from '@/utils/backNavigation';
 import { getLayoutMetrics } from '@/utils/layout';
+import { staffRoleLabel } from '@/utils/roles';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Account'>;
 
@@ -40,11 +41,11 @@ export const AccountScreen = ({ navigation }: Props) => {
             <MaterialCommunityIcons name="account-circle-outline" size={40} color={theme.colors.textPrimary} />
             <Text style={styles.name}>{user?.fullName || user?.login}</Text>
             {user?.plotNumber ? <Text style={styles.description}>Участок {user.plotNumber}</Text> : null}
-            {user?.isAdmin ? <Text style={styles.description}>Председатель</Text> : null}
+            {user?.isAdmin ? <Text style={styles.description}>{staffRoleLabel(user)}</Text> : null}
           </View>
           <NotificationSettings />
           {user?.isAdmin ? (
-            <AppButton title="Панель председателя" onPress={() => navigation.navigate('Admin')} />
+            <AppButton title="Управление" onPress={() => navigation.navigate('Admin')} />
           ) : null}
           <AppButton
             title="Сменить пароль"

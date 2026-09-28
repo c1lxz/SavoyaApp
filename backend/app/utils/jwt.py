@@ -9,7 +9,7 @@ from ..config import get_settings
 settings = get_settings()
 
 
-def create_access_token(subject: str, expires_minutes: int | None = None) -> str:
+def create_access_token(subject: str, expires_minutes: int | None = None, *, auth_generation: str | None = None) -> str:
     ttl = expires_minutes or settings.access_token_expire_minutes
     issued_at = datetime.now(timezone.utc)
     expires_at = issued_at + timedelta(minutes=ttl)
@@ -21,6 +21,8 @@ def create_access_token(subject: str, expires_minutes: int | None = None) -> str
         "iss": settings.jwt_issuer,
         "aud": settings.jwt_audience,
     }
+    if auth_generation is not None:
+        payload["auth_generation"] = auth_generation
     return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
 
 

@@ -1,5 +1,7 @@
 ﻿export type RequestState = 'idle' | 'loading' | 'success' | 'error';
 
+export type StaffRole = 'administration' | 'dispatcher';
+
 export type User = {
   id: string;
   login: string;
@@ -7,6 +9,7 @@ export type User = {
   plotNumber: string;
   phoneNumber?: string;
   isAdmin: boolean;
+  staffRole?: StaffRole | null;
   passwordChangeRequired?: boolean;
   passwordChangePromptRequired?: boolean;
 };
@@ -23,6 +26,7 @@ export type AdminCreateUserPayload = {
   fullName: string;
   phoneNumber: string;
   plotNumber: string;
+  staffRole?: StaffRole;
 };
 
 export type ChangePasswordPayload = {
@@ -141,6 +145,8 @@ export type AdminMonitorResponse = {
 };
 
 export type AdminUserItem = {
+  isAdmin?: boolean;
+  staffRole?: StaffRole | null;
   id: string;
   login: string;
   password: string | null;

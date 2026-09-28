@@ -21,6 +21,7 @@ import { ResizeMode, Video } from "expo-av";
 import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { downloadNewsAttachment } from "@/components/news/newsDownload";
+import { NewsPollCard } from "@/components/news/NewsPollCard";
 import {
   formatFileSize,
   newsError,
@@ -28,7 +29,7 @@ import {
   newsViewerSource,
 } from "@/services/newsService";
 import { theme } from "@/theme";
-import { NewsMedia, NewsPost } from "@/types/news";
+import { NewsMedia, NewsPoll, NewsPost } from "@/types/news";
 
 const dateLabel = (raw: string) => {
   const date = new Date(raw);
@@ -308,17 +309,21 @@ type Props = {
   onDelete?: () => void;
   deleting?: boolean;
   compact?: boolean;
+  onPollChange: (poll: NewsPoll | null) => void;
 };
 export const NewsPostCard = React.memo(
-  ({ post, admin, onEdit, onDelete, deleting, compact }: Props) => {
+  ({ post, admin, onEdit, onDelete, deleting, compact, onPollChange }: Props) => {
     const focused = useIsFocused();
     const [photoIndex, setPhotoIndex] = useState<number | null>(null);
     const [activeVideo, setActiveVideo] = useState<string | null>(null);
     const [videoError, setVideoError] = useState<string | null>(null);
-    const [expanded, setExpanded] = useState(!compact);
+    const [expanded, setExpanded] = useState(false);
+    const bodyText = post.text?.trim() || "";
+    const longText = bodyText.length > (compact ? 420 : 650) || bodyText.split("\n").length > 7;
     const photos = post.media.filter((media) => media.kind === "image");
     const videos = post.media.filter((media) => media.kind === "video");
     const documents = post.media.filter((media) => media.kind === "document");
+    useEffect(() => { setExpanded(false); }, [post.id]);
     useEffect(() => {
       if (!focused) {
         setActiveVideo(null);
@@ -358,18 +363,19 @@ export const NewsPostCard = React.memo(
             />
           </View>
         </View>
-        {post.text ? (
+        {bodyText ? (
           <View style={styles.textBlock}>
             <Text
               selectable
-              numberOfLines={expanded ? undefined : 7}
+              numberOfLines={!longText || expanded ? undefined : 7}
               style={styles.postText}
             >
-              {post.text}
+              {bodyText}
             </Text>
-            {compact ? (
+            {longText ? (
               <Pressable
                 accessibilityRole="button"
+                accessibilityState={{ expanded }}
                 onPress={() => setExpanded(!expanded)}
                 style={styles.readMore}
               >
@@ -380,6 +386,7 @@ export const NewsPostCard = React.memo(
             ) : null}
           </View>
         ) : null}
+        {post.poll ? <NewsPollCard key={`${post.id}-${post.poll.id}`} postId={post.id} poll={post.poll} admin={admin} onChange={onPollChange} /> : null}
         {photos.length ? (
           <View style={styles.gallery}>
             {photos.map((media, index) => (
@@ -528,9 +535,9 @@ const styles = StyleSheet.create({
   author: { color: theme.colors.textPrimary, fontSize: 16, fontWeight: "600" },
   date: { color: theme.colors.textMuted, fontSize: 12, lineHeight: 17 },
   badge: { padding: 3 },
-  textBlock: { gap: 4 },
-  postText: { color: "#F4EAD0", fontSize: 16, lineHeight: 26 },
-  readMore: { paddingVertical: 8, alignSelf: "flex-start" },
+  textBlock: { gap: 4, flexShrink: 0, width: "100%" },
+  postText: { color: "#FFF5DB", fontSize: 16, lineHeight: 26, flexShrink: 0 },
+  readMore: { paddingVertical: 8, minHeight: 44, justifyContent: "center", alignSelf: "flex-start" },
   readMoreText: { color: "#DCCA96", fontSize: 14, fontWeight: "600" },
   gallery: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   photoTile: {

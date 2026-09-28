@@ -16,6 +16,8 @@ class User(Base):
     name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     apartment: Mapped[str | None] = mapped_column(String(20), nullable=True)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    staff_role: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    auth_generation: Mapped[str | None] = mapped_column(String(32), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     gate_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -34,6 +36,16 @@ class User(Base):
     access_keys: Mapped[list["AccessKey"]] = relationship(back_populates="user")
     access_permissions: Mapped[list["AccessPermission"]] = relationship(back_populates="user")
     access_events: Mapped[list["AccessEventLog"]] = relationship(back_populates="user")
+
+    @property
+    def effective_staff_role(self) -> str | None:
+        if not self.is_admin:
+            return None
+        # Existing installations and older bootstrap code create administrators
+        # with only is_admin. Unknown explicit roles must never grant access.
+        if self.staff_role is None:
+            return "administration"
+        return self.staff_role if self.staff_role in {"administration", "dispatcher"} else None
 
 
 class Request(Base):

@@ -17,13 +17,14 @@ import { NewsState, newsStyles as styles } from "@/components/news/NewsState";
 import { RootStackParamList } from "@/navigation/types";
 import { deleteNews, getNews, newsError } from "@/services/newsService";
 import { useAuthStore } from "@/store/authStore";
+import { canManageNews } from "@/utils/roles";
 import { theme } from "@/theme";
 import { NewsPost } from "@/types/news";
 
 export const NewsArchiveScreen = ({
   navigation,
 }: NativeStackScreenProps<RootStackParamList, "NewsArchive">) => {
-  const admin = useAuthStore((state) => state.user?.isAdmin);
+  const admin = useAuthStore((state) => canManageNews(state.user));
   const [items, setItems] = useState<NewsPost[]>([]);
   const [cursor, setCursor] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -136,6 +137,13 @@ export const NewsArchiveScreen = ({
                 navigation.navigate("NewsEditor", { postId: item.id })
               }
               onDelete={() => setSelected(item)}
+              onPollChange={(poll) => {
+                generation.current += 1;
+                busy.current = false;
+                setLoading(false);
+                setMore(false);
+                setItems((previous) => previous.map((post) => post.id === item.id ? { ...post, poll } : post));
+              }}
             />
           )}
           ListFooterComponent={

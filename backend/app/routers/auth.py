@@ -20,6 +20,7 @@ def _to_user_response(user: User, *, password_change_prompt_required: bool = Fal
         name=user.name,
         apartment=user.apartment,
         is_admin=user.is_admin,
+        staff_role=user.effective_staff_role,
         password_change_required=user.password_change_required,
         password_change_prompt_required=password_change_prompt_required,
     )

@@ -9,6 +9,7 @@ import {
   AdminUserItem,
   AdminUserList,
   PassPurpose,
+  StaffRole,
 } from '@/types';
 
 type BackendAdminResident = {
@@ -77,6 +78,8 @@ type BackendAdminMonitorResponse = {
 };
 
 type BackendAdminUserItem = {
+  is_admin?: boolean;
+  staff_role?: StaffRole | null;
   id: number;
   login: string;
   password?: string | null;
@@ -104,6 +107,7 @@ export type AdminRequestQuery = {
 };
 
 export type AdminUserQuery = {
+  accountType?: 'resident' | 'staff' | 'all';
   search?: string;
   limit?: number;
   offset?: number;
@@ -168,6 +172,8 @@ const mapMonitorEvent = (item: BackendAdminMonitorEventItem): AdminMonitorEventI
 });
 
 const mapAdminUser = (item: BackendAdminUserItem): AdminUserItem => ({
+  isAdmin: Boolean(item.is_admin),
+  staffRole: item.staff_role,
   id: String(item.id),
   login: item.login,
   password: item.password ?? null,
@@ -232,6 +238,7 @@ export const apiAdminService = {
 
   async getUsers(query: AdminUserQuery = {}): Promise<AdminUserList> {
     const params = new URLSearchParams();
+    if (query.accountType) params.set('account_type', query.accountType);
 
     if (query.search?.trim()) {
       params.set('search', query.search.trim());
@@ -261,7 +268,8 @@ export const apiAdminService = {
       body: {
         full_name: payload.fullName,
         phone: payload.phoneNumber,
-        plot_number: payload.plotNumber,
+        plot_number: payload.staffRole && !payload.plotNumber.trim() ? undefined : payload.plotNumber,
+        staff_role: payload.staffRole,
       },
     });
     return mapAdminUser(result);
@@ -271,6 +279,14 @@ export const apiAdminService = {
     const result = await apiRequest<BackendAdminUserItem>(`/api/admin/users/${userId}/block`, {
       method: 'POST',
       timeoutMs: ADMIN_MUTATION_TIMEOUT_MS,
+    });
+    return mapAdminUser(result);
+  },
+
+  async setStaffRole(userId: string, staffRole: StaffRole): Promise<AdminUserItem> {
+    const result = await apiRequest<BackendAdminUserItem>(`/api/admin/users/${userId}/role`, {
+      method: 'PATCH',
+      body: { staff_role: staffRole },
     });
     return mapAdminUser(result);
   },

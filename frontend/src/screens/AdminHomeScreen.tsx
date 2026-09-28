@@ -12,6 +12,7 @@ import { useAuthStore } from '@/store/authStore';
 import { theme } from '@/theme';
 import { getLayoutMetrics } from '@/utils/layout';
 import { goBackOrHome } from '@/utils/backNavigation';
+import { canManageNews, canManageStaff, getStaffRole } from '@/utils/roles';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Admin'>;
 
@@ -19,6 +20,8 @@ export const AdminHomeScreen = ({ navigation }: Props) => {
   const { width, height } = useWindowDimensions();
   const metrics = getLayoutMetrics(width, height);
   const logout = useAuthStore((state) => state.logout);
+  const user = useAuthStore((state) => state.user);
+  const administration = getStaffRole(user) === 'administration';
 
   return (
     <AppBackground>
@@ -40,18 +43,18 @@ export const AdminHomeScreen = ({ navigation }: Props) => {
           <ScreenHeader title="Управление" onBack={() => goBackOrHome(navigation)} />
 
           <View style={[styles.summaryCard, { gap: metrics.isDesktop ? 12 : 10 }]}>
-            <Text style={[styles.summaryTitle, { fontSize: metrics.isDesktop ? 24 : 21 }]}>Панель председателя</Text>
+            <Text style={[styles.summaryTitle, { fontSize: metrics.isDesktop ? 24 : 21 }]}>{administration ? 'Администрация' : 'Диспетчерская'}</Text>
             <Text style={styles.summaryText}>
-              Новости посёлка, заявки жителей, пользователи и управление доступом.
+              {administration ? 'Новости и голосования, регистрация жителей и управление доступом.' : 'Мониторинг, пропуски, пользователи и управление доступом.'}
             </Text>
           </View>
 
           <View style={[styles.actions, { gap: metrics.panelGap }]}>
-            <AppButton
+            {canManageNews(user) ? <AppButton
               title="Опубликовать новость"
               onPress={() => navigation.navigate('NewsEditor')}
               leftIcon={<MaterialCommunityIcons name="newspaper-plus" size={22} color={theme.colors.textPrimary} />}
-            />
+            /> : null}
             <AppButton
               title="Новости посёлка"
               onPress={() => navigation.navigate('Home', { screen: 'News' })}
@@ -72,6 +75,11 @@ export const AdminHomeScreen = ({ navigation }: Props) => {
               onPress={() => navigation.push('AdminUsers')}
               leftIcon={<MaterialCommunityIcons name="account-multiple-outline" size={22} color={theme.colors.textPrimary} />}
             />
+            {canManageStaff(user) ? <AppButton
+              title="Сотрудники и роли"
+              onPress={() => navigation.push('AdminStaff')}
+              leftIcon={<MaterialCommunityIcons name="account-cog-outline" size={22} color={theme.colors.textPrimary} />}
+            /> : null}
             <AppButton
               title="Открыть шлагбаум"
               onPress={() => navigation.navigate('Home', { screen: 'OpenBarrier' })}

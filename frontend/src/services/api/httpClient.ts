@@ -3,7 +3,7 @@ import { API_BASE_URL } from '@/services/api/config';
 import { getAccessToken, setAccessToken } from '@/services/api/tokenStore';
 
 type RequestOptions = {
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   timeoutMs?: number;
 };
@@ -134,9 +134,9 @@ export const apiRequest = async <T>(path: string, options: RequestOptions = {}):
     } catch {
       // Use default message.
     }
-    if (response.status === 401) {
+    if (response.status === 401 && token && getAccessToken() === token) {
       await setAccessToken(null);
-      await unauthorizedHandler?.();
+      if (!getAccessToken()) await unauthorizedHandler?.();
     }
     throw new ApiError(message, response.status);
   }

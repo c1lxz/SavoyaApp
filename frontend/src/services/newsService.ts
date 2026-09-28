@@ -9,11 +9,38 @@ import {
   NewsPage,
   NewsPayload,
   NewsPost,
+  NewsPoll,
+  NewsPollDefinition,
 } from "@/types/news";
 
 export const NEWS_FILE_LIMIT = 100 * 1024 * 1024;
 export const NEWS_ATTACHMENT_LIMIT = 10;
 export const NEWS_TEXT_LIMIT = 20000;
+export const NEWS_POLL_OPTION_LIMIT = 10;
+export const NEWS_POLL_QUESTION_LIMIT = 300;
+export const NEWS_POLL_ANSWER_LIMIT = 200;
+
+export const newsPollDefinition = (poll?: NewsPoll | null): NewsPollDefinition | null =>
+  poll ? { question: poll.question, options: poll.options.map((option) => option.text) } : null;
+export const normalizeNewsPoll = (poll: NewsPollDefinition): NewsPollDefinition => ({
+  question: poll.question.trim(), options: poll.options.map((option) => option.trim()),
+});
+export const newsPollError = (poll: NewsPollDefinition | null): string | null => {
+  if (!poll) return null;
+  const value = normalizeNewsPoll(poll);
+  if (!value.question) return "Введите вопрос голосования.";
+  if (value.question.length > NEWS_POLL_QUESTION_LIMIT) return "Вопрос должен быть не длиннее 300 символов.";
+  if (value.options.length < 2 || value.options.length > NEWS_POLL_OPTION_LIMIT) return "Добавьте от 2 до 10 вариантов ответа.";
+  if (value.options.some((option) => !option)) return "Заполните все варианты ответа.";
+  if (value.options.some((option) => option.length > NEWS_POLL_ANSWER_LIMIT)) return "Вариант ответа должен быть не длиннее 200 символов.";
+  if (new Set(value.options.map((option) => option.toLocaleLowerCase("ru-RU"))).size !== value.options.length)
+    return "Варианты ответа должны отличаться друг от друга.";
+  return null;
+};
+
+export const newsPollEditPayload = (poll: NewsPollDefinition | null, original?: NewsPoll | null) =>
+  JSON.stringify(poll && normalizeNewsPoll(poll)) === JSON.stringify(newsPollDefinition(original))
+    ? {} : { poll: poll && normalizeNewsPoll(poll) };
 
 export const newsUrl = (path: string): string => {
   const base =
@@ -38,6 +65,12 @@ export const getNews = (limit = 10, beforeId?: number) =>
   );
 export const getNewsPost = (id: number) =>
   apiRequest<NewsPost>(`/api/news/${id}`);
+export const voteNewsPoll = (postId: number, optionId: number) =>
+  apiRequest<NewsPoll>(`/api/news/${postId}/poll/vote`, {
+    method: "POST", body: { option_id: optionId },
+  });
+export const closeNewsPoll = (postId: number) =>
+  apiRequest<NewsPoll>(`/api/news/${postId}/poll/close`, { method: "POST" });
 export const getNewsMedia = (id: string) =>
   apiRequest<NewsMedia>(`/api/news/media/${id}`);
 export const updateNews = (id: number, payload: NewsPayload, version: number) =>
@@ -199,6 +232,7 @@ export type NewsDraft = {
   media: NewsMedia[];
   requestId: string;
   pendingPayload?: NewsPayload;
+  poll?: NewsPollDefinition | null;
 };
 // Transport progress and renewed signed URLs do not change an author's draft.
 export const newsDraftContentKey = (draft: NewsDraft) =>
@@ -207,6 +241,7 @@ export const newsDraftContentKey = (draft: NewsDraft) =>
     media_ids: draft.media.map((media) => media.id),
     requestId: draft.requestId,
     pendingPayload: draft.pendingPayload,
+    poll: draft.poll,
   });
 
 // Adjacent gallery pages must never eagerly download the original attachment.

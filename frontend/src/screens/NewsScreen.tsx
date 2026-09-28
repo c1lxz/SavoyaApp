@@ -24,6 +24,7 @@ import {
   newsError,
 } from "@/services/newsService";
 import { useAuthStore } from "@/store/authStore";
+import { canManageNews } from "@/utils/roles";
 import { theme } from "@/theme";
 import { NewsPost } from "@/types/news";
 
@@ -31,7 +32,7 @@ export const NewsScreen = ({
   navigation,
   route,
 }: MainTabScreenProps<"News">) => {
-  const admin = useAuthStore((state) => state.user?.isAdmin);
+  const admin = useAuthStore((state) => canManageNews(state.user));
   const targetId = route.params?.postId;
   const [loaded, setLoaded] = useState<{
     targetId: number | undefined;
@@ -180,6 +181,7 @@ export const NewsScreen = ({
           ) : (
             <>
               <NewsPostCard
+                key={post.id}
                 post={post}
                 admin={admin}
                 onEdit={() =>
@@ -187,6 +189,13 @@ export const NewsScreen = ({
                 }
                 onDelete={() => setConfirm(true)}
                 deleting={deleting}
+                onPollChange={(poll) => {
+                  // A feed read begun before this vote must not replace its result.
+                  generation.current += 1;
+                  setLoading(false);
+                  setLoaded((previous) => previous?.post?.id === post.id
+                    ? { ...previous, post: { ...previous.post, poll } } : previous);
+                }}
               />
               {error ? (
                 <Text accessibilityLiveRegion="polite" style={styles.error}>

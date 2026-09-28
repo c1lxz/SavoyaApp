@@ -16,6 +16,7 @@ export type RootStackParamList = {
   AdminMonitor: undefined;
   AdminRequests: undefined;
   AdminUsers: undefined;
+  AdminStaff: undefined;
   Home: NavigatorScreenParams<MainTabParamList> | undefined;
   Account: undefined;
   CreatePass: undefined;

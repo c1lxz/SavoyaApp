@@ -103,6 +103,7 @@ function fixture(initialTarget) {
       newsError: (error) => error.message, deleteNews: async () => {},
     },
     '@/store/authStore': { useAuthStore: (selector) => selector({ user: { isAdmin: false } }) },
+    '@/utils/roles': { canManageNews: (user) => !!user?.isAdmin && user.staffRole !== 'dispatcher' },
     '@/theme': { theme: { colors: {} } },
   };
   const exported = {};
@@ -230,6 +231,19 @@ async function main() {
     assert.equal(forbidden.nodes('NewsPostCard').length, 0, '403 clears a previously accessible same-target post');
     assert.equal(forbidden.nodes('NewsState')[0].props.description, 'Access withdrawn');
   }
+  {
+    const voting = fixture(31);
+    voting.render();
+    voting.requests[0].resolve({ id: 31, text: 'Text remains', poll: { id: 2, total_votes: 0, my_option_id: null } });
+    await flush(); voting.render();
+    voting.nodes('Pressable').find((node) => node.props.accessibilityLabel === 'Обновить новости').props.onPress();
+    const updated = { id: 2, total_votes: 1, my_option_id: 5 };
+    voting.nodes('NewsPostCard')[0].props.onPollChange(updated);
+    voting.requests[1].resolve({ id: 31, text: 'Old snapshot', poll: { id: 2, total_votes: 0, my_option_id: null } });
+    await flush(); voting.render();
+    assert.deepEqual(voting.nodes('NewsPostCard')[0].props.post.poll, updated, 'read started before a vote must not restore stale results');
+    assert.equal(voting.nodes('NewsPostCard')[0].props.post.text, 'Text remains');
+  }
   let unauthorized = 0;
   httpClient.setUnauthorizedHandler(() => { unauthorized += 1; });
   for (const status of [403, 404, 503, 401]) {
@@ -247,6 +261,6 @@ async function main() {
   assert.equal(unauthorized, 1, 'typed errors retain the existing unauthorized cleanup');
   httpState.failure = new Error('Transport failed');
   await assert.rejects(httpClient.apiRequest('/api/news/1'), (reason) => reason === httpState.failure);
-  console.log('PASS 14 news screen scenarios: target isolation, 403/404 clearing, retry, stale responses, transient refresh preservation; 5 HTTP error contract checks.');
+  console.log('PASS 15 news screen scenarios: target isolation, 403/404 clearing, retry, stale responses, transient refresh preservation, vote versus stale feed; 5 HTTP error contract checks.');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

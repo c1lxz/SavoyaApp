@@ -17,6 +17,9 @@ from .utils.input_safety import (
 )
 
 
+StaffRole = Literal["administration", "dispatcher"]
+
+
 class MessageResponse(BaseModel):
     message: str
 
@@ -27,6 +30,7 @@ class UserResponse(BaseModel):
     name: str | None = None
     apartment: str | None = None
     is_admin: bool = False
+    staff_role: StaffRole | None = None
     password_change_required: bool = False
     password_change_prompt_required: bool = False
 
@@ -134,6 +138,7 @@ class CompatUser(BaseModel):
     plotNumber: str
     phoneNumber: str
     isAdmin: bool = False
+    staffRole: StaffRole | None = None
     passwordChangeRequired: bool = False
     passwordChangePromptRequired: bool = False
 
@@ -367,6 +372,8 @@ class AdminUserItem(BaseModel):
     plot_number: str | None = None
     owner_index: int | None = None
     is_active: bool
+    is_admin: bool = False
+    staff_role: StaffRole | None = None
     password_change_required: bool = False
     created_at: datetime
 
@@ -379,7 +386,8 @@ class AdminUserListResponse(BaseModel):
 class AdminCreateUserPayload(BaseModel):
     full_name: str = Field(min_length=2, max_length=120)
     phone: str = Field(min_length=7, max_length=32)
-    plot_number: str = Field(min_length=1, max_length=20)
+    plot_number: str | None = Field(default=None, min_length=1, max_length=20)
+    staff_role: StaffRole | None = None
 
     @field_validator("full_name")
     @classmethod
@@ -393,8 +401,18 @@ class AdminCreateUserPayload(BaseModel):
 
     @field_validator("plot_number")
     @classmethod
-    def validate_plot_number(cls, value: str) -> str:
-        return normalize_plot_number(value)
+    def validate_plot_number(cls, value: str | None) -> str | None:
+        return normalize_plot_number(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def require_resident_plot(self) -> "AdminCreateUserPayload":
+        if self.staff_role is None and self.plot_number is None:
+            raise ValueError("Для жителя укажите номер участка")
+        return self
+
+
+class AdminUpdateStaffRolePayload(BaseModel):
+    staff_role: StaffRole
 
 
 class AdminMonitorEventItem(BaseModel):
