@@ -9,11 +9,13 @@ import { PushNotificationBridge } from './src/components/PushNotificationBridge'
 const WEB_VIEWPORT_STYLE_ID = 'savoya-web-viewport-styles';
 const WEB_VIEWPORT_META_ID = 'savoya-web-viewport-meta';
 const WEB_VIEWPORT_BACKDROP = 'rgb(6, 12, 10)';
+const APP_TITLE = 'Экосистема Савоя';
 
 const ensureWebViewport = () => {
   if (Platform.OS !== 'web' || typeof document === 'undefined') {
     return;
   }
+  document.title = APP_TITLE;
 
   let viewportMeta = document.getElementById(WEB_VIEWPORT_META_ID) as HTMLMetaElement | null;
   if (!viewportMeta) {

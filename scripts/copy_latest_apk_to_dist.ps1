@@ -34,6 +34,7 @@ if ([string]::IsNullOrWhiteSpace($expectedVersion) -or $expectedVersionCode -le 
 }
 
 $expectedNames = @(
+    "Экосистема Савоя.apk",
     "Shlagbaum-Savoya-release-$expectedVersion.apk",
     "Savoya-release-$expectedVersion.apk"
 )

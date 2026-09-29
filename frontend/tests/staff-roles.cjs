@@ -17,7 +17,7 @@ check('administration can register and publish', () => {
   const user = { isAdmin: true, staffRole: 'administration' };
   assert.equal(roles.canRegisterUsers(user), true); assert.equal(roles.canManageNews(user), true);
 });
-check('dispatcher is staff without registration or news management', () => {
+check('dispatcher is staff without user management or news management', () => {
   const user = { isAdmin: true, staffRole: 'dispatcher' };
   assert.equal(roles.isStaff(user), true); assert.equal(roles.canRegisterUsers(user), false);
   assert.equal(roles.canManageNews(user), false); assert.equal(roles.canManageStaff(user), false);
@@ -57,14 +57,54 @@ function renderHome(user) {
   function visit(node) { if (!node || typeof node !== 'object') return; if (node.type === 'Button') titles.push(node.props.title); node.children?.forEach(visit); }
   visit(screen); return titles;
 }
+function renderResidentHome() {
+  const react = { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat() }) };
+  const navigationCalls = [];
+  const navigation = { navigate: (...args) => navigationCalls.push(args) };
+  const screen = load('screens/HomeScreen.tsx', {
+    react,
+    '@expo/vector-icons': { MaterialCommunityIcons: 'Icon' },
+    '@react-navigation/bottom-tabs': { createBottomTabNavigator: () => ({ Navigator: 'Navigator', Screen: 'Tab' }) },
+    '@react-navigation/native': { useIsFocused: () => true },
+    'react-native': { Pressable: 'Pressable', StyleSheet: { create: (s) => s }, Text: 'Text', View: 'View' },
+    'react-native-safe-area-context': { SafeAreaView: 'SafeArea' },
+    '@/components/BottomDock': { BottomDock: 'Dock' },
+    '@/components/PasswordChangePromptModal': { PasswordChangePromptModal: 'PasswordPrompt' },
+    '@/screens/MyPassesScreen': { MyPassesScreen: 'Passes' },
+    '@/screens/NewsScreen': { NewsScreen: 'News' },
+    '@/screens/OpenBarrierScreen': { OpenBarrierScreen: 'Barrier' },
+    '@/screens/WicketsScreen': { WicketsScreen: 'Wickets' },
+    '@/store/authStore': { useAuthStore: (selector) => selector({ user: null, error: null, shouldPromptPasswordChange: false, passwordChangeState: 'idle', changePassword: async () => {}, dismissPasswordChangePrompt: () => {} }) },
+    '@/theme': { theme: { colors: { textPrimary: 'white', textSecondary: 'gray', screenBackground: 'black', cardStrong: 'green' } } },
+  }).HomeScreen({ navigation });
+  const brand = [];
+  function visit(node) { if (!node || typeof node !== 'object') return; if (node.props?.accessibilityLabel === 'Экосистема Савоя — Новости') brand.push(node); node.children?.forEach(visit); }
+  visit(screen);
+  return { brand, navigationCalls };
+}
 check('dispatcher screen retains operational routes and news reading', () => {
   const titles = renderHome({ isAdmin: true, staffRole: 'dispatcher' });
-  for (const name of ['Мониторинг', 'Пропуски', 'Пользователи', 'Открыть шлагбаум', 'Калитки', 'Новости посёлка']) assert.ok(titles.includes(name));
+  for (const name of ['Мониторинг', 'Пропуски', 'Открыть шлагбаум', 'Калитки', 'Новости посёлка']) assert.ok(titles.includes(name));
+  assert.ok(!titles.includes('Пользователи'));
   assert.ok(!titles.includes('Опубликовать новость')); assert.ok(!titles.includes('Сотрудники и роли'));
 });
 check('administration screen exposes news and staff management', () => {
   const titles = renderHome({ isAdmin: true, staffRole: 'administration' });
-  assert.ok(titles.includes('Опубликовать новость')); assert.ok(titles.includes('Сотрудники и роли'));
+  assert.ok(titles.includes('Опубликовать новость')); assert.ok(titles.includes('Сотрудники и роли')); assert.ok(titles.includes('Пользователи'));
+});
+check('brand uses the full name and navigates to News', () => {
+  const { brand, navigationCalls } = renderResidentHome();
+  assert.equal(brand.length, 1);
+  assert.equal(brand[0].children.find((node) => node?.type === 'Text')?.children[0], 'Экосистема Савоя');
+  brand[0].props.onPress();
+  assert.deepEqual(navigationCalls, [['Home', { screen: 'News' }]]);
+});
+check('web app title uses the full product name', () => {
+  const config = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../app.json'), 'utf8'));
+  assert.equal(config.expo.name, 'Экосистема Савоя');
+  assert.equal(config.expo.web.favicon, './assets/app-icon.png');
+  assert.match(fs.readFileSync(path.resolve(__dirname, '../App.tsx'), 'utf8'), /document\.title = APP_TITLE/);
+  assert.match(fs.readFileSync(path.resolve(__dirname, '../nginx.conf'), 'utf8'), /filename\*=UTF-8''%D0%AD/);
 });
 
 (async () => {

@@ -56,7 +56,7 @@ try {
             throw 'APK does not contain the production API configuration.'
         }
     } finally { $apkArchive.Dispose() }
-    $destination = Join-Path $repoRoot ("Shlagbaum-Savoya-release-{0}.apk" -f $appConfig.expo.version)
+    $destination = Join-Path $repoRoot 'Экосистема Савоя.apk'
     Copy-Item -LiteralPath $builtApk -Destination $destination
     Get-FileHash -LiteralPath $destination -Algorithm SHA256
 } finally { Pop-Location }

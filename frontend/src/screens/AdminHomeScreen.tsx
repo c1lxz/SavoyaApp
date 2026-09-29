@@ -12,7 +12,7 @@ import { useAuthStore } from '@/store/authStore';
 import { theme } from '@/theme';
 import { getLayoutMetrics } from '@/utils/layout';
 import { goBackOrHome } from '@/utils/backNavigation';
-import { canManageNews, canManageStaff, getStaffRole } from '@/utils/roles';
+import { canManageNews, canManageStaff, canRegisterUsers, getStaffRole } from '@/utils/roles';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Admin'>;
 
@@ -45,7 +45,7 @@ export const AdminHomeScreen = ({ navigation }: Props) => {
           <View style={[styles.summaryCard, { gap: metrics.isDesktop ? 12 : 10 }]}>
             <Text style={[styles.summaryTitle, { fontSize: metrics.isDesktop ? 24 : 21 }]}>{administration ? 'Администрация' : 'Диспетчерская'}</Text>
             <Text style={styles.summaryText}>
-              {administration ? 'Новости и голосования, регистрация жителей и управление доступом.' : 'Мониторинг, пропуски, пользователи и управление доступом.'}
+              {administration ? 'Новости и голосования, регистрация жителей и управление доступом.' : 'Мониторинг, пропуски и управление доступом.'}
             </Text>
           </View>
 
@@ -70,11 +70,11 @@ export const AdminHomeScreen = ({ navigation }: Props) => {
               onPress={() => navigation.push('AdminRequests')}
               leftIcon={<MaterialCommunityIcons name="clipboard-text-outline" size={22} color={theme.colors.textPrimary} />}
             />
-            <AppButton
+            {canRegisterUsers(user) ? <AppButton
               title="Пользователи"
               onPress={() => navigation.push('AdminUsers')}
               leftIcon={<MaterialCommunityIcons name="account-multiple-outline" size={22} color={theme.colors.textPrimary} />}
-            />
+            /> : null}
             {canManageStaff(user) ? <AppButton
               title="Сотрудники и роли"
               onPress={() => navigation.push('AdminStaff')}

@@ -57,7 +57,7 @@ class FcmSender:
                 raise PushFailure("fcm_credentials_unavailable") from exc
         message = {
             "token": token,
-            "notification": {"title": "Новости Савоя", "body": "Опубликована новая новость. Откройте приложение, чтобы прочитать"},
+            "notification": {"title": "Экосистема Савоя", "body": "Опубликована новая новость. Откройте приложение, чтобы прочитать"},
             "data": {"screen": "news", "news_id": str(post.id)},
             "android": {
                 "priority": "high", "ttl": "86400s", "collapse_key": f"news-{post.id}",

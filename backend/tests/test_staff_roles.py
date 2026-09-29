@@ -71,14 +71,14 @@ def test_auth_payloads_expose_effective_role(client, role, legacy, expected):
     assert compat.json()["staffRole"] == expected
 
 
-def test_dispatcher_keeps_resident_management_and_monitor(client):
+def test_dispatcher_keeps_operations_without_user_directory(client):
     _, dispatcher = account("dispatcher")
     resident_id, resident = account()
-    for path in ("/api/admin/users", "/api/admin/requests", "/api/admin/monitor"):
+    for path in ("/api/admin/requests", "/api/admin/monitor"):
         response = client.get(path, headers=dispatcher)
         assert response.status_code == 200, response.text
-    residents = client.get("/api/admin/users", headers=dispatcher).json()["items"]
-    assert all(not row["is_admin"] and row["staff_role"] is None for row in residents)
+    for query in ("", "?account_type=resident", "?account_type=staff", "?account_type=all"):
+        assert client.get(f"/api/admin/users{query}", headers=dispatcher).status_code == 403
 
     async def create_pass():
         async with SessionLocal() as session:
@@ -89,17 +89,16 @@ def test_dispatcher_keeps_resident_management_and_monitor(client):
             return request.id
     pass_id = asyncio.run(create_pass())
     assert client.delete(f"/api/admin/requests/{pass_id}", headers=dispatcher).status_code == 200
-    assert client.post(f"/api/admin/users/{resident_id}/block", headers=dispatcher).status_code == 200
-    assert client.get("/user/me", headers=resident).status_code == 401
-    assert client.post(f"/api/admin/users/{resident_id}/unblock", headers=dispatcher).status_code == 200
+    for action in ("block", "unblock"):
+        assert client.post(f"/api/admin/users/{resident_id}/{action}", headers=dispatcher).status_code == 403
+    assert client.delete(f"/api/admin/users/{resident_id}", headers=dispatcher).status_code == 403
     assert client.get("/user/me", headers=resident).status_code == 200
-    assert client.delete(f"/api/admin/users/{resident_id}", headers=dispatcher).status_code == 200
 
 
 def test_dispatcher_cannot_create_users_manage_staff_or_news(client):
     _, dispatcher = account("dispatcher")
     admin_id, _ = account("administration")
-    for account_type in ("staff", "all"):
+    for account_type in ("resident", "staff", "all"):
         assert client.get(f"/api/admin/users?account_type={account_type}", headers=dispatcher).status_code == 403
     for action in ("block", "unblock"):
         assert client.post(f"/api/admin/users/{admin_id}/{action}", headers=dispatcher).status_code == 403

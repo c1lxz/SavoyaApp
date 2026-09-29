@@ -100,17 +100,6 @@ async def _require_other_administrator(session: AsyncSession, user_id: int) -> N
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Нельзя отключить последнего администратора")
 
 
-async def _manageable_user(session: AsyncSession, user_id: int, actor: User) -> User:
-    if actor.effective_staff_role == "administration":
-        await _lock_administration_actor(session, actor.id)
-    user = await session.get(User, user_id, populate_existing=True)
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
-    if user.is_admin and actor.effective_staff_role != "administration":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
-    return user
-
-
 @router.get("/requests", response_model=AdminRequestListResponse)
 async def admin_list_requests(
     search: str | None = Query(default=None, min_length=1, max_length=100),
@@ -159,10 +148,8 @@ async def admin_list_users(
     limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_db_session),
-    _admin: User = Depends(get_current_staff_user),
+    _admin: User = Depends(get_current_admin_user),
 ) -> AdminUserListResponse:
-    if account_type != "resident" and _admin.effective_staff_role != "administration":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     filters = [] if account_type == "all" else [User.is_admin.is_(account_type == "staff")]
     normalized_search = (search or "").strip()
     if normalized_search:
@@ -269,9 +256,12 @@ async def admin_update_staff_role(
 async def admin_block_user(
     user_id: int,
     session: AsyncSession = Depends(get_db_session),
-    _admin: User = Depends(get_current_staff_user),
+    _admin: User = Depends(get_current_admin_user),
 ) -> AdminUserItem:
-    user = await _manageable_user(session, user_id, _admin)
+    await _lock_administration_actor(session, _admin.id)
+    user = await session.get(User, user_id, populate_existing=True)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
     if user.id == _admin.id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Нельзя заблокировать собственную учётную запись")
     if user.is_active and user.effective_staff_role == "administration":
@@ -288,9 +278,12 @@ async def admin_block_user(
 async def admin_unblock_user(
     user_id: int,
     session: AsyncSession = Depends(get_db_session),
-    _admin: User = Depends(get_current_staff_user),
+    _admin: User = Depends(get_current_admin_user),
 ) -> AdminUserItem:
-    user = await _manageable_user(session, user_id, _admin)
+    await _lock_administration_actor(session, _admin.id)
+    user = await session.get(User, user_id, populate_existing=True)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
 
     user.is_active = True
     session.add(user)
@@ -303,8 +296,9 @@ async def admin_unblock_user(
 async def admin_delete_user(
     user_id: int,
     session: AsyncSession = Depends(get_db_session),
-    _admin: User = Depends(get_current_staff_user),
+    _admin: User = Depends(get_current_admin_user),
 ) -> MessageResponse:
+    await _lock_administration_actor(session, _admin.id)
     query = await session.execute(select(User).where(User.id == user_id, User.is_admin.is_(False)))
     user = query.scalar_one_or_none()
     if user is None:

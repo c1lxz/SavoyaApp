@@ -11,7 +11,7 @@ import { AdminMonitorScreen } from '@/screens/AdminMonitorScreen';
 import { AdminRequestsScreen } from '@/screens/AdminRequestsScreen';
 import { AdminUsersScreen } from '@/screens/AdminUsersScreen';
 import { AdminStaffScreen } from '@/screens/AdminStaffScreen';
-import { canManageNews, canManageStaff, getStaffRole } from '@/utils/roles';
+import { canManageNews, canManageStaff, canRegisterUsers, getStaffRole } from '@/utils/roles';
 import { AccountScreen } from '@/screens/AccountScreen';
 import { AuthScreen } from '@/screens/AuthScreen';
 import { CreatePassScreen } from '@/screens/CreatePassScreen';
@@ -160,7 +160,12 @@ export const RootNavigator = () => {
     : 'Auth';
 
   return (
-    <NavigationContainer ref={navigationRef} linking={linking} theme={navigationTheme}>
+    <NavigationContainer
+      ref={navigationRef}
+      linking={linking}
+      theme={navigationTheme}
+      documentTitle={{ formatter: () => 'Экосистема Савоя' }}
+    >
       <Stack.Navigator
         key={
           user
@@ -192,7 +197,7 @@ export const RootNavigator = () => {
                   <Stack.Screen name="Admin" component={AdminHomeScreen} />
                   <Stack.Screen name="AdminMonitor" component={AdminMonitorScreen} />
                   <Stack.Screen name="AdminRequests" component={AdminRequestsScreen} />
-                  <Stack.Screen name="AdminUsers" component={AdminUsersScreen} />
+                  {canRegisterUsers(user) ? <Stack.Screen name="AdminUsers" component={AdminUsersScreen} /> : null}
                   {canManageNews(user) ? <Stack.Screen name="NewsEditor" component={NewsEditorScreen} /> : null}
                   {canManageStaff(user) ? <Stack.Screen name="AdminStaff" component={AdminStaffScreen} /> : null}
                 </>
