@@ -16,7 +16,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 def _to_user_response(user: User, *, password_change_prompt_required: bool = False) -> UserResponse:
     return UserResponse(
         id=user.id,
-        phone=user.phone,
+        login=user.login,
+        phone=user.public_phone,
         name=user.name,
         apartment=user.apartment,
         is_admin=user.is_admin,

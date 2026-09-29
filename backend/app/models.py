@@ -38,6 +38,14 @@ class User(Base):
     access_events: Mapped[list["AccessEventLog"]] = relationship(back_populates="user")
 
     @property
+    def public_phone(self) -> str:
+        # Existing SQLite installations require a unique non-null value in this
+        # column. Phone-less staff use an internal identifier, never a phone.
+        if self.is_admin and self.phone.startswith("@staff:"):
+            return ""
+        return self.phone
+
+    @property
     def effective_staff_role(self) -> str | None:
         if not self.is_admin:
             return None

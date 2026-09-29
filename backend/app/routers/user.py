@@ -16,7 +16,8 @@ router = APIRouter(prefix="/user", tags=["user"])
 async def get_me(user: User = Depends(get_current_user)) -> UserResponse:
     return UserResponse(
         id=user.id,
-        phone=user.phone,
+        login=user.login,
+        phone=user.public_phone,
         name=user.name,
         apartment=user.apartment,
         is_admin=user.is_admin,

@@ -267,7 +267,7 @@ export const apiAdminService = {
       timeoutMs: ADMIN_MUTATION_TIMEOUT_MS,
       body: {
         full_name: payload.fullName,
-        phone: payload.phoneNumber,
+        phone: payload.staffRole && !payload.phoneNumber.trim() ? undefined : payload.phoneNumber,
         plot_number: payload.staffRole && !payload.plotNumber.trim() ? undefined : payload.plotNumber,
         staff_role: payload.staffRole,
       },

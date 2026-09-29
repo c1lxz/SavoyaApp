@@ -63,8 +63,8 @@ export const AdminStaffScreen = ({ navigation }: Props) => {
 
   const create = async () => {
     if (!allowed || mutation.current) return;
-    if (name.trim().split(/\s+/).length < 2 || !phone.trim()) {
-      setError('Укажите имя, фамилию и телефон сотрудника');
+    if (name.trim().split(/\s+/).length < 2) {
+      setError('Укажите имя и фамилию сотрудника');
       return;
     }
     mutation.current = true;
@@ -113,7 +113,7 @@ export const AdminStaffScreen = ({ navigation }: Props) => {
           <View style={styles.card}>
             <Text style={styles.title}>Добавить сотрудника</Text>
             <AppInput label="Имя и фамилия" accessibilityLabel="Имя и фамилия сотрудника" value={name} onChangeText={setName} editable={!busy} maxLength={100} />
-            <AppInput label="Телефон" accessibilityLabel="Телефон сотрудника" value={phone} onChangeText={setPhone} editable={!busy} keyboardType="phone-pad" maxLength={30} />
+            <AppInput label="Телефон (необязательно)" accessibilityLabel="Телефон сотрудника, необязательно" value={phone} onChangeText={setPhone} editable={!busy} keyboardType="phone-pad" maxLength={30} />
             <View style={styles.roles} accessibilityRole="radiogroup">
               {(['dispatcher', 'administration'] as const).map((value) => (
                 <Pressable key={value} accessibilityRole="radio" accessibilityState={{ checked: role === value, disabled: busy }} disabled={busy} onPress={() => setRole(value)} style={[styles.choice, role === value && styles.selected]}>
@@ -145,7 +145,7 @@ export const AdminStaffScreen = ({ navigation }: Props) => {
           {items.map((item) => <View key={item.id} style={styles.card}>
             <Text style={styles.title}>{item.fullName || item.login}{item.id === user?.id ? ' (вы)' : ''}</Text>
             <Text style={styles.body}>{roleLabel(item.staffRole)} · {item.isActive ? 'Активен' : 'Заблокирован'}</Text>
-            <Text selectable style={styles.muted}>{item.login} · {item.phone}</Text>
+            <Text selectable style={styles.muted}>{item.login}{item.phone ? ` · ${item.phone}` : ''}</Text>
             {item.password ? <>
               <Pressable accessibilityRole="button" accessibilityState={{ expanded: revealedId === item.id }} style={styles.smallButton} onPress={() => setRevealedId(revealedId === item.id ? null : item.id)}>
                 <Text style={styles.body}>{revealedId === item.id ? 'Скрыть данные для входа' : 'Показать данные для входа'}</Text>

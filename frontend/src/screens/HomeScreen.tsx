@@ -34,7 +34,7 @@ export const HomeScreen = ({ navigation }: Props) => {
         <View style={styles.toolbar}>
           <View style={styles.brand}>
             <MaterialCommunityIcons name="pine-tree" size={22} color={theme.colors.textPrimary} />
-            <Text style={styles.brandName}>САВОЯ</Text>
+            <Text style={styles.brandName}>ЭКОСИСТЕМА САВОЯ</Text>
           </View>
           <View style={styles.actions}>
             {user?.isAdmin ? (
@@ -98,7 +98,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  brandName: { color: theme.colors.textPrimary, fontSize: 14, fontWeight: '600', letterSpacing: 3 },
+  brandName: { color: theme.colors.textPrimary, fontSize: 12, fontWeight: '600', letterSpacing: 1 },
   actions: { flexDirection: 'row', gap: 4 },
   toolbarButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22 },
   pressed: { backgroundColor: theme.colors.cardStrong },

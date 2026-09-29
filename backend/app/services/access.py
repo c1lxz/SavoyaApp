@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..models import AccessEventLog, AccessKey, AccessPermission, AccessPoint, Request, User
+from ..utils.input_safety import normalize_account_phone
 from ..utils.datetime import ensure_utc_datetime, utcnow
 from ..utils.vehicle_number import compact_vehicle_number
 from .gate import GateOpenResult, gate_client
@@ -320,7 +321,48 @@ async def _resolve_access_context(
     user = await session.get(User, user_id)
     if user is None:
         raise AccessServiceError(code="user_not_found", message="User not found", http_status=404)
-    if not (user.phone or "").strip():
+    if not user.public_phone and user.effective_staff_role in {"administration", "dispatcher"}:
+        # A phone-less staff member may use the existing configured Gate key.
+        # Never provision a fake phone in Gate; keep the staff member as the
+        # actor on the app's own permission and event records.
+        gate_owner = await session.scalar(select(User).where(
+            User.phone == normalize_account_phone(settings.admin_phone),
+            User.is_admin.is_(True),
+            User.is_active.is_(True),
+        ))
+        if gate_owner is None or gate_owner.effective_staff_role != "administration" or not gate_owner.gate_user_id:
+            raise AccessServiceError(
+                code="staff_access_unavailable",
+                message="Ключ доступа администрации не настроен",
+                http_status=503,
+            )
+        access_key = await _get_or_create_access_key_by_external_id(
+            session,
+            user_id=user.id,
+            external_id=str(gate_owner.gate_user_id),
+            valid_from=user.created_at,
+            valid_to=None,
+            protocol_type="gate_staff_shared",
+        )
+        await _ensure_permission(
+            session,
+            user_id=user.id,
+            access_point_id=access_point_id,
+            key_id=access_key.id,
+            valid_from=user.created_at,
+            valid_to=None,
+        )
+        await session.commit()
+        return ResolvedAccessContext(
+            access_point=access_point,
+            access_key=access_key,
+            request_item=None,
+            key_external_id=str(gate_owner.gate_user_id),
+            key_type="Staff",
+            key_value=user.login or "",
+            source="staff",
+        )
+    if not user.public_phone:
         raise AccessServiceError(
             code="account_phone_required",
             message="Account phone is required for account access",
@@ -331,8 +373,8 @@ async def _resolve_access_context(
     if gate_key_id is None:
         try:
             gate_key_id = gate_client.add_account_phone_key(
-                key_value=user.phone,
-                phone_number=user.phone,
+                key_value=user.public_phone,
+                phone_number=user.public_phone,
                 access_point_ids=account_access_point_ids,
                 resident_name=user.name or user.login or "Resident",
                 plot_number=user.plot_number or user.apartment,
@@ -378,7 +420,7 @@ async def _resolve_access_context(
         request_item=None,
         key_external_id=str(gate_key_id),
         key_type="Phone",
-        key_value=user.phone,
+        key_value=user.public_phone,
         source="account",
     )
 
@@ -867,7 +909,7 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
             "access_source": context.source,
             "actor_login": user.login if user is not None else None,
             "actor_name": user.name if user is not None else None,
-            "actor_phone": user.phone if user is not None else None,
+            "actor_phone": user.public_phone if user is not None else None,
             "transport": "gateterm_ui",
         },
     )
@@ -897,12 +939,12 @@ async def open_access_point(session: AsyncSession, *, user_id: int, access_point
         not result.success
         and context.source == "account"
         and result.code in {"key_not_found", "access_denied"}
-        and (user.phone or "").strip()
+        and user.public_phone
     ):
         try:
             refreshed_gate_key_id = gate_client.add_account_phone_key(
-                key_value=user.phone,
-                phone_number=user.phone,
+                key_value=user.public_phone,
+                phone_number=user.public_phone,
                 access_point_ids=_account_access_point_ids(),
                 resident_name=user.name or user.login or "Resident",
                 plot_number=user.plot_number or user.apartment,

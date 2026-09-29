@@ -183,7 +183,7 @@ async def _load_request_contexts_for_gate_events(
             "actor_user_id": user.id,
             "actor_login": user.login,
             "actor_name": user.name,
-            "actor_phone": user.phone,
+            "actor_phone": user.public_phone,
             "access_point_ids": list(request.access_point_ids or []),
             "access_point_id": None,
             "access_point_name": None,
@@ -241,7 +241,7 @@ async def list_admin_monitor_events(session: AsyncSession, *, limit: int = 100) 
             key_value=key_value,
             include_key_value=False,
         )
-        actor_phone = user.phone or _str_or_none(details.get("actor_phone"))
+        actor_phone = user.public_phone or _str_or_none(details.get("actor_phone"))
         actor_login = user.login or _str_or_none(details.get("actor_login"))
         item = AdminMonitorEventItem(
             id=f"app-{event.id}",

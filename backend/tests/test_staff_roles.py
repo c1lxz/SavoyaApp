@@ -10,11 +10,13 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.app.database import Base, SessionLocal
-from backend.app.models import Request, User
+from backend.app.models import AccessEventLog, AccessPoint, Request, User
 from backend.app.news_models import NewsDevice, NewsMedia, NewsNotification, NewsPoll, NewsPollOption, NewsPollVote, NewsPost
 from backend.app.routers.admin import admin_block_user, admin_update_staff_role
 from backend.app.schemas import AdminUpdateStaffRolePayload
 from backend.app.services.auth import ensure_admin_user
+from backend.app.services.gate import GateOpenResult
+from backend.app.services.access import open_access_point
 from backend.app.services.news_polls import serialize_polls
 from backend.app.services.user_accounts import delete_user_account, ensure_users_schema
 from backend.app.utils.jwt import create_access_token, decode_token
@@ -148,6 +150,80 @@ def test_administration_can_create_staff_without_gate_provisioning(client, monke
     staff_list = client.get("/api/admin/users?account_type=staff", headers=admin).json()["items"]
     assert user["id"] in {item["id"] for item in staff_list}
     assert all(item["is_admin"] for item in staff_list)
+
+
+def test_phone_less_dispatcher_login_and_shared_gate_key(client, monkeypatch):
+    admin_id, admin = account("administration")
+    monkeypatch.setattr("backend.app.routers.admin.settings.gate_real_integration_enabled", True)
+
+    def no_new_gate_key(*args, **kwargs):
+        raise AssertionError("Phone-less staff must never provision a Gate phone key")
+
+    monkeypatch.setattr("backend.app.routers.admin.link_existing_gate_passes_by_phone", no_new_gate_key)
+    monkeypatch.setattr("backend.app.services.access.gate_client.add_account_phone_key", no_new_gate_key)
+    created = []
+    for phone in (None, ""):
+        payload = {"full_name": "Охрана Савоя", "staff_role": "dispatcher"}
+        if phone is not None:
+            payload["phone"] = phone
+        response = client.post("/api/admin/users", headers=admin, json=payload)
+        assert response.status_code == 200, response.text
+        row = response.json()
+        assert row["staff_role"] == "dispatcher" and row["phone"] == ""
+        assert row["password"] and row["login"]
+        created.append(row)
+        login = client.post("/api/auth/login", json={"login": row["login"], "password": row["password"]})
+        assert login.status_code == 200, login.text
+        assert login.json()["user"]["phone"] == ""
+        assert login.json()["user"]["login"] == row["login"]
+        token = {"Authorization": "Bearer " + login.json()["access_token"]}
+        assert client.get("/api/user/me", headers=token).json()["phone"] == ""
+        assert client.get("/user/me", headers=token).json()["phoneNumber"] == ""
+        assert client.get("/api/news", headers=token).status_code == 200
+        assert client.post("/api/admin/users", headers=token, json={}).status_code == 403
+        assert client.post("/api/news", headers=token, json={}).status_code == 403
+    assert created[0]["login"] != created[1]["login"]
+    staff_rows = client.get("/api/admin/users?account_type=staff", headers=admin).json()["items"]
+    assert all(row["phone"] == "" for row in staff_rows if row["id"] in {item["id"] for item in created})
+    assert client.post("/api/admin/users", headers=admin, json={"full_name": "Житель Савоя", "plot_number": "9"}).status_code == 422
+
+    point_id = 100000 + uuid4().int % 800000
+
+    async def setup_gate_key():
+        async with SessionLocal() as session:
+            administrator = await session.get(User, admin_id)
+            administrator.gate_user_id = 123456
+            session.add(AccessPoint(id=point_id, code=f"staff_gate_test_{point_id}", name="Тестовая калитка", type="wicket", is_active=True))
+            await session.commit()
+            return administrator.phone
+
+    admin_phone = asyncio.run(setup_gate_key())
+    monkeypatch.setattr("backend.app.services.access.settings.admin_phone", admin_phone)
+    monkeypatch.setattr("backend.app.services.access._account_access_point_ids", lambda: [point_id])
+
+    async def no_gate_sync(session):
+        return None
+
+    monkeypatch.setattr("backend.app.services.access.sync_access_points", no_gate_sync)
+    calls = []
+
+    def simulated_open(point_id, key_external_id=None):
+        calls.append((point_id, key_external_id))
+        return GateOpenResult(success=True, message="simulated")
+
+    monkeypatch.setattr("backend.app.services.access.gate_client.open_access_point", simulated_open)
+
+    async def open_as_dispatcher():
+        async with SessionLocal() as session:
+            result = await open_access_point(session, user_id=created[0]["id"], access_point_id=point_id)
+            event = (await session.execute(select(AccessEventLog).where(AccessEventLog.user_id == created[0]["id"]).order_by(AccessEventLog.id.desc()))).scalars().first()
+            return result, event.details
+
+    result, details = asyncio.run(open_as_dispatcher())
+    assert result.status == "success"
+    assert calls == [(point_id, "123456")]
+    assert details["access_source"] == "staff" and details["actor_phone"] == ""
+    assert details["actor_login"] == created[0]["login"]
 
 
 def test_role_changes_revoke_existing_tokens_and_staff_block_is_immediate(client):

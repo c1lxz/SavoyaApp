@@ -26,6 +26,7 @@ class MessageResponse(BaseModel):
 
 class UserResponse(BaseModel):
     id: int
+    login: str | None = None
     phone: str
     name: str | None = None
     apartment: str | None = None
@@ -385,7 +386,7 @@ class AdminUserListResponse(BaseModel):
 
 class AdminCreateUserPayload(BaseModel):
     full_name: str = Field(min_length=2, max_length=120)
-    phone: str = Field(min_length=7, max_length=32)
+    phone: str | None = Field(default=None, min_length=7, max_length=32)
     plot_number: str | None = Field(default=None, min_length=1, max_length=20)
     staff_role: StaffRole | None = None
 
@@ -394,9 +395,11 @@ class AdminCreateUserPayload(BaseModel):
     def validate_full_name(cls, value: str) -> str:
         return normalize_full_name(value)
 
-    @field_validator("phone")
+    @field_validator("phone", mode="before")
     @classmethod
-    def validate_phone(cls, value: str) -> str:
+    def validate_phone(cls, value: str | None) -> str | None:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
         return normalize_account_phone(value)
 
     @field_validator("plot_number")
@@ -406,8 +409,11 @@ class AdminCreateUserPayload(BaseModel):
 
     @model_validator(mode="after")
     def require_resident_plot(self) -> "AdminCreateUserPayload":
-        if self.staff_role is None and self.plot_number is None:
-            raise ValueError("Для жителя укажите номер участка")
+        if self.staff_role is None:
+            if self.phone is None:
+                raise ValueError("Для жителя укажите номер телефона")
+            if self.plot_number is None:
+                raise ValueError("Для жителя укажите номер участка")
         return self
 
 

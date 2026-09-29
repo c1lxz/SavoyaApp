@@ -200,7 +200,7 @@ async def _generate_login(session: AsyncSession, *, full_name: str, plot_number:
 async def _find_existing_user_id_by_phone(session: AsyncSession, normalized_phone: str) -> int | None:
     query = await session.execute(select(User.id, User.phone).where(User.phone.is_not(None)))
     for raw_user_id, raw_phone in query.all():
-        if raw_phone is None:
+        if raw_phone is None or str(raw_phone).startswith("@staff:"):
             continue
         try:
             candidate_phone = normalize_account_phone(str(raw_phone))
@@ -215,7 +215,7 @@ async def create_user_account(
     session: AsyncSession,
     *,
     full_name: str,
-    phone_number: str,
+    phone_number: str | None,
     plot_number: str | None,
     require_password_change: bool = True,
     staff_role: str | None = None,
@@ -223,14 +223,17 @@ async def create_user_account(
     if staff_role not in {None, "administration", "dispatcher"}:
         raise UserAccountError(code="invalid_staff_role", message="Неизвестная роль сотрудника")
     normalized_name = _validate_full_name_words(full_name)
-    normalized_phone = normalize_account_phone(phone_number)
+    normalized_phone = normalize_account_phone(phone_number) if phone_number and phone_number.strip() else None
     normalized_plot = normalize_plot_number(plot_number) if plot_number is not None else None
+    if staff_role is None and normalized_phone is None:
+        raise UserAccountError(code="phone_required", message="Для жителя укажите номер телефона")
     if staff_role is None and normalized_plot is None:
         raise UserAccountError(code="plot_required", message="Для жителя укажите номер участка")
 
-    existing_user_id = await _find_existing_user_id_by_phone(session, normalized_phone)
-    if existing_user_id is not None:
-        raise UserAccountError(code="phone_already_exists", message="Пользователь с таким номером уже существует")
+    if normalized_phone is not None:
+        existing_user_id = await _find_existing_user_id_by_phone(session, normalized_phone)
+        if existing_user_id is not None:
+            raise UserAccountError(code="phone_already_exists", message="Пользователь с таким номером уже существует")
 
     if staff_role is None:
         owner_index = await _next_owner_index(session, normalized_plot)
@@ -247,7 +250,7 @@ async def create_user_account(
     password = generate_password()
 
     user = User(
-        phone=normalized_phone,
+        phone=normalized_phone or f"@staff:{uuid4().hex[:13]}",
         name=normalized_name,
         apartment=normalized_plot,
         plot_number=normalized_plot,
@@ -287,7 +290,7 @@ def build_admin_user_payload(
         "login": str(user.login or ""),
         "password": visible_password,
         "full_name": user.name,
-        "phone": user.phone,
+        "phone": user.public_phone,
         "plot_number": user.plot_number or user.apartment,
         "owner_index": user.owner_index,
         "is_active": user.is_active,

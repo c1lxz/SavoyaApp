@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "Доступ Савоя",
+    "name": "Экосистема Савоя",
     "slug": "savoya",
-    "version": "1.6.0",
+    "version": "1.6.1",
     "icon": "./assets/app-icon.png",
     "orientation": "default",
     "userInterfaceStyle": "dark",
@@ -17,7 +17,7 @@
     },
     "android": {
       "package": "com.savoya.app",
-      "versionCode": 17,
+      "versionCode": 18,
       "adaptiveIcon": {
         "foregroundImage": "./assets/app-icon.png",
         "backgroundColor": "#0B1D16"

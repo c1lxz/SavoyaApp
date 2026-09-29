@@ -63,7 +63,7 @@ def _compat_user(user: User, *, password_change_prompt_required: bool = False) -
         login=user.login or "",
         fullName=user.name or "",
         plotNumber=user.plot_number or user.apartment or "",
-        phoneNumber=user.phone or "",
+        phoneNumber=user.public_phone,
         isAdmin=user.is_admin,
         staffRole=user.effective_staff_role,
         passwordChangeRequired=user.password_change_required,
@@ -313,7 +313,7 @@ async def compat_create_pass(
     session: AsyncSession = Depends(get_db_session),
     user: User = Depends(get_current_user),
 ) -> CompatPassItem:
-    contact_phone_number = (user.phone or "").strip() or None
+    contact_phone_number = user.public_phone.strip() or None
     if not payload.carNumber:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

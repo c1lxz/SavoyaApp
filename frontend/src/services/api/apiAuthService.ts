@@ -26,6 +26,7 @@ type CompatUserResponse = {
 };
 
 type BackendUser = {
+  login?: string | null;
   id: number;
   phone: string;
   name?: string | null;
@@ -67,7 +68,7 @@ const writeSessionToken = async (token: string | null, generation: number) => {
 
 const mapBackendUser = (user: BackendUser): User => ({
   id: String(user.id),
-  login: user.phone,
+  login: user.login || user.phone,
   fullName: user.name ?? '',
   plotNumber: user.apartment ?? '',
   phoneNumber: user.phone ?? '',

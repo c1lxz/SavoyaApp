@@ -91,6 +91,11 @@ check('administration screen exposes news and staff management', () => {
     assert.equal(calls.at(-1)[1].body.staff_role, 'dispatcher');
     assert.equal(calls.at(-1)[1].body.plot_number, undefined);
   });
+  await admin.createUser({ fullName: 'Phone-less Staff', phoneNumber: '', plotNumber: '', staffRole: 'dispatcher' });
+  check('phone-less staff creation omits the phone field', () => {
+    assert.equal(calls.at(-1)[1].body.staff_role, 'dispatcher');
+    assert.equal(calls.at(-1)[1].body.phone, undefined);
+  });
   await admin.createUser({ fullName: 'Test Resident', phoneNumber: 'test-phone', plotNumber: '1' });
   check('resident creation does not gain a staff role', () => assert.equal(calls.at(-1)[1].body.staff_role, undefined));
   await admin.setStaffRole('4', 'administration');
