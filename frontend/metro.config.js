@@ -8,7 +8,6 @@ const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const root = __dirname.split(path.sep).map(escape).join('[\\\\/]');
 const generated = new RegExp(
   `^${root}[\\\\/](?:android|dist|\\.savoya-web-[a-f0-9]+)(?:[\\\\/]|$)`,
-  'i',
 );
 const existing = config.resolver.blockList;
 config.resolver.blockList = [
