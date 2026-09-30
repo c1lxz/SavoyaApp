@@ -133,6 +133,10 @@ $nginxPaths = Resolve-NginxPaths
 Write-Host "nginx: $($nginxPaths.Exe)"
 Write-Host "nginx config: $($nginxPaths.Conf)"
 
+# Finish the failure-prone build before interrupting any running service.
+& (Join-Path $resolvedRepoRoot "scripts\prepare_frontend_release.ps1") `
+    -RepoRoot $resolvedRepoRoot -UseRealApi $true -ApiBaseUrl "/api"
+
 Stop-SavoyaProcess -Description "Savoya backend" -Predicate {
     param([string]$CommandLine)
     return $CommandLine -match "uvicorn" -and $CommandLine -match "backend\.app\.main:app"
@@ -159,6 +163,7 @@ Stop-SavoyaProcess -Description "Savoya Gate bridge worker" -Predicate {
     -NginxConfPath $nginxPaths.Conf `
     -NginxServerName $NginxServerName `
     -SkipPull `
+    -SkipFrontendBuild `
     -BackendHost $BackendHost `
     -BackendPort $BackendPort `
     -BackendPythonLauncher $BackendPythonLauncher `

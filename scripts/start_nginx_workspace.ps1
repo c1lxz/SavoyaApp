@@ -6,6 +6,7 @@ param(
     [string]$NginxServerName = "ipksavoya.ru",
     [switch]$SkipPull,
     [switch]$Bootstrap,
+    [switch]$SkipFrontendBuild,
     [switch]$OpenToolShell,
     [switch]$Preview,
     [string]$BackendHost = "127.0.0.1",
@@ -70,13 +71,17 @@ function Invoke-ExternalCommand {
     }
 
     Push-Location -LiteralPath $WorkingDirectory
+    $previousPreference = $ErrorActionPreference
     try {
+        $ErrorActionPreference = 'Continue'
         & $Executable @Arguments
+        $ErrorActionPreference = $previousPreference
         if ($LASTEXITCODE -ne 0) {
             throw "$Description failed with exit code $LASTEXITCODE"
         }
     }
     finally {
+        $ErrorActionPreference = $previousPreference
         Pop-Location
     }
 }
@@ -100,11 +105,14 @@ function Invoke-ExternalCommandResult {
     }
 
     Push-Location -LiteralPath $WorkingDirectory
+    $previousPreference = $ErrorActionPreference
     try {
+        $ErrorActionPreference = 'Continue'
         $output = & $Executable @Arguments 2>&1
         $exitCode = $LASTEXITCODE
     }
     finally {
+        $ErrorActionPreference = $previousPreference
         Pop-Location
     }
 
@@ -150,6 +158,7 @@ function Start-WorkspaceWindow {
 
     $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     Start-Process -FilePath "powershell.exe" `
+        -WindowStyle $(if ($Title -eq "Savoya Shell") { "Normal" } else { "Hidden" }) `
         -WorkingDirectory $WorkingDirectory `
         -ArgumentList @("-NoExit", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encodedCommand) | Out-Null
 }
@@ -188,8 +197,12 @@ function Invoke-CurlRequest {
     }
     $effectiveArguments += $Arguments
 
-    $output = & $curl.Source @effectiveArguments 2>&1
-    $exitCode = $LASTEXITCODE
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = & $curl.Source @effectiveArguments 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previousPreference }
 
     if (-not $AllowFailure -and $exitCode -ne 0) {
         throw "curl.exe failed with exit code $exitCode`n$output"
@@ -271,6 +284,7 @@ function Start-NginxProcess {
     }
 
     Start-Process -FilePath $ExecutablePath `
+        -WindowStyle Hidden `
         -WorkingDirectory $WorkingDirectory `
         -ArgumentList @("-c", $ConfigPath) | Out-Null
 }
@@ -447,41 +461,10 @@ if ($Bootstrap) {
         -Description "Installing Gate diagnostic dependencies"
 }
 
-if ($Bootstrap -or -not (Test-Path -LiteralPath $frontendNodeModules)) {
-    Invoke-ExternalCommand `
-        -Executable "npm" `
-        -Arguments @("install") `
-        -WorkingDirectory $frontendRoot `
-        -Description "Installing frontend dependencies"
-}
-
-$previousUseRealApi = $env:EXPO_PUBLIC_USE_REAL_API
-$previousApiBaseUrl = $env:EXPO_PUBLIC_API_BASE_URL
-
-try {
-    $env:EXPO_PUBLIC_USE_REAL_API = $FrontendUseRealApi.ToString().ToLower()
-    $env:EXPO_PUBLIC_API_BASE_URL = $FrontendApiBaseUrl
-    Invoke-ExternalCommand `
-        -Executable "npx" `
-        -Arguments @("expo", "export", "--platform", "web", "--output-dir", "dist") `
-        -WorkingDirectory $frontendRoot `
-        -Description "Building frontend production bundle"
-    & (Join-Path $resolvedRepoRoot "scripts\copy_latest_apk_to_dist.ps1") -RepoRoot $resolvedRepoRoot
-}
-finally {
-    if ($null -eq $previousUseRealApi) {
-        Remove-Item Env:EXPO_PUBLIC_USE_REAL_API -ErrorAction SilentlyContinue
-    }
-    else {
-        $env:EXPO_PUBLIC_USE_REAL_API = $previousUseRealApi
-    }
-
-    if ($null -eq $previousApiBaseUrl) {
-        Remove-Item Env:EXPO_PUBLIC_API_BASE_URL -ErrorAction SilentlyContinue
-    }
-    else {
-        $env:EXPO_PUBLIC_API_BASE_URL = $previousApiBaseUrl
-    }
+if (-not $SkipFrontendBuild) {
+    & (Join-Path $resolvedRepoRoot "scripts\prepare_frontend_release.ps1") `
+        -RepoRoot $resolvedRepoRoot -UseRealApi $FrontendUseRealApi `
+        -ApiBaseUrl $FrontendApiBaseUrl -Bootstrap:$Bootstrap -Preview:$Preview
 }
 
 if ($Preview) {
@@ -500,7 +483,23 @@ $backendBody = @(
     "& $(Quote-PowerShellLiteral -Value $BackendPythonLauncher) @pythonArgs"
 )
 
-Start-WorkspaceWindow -Title "Savoya Backend" -WorkingDirectory $resolvedRepoRoot -Body $backendBody
+$supervisor = Get-ScheduledTask -TaskName "Savoya Backend Supervisor" -ErrorAction SilentlyContinue
+$supervisorCommands = if ($supervisor) {
+    foreach ($action in $supervisor.Actions) {
+        if ($action.Arguments -match '-EncodedCommand\s+([A-Za-z0-9+/=]+)') {
+            [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($matches[1]))
+        } else { $action.Arguments }
+    }
+} else { @() }
+$ownedSupervisor = @($supervisorCommands | Where-Object {
+    $_.Contains((Join-Path $resolvedRepoRoot 'scripts\supervise_backend.ps1')) -and $_.Contains($resolvedRepoRoot)
+}).Count -gt 0
+if (-not $Preview -and $ownedSupervisor -and $BackendPort -eq 8000 -and $BackendHost -eq '127.0.0.1') {
+    # Reuse the durable server task instead of launching a second backend.
+    Start-ScheduledTask -TaskName "Savoya Backend Supervisor"
+} else {
+    Start-WorkspaceWindow -Title "Savoya Backend" -WorkingDirectory $resolvedRepoRoot -Body $backendBody
+}
 
 Wait-ForHttpSuccess -Description "backend health endpoint" -Probe {
     $result = Invoke-CurlRequest -Arguments @(

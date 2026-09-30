@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$RepoRoot = ""
 )
@@ -25,7 +25,7 @@ if (-not (Test-Path -LiteralPath $appConfigPath -PathType Leaf)) {
     throw "Frontend app config not found: $appConfigPath"
 }
 
-$appConfig = Get-Content -LiteralPath $appConfigPath -Raw | ConvertFrom-Json
+$appConfig = Get-Content -LiteralPath $appConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $expectedVersion = [string]$appConfig.expo.version
 $expectedVersionCode = [int]$appConfig.expo.android.versionCode
 
@@ -56,6 +56,23 @@ if (-not $sourceApk) {
         "Available release APKs: {3}. Refusing to publish a stale APK."
     ) -f $expectedVersion, $expectedVersionCode, ($expectedNames -join ", "), $availableDescription
 }
+
+# A familiar filename can still hold an old build. Validate the embedded release
+# before replacing the download or describing it as the current version.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$archive = [IO.Compression.ZipFile]::OpenRead($sourceApk)
+try {
+    $entry = $archive.GetEntry('assets/app.config')
+    if (-not $entry) { throw 'APK has no embedded app configuration' }
+    $reader = [IO.StreamReader]::new($entry.Open())
+    try { $embedded = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
+    if ($embedded.android.package -ne $appConfig.expo.android.package -or
+        $embedded.version -ne $expectedVersion -or
+        [int]$embedded.android.versionCode -ne $expectedVersionCode -or
+        $embedded.name -ne $appConfig.expo.name) {
+        throw 'APK has stale version, package or application name; download preserved'
+    }
+} finally { $archive.Dispose() }
 
 New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null
 Copy-Item -LiteralPath $sourceApk -Destination $targetPath -Force

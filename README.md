@@ -173,6 +173,14 @@ npm run web
 По умолчанию frontend использует тот же origin и путь `/api`, поэтому для продакшена лучше отдавать frontend через Nginx и проксировать `/api` на backend `127.0.0.1:8000`.
 
 ### 8. Рекомендуемый прод-запуск на одном Windows-сервере
+На сервере с установленным Nginx можно использовать `SavoyaLauncher.cmd` либо
+`scripts/restart_production_workspace.ps1`. Зависимости frontend обновляются через
+`npm ci`, если изменился `package-lock.json`. Web-сборка выполняется до остановки
+сервисов и отдельно от работающего `frontend/dist`: ошибка сборки сохраняет сайт,
+старые ресурсы и Android-загрузку. Готовый APK публикуется только после проверки
+версии, package и названия внутри самого файла. Для web-запуска новый APK не нужен.
+Проверка этих сценариев: `powershell -NoProfile -File scripts/tests/test_frontend_release.ps1`.
+
 1. Запустите backend на сервере:
    - `py -3.12 -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000`
 2. Опубликуйте frontend через один web-сервер на порту `80`.

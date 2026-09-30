@@ -1,6 +1,18 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([switch]$AllowWithoutPush)
 $ErrorActionPreference = 'Stop'
+function Invoke-BuildCommand {
+    param([string]$Executable, [string[]]$Arguments)
+    $previousPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell turns native stderr into ErrorRecords when the
+        # caller captures logs. Warnings are allowed; the exit code is decisive.
+        $ErrorActionPreference = 'Continue'
+        & $Executable @Arguments
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previousPreference }
+    if ($exitCode -ne 0) { throw "$Executable failed with exit code $exitCode" }
+}
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $frontendRoot = Join-Path $repoRoot 'frontend'
 foreach ($settingName in @('SAVOYA_RELEASE_STORE_FILE', 'SAVOYA_RELEASE_STORE_PASSWORD', 'SAVOYA_RELEASE_KEY_ALIAS', 'SAVOYA_RELEASE_KEY_PASSWORD')) {
@@ -15,20 +27,33 @@ $env:EXPO_PUBLIC_SITE_ORIGIN = 'https://ipksavoya.ru'
 $env:NODE_ENV = 'production'
 $env:EXPO_NO_DOTENV = '1'
 $releaseInputs = Join-Path $PSScriptRoot 'android-release-inputs.gradle'
+$originalStoreFile = $env:SAVOYA_RELEASE_STORE_FILE
+$protectedStoreDirectory = $null
+# Expo may recreate android/. Preserve a key located there before prebuild.
+$resolvedStoreFile = (Resolve-Path -LiteralPath $originalStoreFile).Path
+$androidDirectory = [IO.Path]::GetFullPath((Join-Path $frontendRoot 'android')) + [IO.Path]::DirectorySeparatorChar
+if ($resolvedStoreFile.StartsWith($androidDirectory, [StringComparison]::OrdinalIgnoreCase)) {
+    $protectedStoreDirectory = Join-Path ([IO.Path]::GetTempPath()) ('savoya-signing-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $protectedStoreDirectory | Out-Null
+    $acl = [Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetAccessRuleProtection($true, $false)
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $rule = [Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+    $acl.AddAccessRule($rule)
+    Set-Acl -LiteralPath $protectedStoreDirectory -AclObject $acl
+    $env:SAVOYA_RELEASE_STORE_FILE = Join-Path $protectedStoreDirectory 'release.jks'
+    Copy-Item -LiteralPath $resolvedStoreFile -Destination $env:SAVOYA_RELEASE_STORE_FILE
+}
 Push-Location $frontendRoot
 try {
-    & npm.cmd ci --include=dev --no-audit --no-fund
-    if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
-    & npm.cmd run typecheck
-    if ($LASTEXITCODE -ne 0) { throw 'Typecheck failed' }
-    & npx.cmd expo prebuild --platform android --no-install
-    if ($LASTEXITCODE -ne 0) { throw 'Android prebuild failed' }
+    Invoke-BuildCommand 'npm.cmd' @('ci', '--include=dev', '--no-audit', '--no-fund')
+    Invoke-BuildCommand 'npm.cmd' @('run', 'typecheck')
+    Invoke-BuildCommand 'npx.cmd' @('expo', 'prebuild', '--platform', 'android', '--no-install')
     Push-Location (Join-Path $frontendRoot 'android')
     try {
-        & .\gradlew.bat assembleRelease --no-daemon --init-script $releaseInputs '-PreactNativeArchitectures=armeabi-v7a,arm64-v8a'
-        if ($LASTEXITCODE -ne 0) { throw 'Android release build failed' }
+        Invoke-BuildCommand '.\gradlew.bat' @('assembleRelease', '--no-daemon', '--init-script', $releaseInputs, '-PreactNativeArchitectures=armeabi-v7a,arm64-v8a')
     } finally { Pop-Location }
-    $appConfig = Get-Content (Join-Path $frontendRoot 'app.json') -Raw | ConvertFrom-Json
+    $appConfig = Get-Content (Join-Path $frontendRoot 'app.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     $builtApk = Join-Path $frontendRoot 'android\app\build\outputs\apk\release\app-release.apk'
     if (-not (Test-Path -LiteralPath $builtApk)) { throw 'Signed APK not produced' }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -59,4 +84,18 @@ try {
     $destination = Join-Path $repoRoot 'Экосистема Савоя.apk'
     Copy-Item -LiteralPath $builtApk -Destination $destination
     Get-FileHash -LiteralPath $destination -Algorithm SHA256
-} finally { Pop-Location }
+} finally {
+    Pop-Location
+    if ($protectedStoreDirectory -and -not (Test-Path -LiteralPath $resolvedStoreFile)) {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $resolvedStoreFile) -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $protectedStoreDirectory 'release.jks') -Destination $resolvedStoreFile
+    }
+    $env:SAVOYA_RELEASE_STORE_FILE = $originalStoreFile
+    if ($protectedStoreDirectory) {
+        if ((Split-Path -Parent $protectedStoreDirectory) -ne [IO.Path]::GetTempPath().TrimEnd('\') -or
+            (Split-Path -Leaf $protectedStoreDirectory) -notmatch '^savoya-signing-[a-f0-9]{32}$') {
+            throw 'Unexpected signing directory; cleanup refused'
+        }
+        Remove-Item -LiteralPath $protectedStoreDirectory -Recurse -Force
+    }
+}
