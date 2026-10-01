@@ -66,6 +66,36 @@ function tokenFixture(blockWrites = false) {
 let checks = 0;
 async function scenario(name, run) { await run(); checks++; console.log(`PASS ${name}`); }
 async function main() {
+  await scenario('dismissing the password prompt survives an in-flight refresh and staff demotion', async () => {
+    const prompted = { ...user(), passwordChangeRequired: true, passwordChangePromptRequired: true };
+    const f = fixture({ user: prompted });
+    f.store.setState({ shouldPromptPasswordChange: true });
+    const refresh = f.store.getState().validateSession(); await flush();
+    f.store.getState().dismissPasswordChangePrompt();
+    f.requests[0].respond(200, { ...prompted, staffRole: 'dispatcher' }); await refresh;
+    assert.equal(f.store.getState().shouldPromptPasswordChange, false);
+    assert.equal(f.store.getState().user.staffRole, 'dispatcher');
+    const next = f.store.getState().validateSession(); await flush();
+    f.requests[1].respond(200, { ...prompted, staffRole: 'dispatcher' }); await next;
+    assert.equal(f.store.getState().shouldPromptPasswordChange, false);
+  });
+  await scenario('a new login can show its password prompt after the previous session dismissed it', async () => {
+    const f = fixture();
+    f.store.getState().dismissPasswordChangePrompt();
+    await f.store.getState().logout();
+    const login = f.store.getState().login('synthetic-2', 'synthetic-password'); await flush();
+    f.requests[0].respond(200, { success: true, access_token: 'synthetic-token-2', user: {
+      ...user('2', 'dispatcher'), passwordChangeRequired: true, passwordChangePromptRequired: true,
+    } });
+    assert.equal(await login, true);
+    assert.equal(f.store.getState().shouldPromptPasswordChange, true);
+  });
+  await scenario('session validation initially shows an undismissed password prompt', async () => {
+    const f = fixture();
+    const refresh = f.store.getState().validateSession(); await flush();
+    f.requests[0].respond(200, { ...user(), passwordChangeRequired: true, passwordChangePromptRequired: true }); await refresh;
+    assert.equal(f.store.getState().shouldPromptPasswordChange, true);
+  });
   await scenario('same-user demotion wins over an older administration response in service and store', async () => {
     const f = fixture();
     const old = f.store.getState().validateSession(); await flush();

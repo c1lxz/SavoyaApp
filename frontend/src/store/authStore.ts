@@ -35,11 +35,13 @@ const normalizeAuthError = (message: string | null | undefined): string => {
   return fallback;
 };
 
-const resolvePasswordChangePrompt = (user: User | null) =>
-  Boolean(user && (user.passwordChangePromptRequired ?? user.passwordChangeRequired));
-
 let sessionGeneration = 0;
 let userRequest = 0;
+let dismissedPasswordPromptSession: number | null = null;
+
+const resolvePasswordChangePrompt = (user: User | null) =>
+  dismissedPasswordPromptSession !== sessionGeneration &&
+  Boolean(user && (user.passwordChangePromptRequired ?? user.passwordChangeRequired));
 
 export const useAuthStore = create<AuthStore>((set, get) => ({
   user: null,
@@ -130,6 +132,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   },
 
   dismissPasswordChangePrompt() {
+    dismissedPasswordPromptSession = sessionGeneration;
     set((state) => ({
       shouldPromptPasswordChange: false,
       user: state.user ? { ...state.user, passwordChangePromptRequired: false } : state.user,
