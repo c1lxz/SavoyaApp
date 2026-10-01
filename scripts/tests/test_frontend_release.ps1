@@ -23,6 +23,10 @@ function Make-Apk($config) {
     try {
         $writer = [IO.StreamWriter]::new($archive.CreateEntry('assets/app.config').Open())
         try { $writer.Write(($config | ConvertTo-Json -Depth 8)) } finally { $writer.Dispose() }
+        foreach($library in @('libexpo-av.so','libexpo-modules-core.so','libhermes.so','libreactnativejni.so')){
+            $stream=$archive.CreateEntry("lib/arm64-v8a/$library").Open()
+            try{$stream.WriteByte(1)}finally{$stream.Dispose()}
+        }
     } finally { $archive.Dispose() }
 }
 try {
@@ -90,6 +94,18 @@ exit 0
     Make-Apk $stale
     Expect-Failure { & "$scripts\copy_latest_apk_to_dist.ps1" -RepoRoot $fixture } 'Renamed stale APK was published'
     Assert ((Get-Content "$fixture\frontend\dist\download\shlagbaum-savoya.version.json" -Raw).Trim() -eq 'previous metadata') 'Rejected APK corrupted download metadata'
+    Make-Apk $app
+    $incomplete=[IO.Compression.ZipFile]::Open("$fixture\Savoya-release-1.6.2.apk",'Update')
+    try {
+        $stream=$incomplete.CreateEntry('lib/x86_64/libhermes.so').Open()
+        try{$stream.WriteByte(1)}finally{$stream.Dispose()}
+    } finally{$incomplete.Dispose()}
+    Expect-Failure { & "$scripts\copy_latest_apk_to_dist.ps1" -RepoRoot $fixture } 'APK with a partially packaged architecture was published'
+    Assert ((Get-Content "$fixture\frontend\dist\download\shlagbaum-savoya.version.json" -Raw).Trim() -eq 'previous metadata') 'Native ABI rejection corrupted download metadata'
+    Make-Apk $app
+    $incomplete=[IO.Compression.ZipFile]::Open("$fixture\Savoya-release-1.6.2.apk",'Update')
+    try{$incomplete.GetEntry('lib/arm64-v8a/libexpo-av.so').Delete()}finally{$incomplete.Dispose()}
+    Expect-Failure { & "$scripts\copy_latest_apk_to_dist.ps1" -RepoRoot $fixture } 'APK missing its media runtime was published'
     Make-Apk $app
     & "$scripts\copy_latest_apk_to_dist.ps1" -RepoRoot $fixture
     $metadata = Get-Content "$fixture\frontend\dist\download\shlagbaum-savoya.version.json" -Raw | ConvertFrom-Json

@@ -72,6 +72,7 @@ try {
         $embedded.name -ne $appConfig.expo.name) {
         throw 'APK has stale version, package or application name; download preserved'
     }
+    & (Join-Path $PSScriptRoot 'assert_apk_native_libraries.ps1') -Archive $archive
 } finally { $archive.Dispose() }
 
 New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null

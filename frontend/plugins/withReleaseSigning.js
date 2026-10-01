@@ -6,6 +6,17 @@ module.exports = (config) =>
     if (result.modResults.language !== "groovy")
       throw new Error("Savoya signing requires Groovy build.gradle");
     const marker = "// SAVOYA_RELEASE_SIGNING";
+    const architectureMarker = "// SAVOYA_NATIVE_ARCHITECTURES";
+    if (!result.modResults.contents.includes(architectureMarker)) {
+      result.modResults.contents += `
+${architectureMarker}
+// The React Native AAR includes extra ABIs even when Expo only builds the
+// requested native modules. Package the same ABI set as those modules.
+def savoyaArchitectures = (findProperty("reactNativeArchitectures") ?: "armeabi-v7a,arm64-v8a").split(",").collect { it.trim() }.findAll { it }
+android.defaultConfig.ndk.abiFilters.clear()
+android.defaultConfig.ndk.abiFilters.addAll(savoyaArchitectures)
+`;
+    }
     if (!result.modResults.contents.includes(marker)) {
       result.modResults.contents += `
 ${marker}

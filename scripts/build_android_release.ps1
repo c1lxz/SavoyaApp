@@ -59,6 +59,7 @@ try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $apkArchive = [System.IO.Compression.ZipFile]::OpenRead($builtApk)
     try {
+        & (Join-Path $PSScriptRoot 'assert_apk_native_libraries.ps1') -Archive $apkArchive
         $configEntry = $apkArchive.GetEntry('assets/app.config')
         $bundleEntry = $apkArchive.GetEntry('assets/index.android.bundle')
         if (-not $configEntry -or -not $bundleEntry) { throw 'APK is missing its runtime config or JS bundle.' }
